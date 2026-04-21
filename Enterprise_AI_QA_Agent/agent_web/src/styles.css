@@ -4278,6 +4278,115 @@ textarea {
   padding-bottom: 0;
 }
 
+.settings-email-guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.settings-email-guide-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-soft);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-email-guide-card strong {
+  font-size: 15px;
+}
+
+.settings-email-guide-card p,
+.settings-email-guide-card li {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.settings-email-guide-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.settings-email-docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.settings-email-docs a {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.settings-email-popover {
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-email-popover strong {
+  font-size: 14px;
+}
+
+.settings-email-popover p,
+.settings-email-popover li {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.settings-email-popover ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.settings-email-popover-wide {
+  max-width: 420px;
+}
+
+.settings-email-modal-tip {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
+.settings-email-tip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-email-tip-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.settings-list-item small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-readonly-input {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
 .settings-modal-overlay {
   position: fixed;
   inset: 0;
@@ -4479,6 +4588,13 @@ textarea {
 .settings-provider-select .n-base-selection-input__content,
 .settings-provider-select .n-base-selection-label {
   font-size: 15px;
+}
+
+.settings-provider-select .n-base-selection-label,
+.settings-provider-select .n-base-selection__render-label {
+  height: 100%;
+  display: flex;
+  align-items: center;
 }
 
 .settings-provider-select .n-base-selection__border,

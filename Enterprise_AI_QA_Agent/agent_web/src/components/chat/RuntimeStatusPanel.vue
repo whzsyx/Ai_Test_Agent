@@ -8,7 +8,7 @@ const sessionStore = useSessionStore();
 const workerDispatchCount = computed(() => sessionStore.workerDispatches.length);
 const pendingApprovalCount = computed(() => sessionStore.pendingApprovals.length);
 const isBlocked = computed(() => Boolean(sessionStore.workerFailureGuard?.blocked));
-const sessionStatus = computed(() => sessionStore.session?.status ?? "idle");
+const sessionStatus = computed(() => sessionStore.watcherPhase ?? sessionStore.session?.status ?? "idle");
 
 const phaseLabel = computed(() => {
   switch (sessionStore.watcherPhase) {

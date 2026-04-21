@@ -138,6 +138,7 @@ export interface ModelCapabilitiesOverride {
 export interface ModelConfigUpdateRequest {
   model_name: string;
   provider: string;
+  transport?: string | null;
   base_url: string;
   api_key?: string | null;
   is_active: boolean;
@@ -197,6 +198,22 @@ export interface EmailConfigUpdateRequest {
   smtp_username?: string | null;
   smtp_password?: string | null;
   use_tls: boolean;
+}
+
+export interface EmailConfigActionResponse {
+  ok: boolean;
+  message: string;
+  item?: EmailConfigPublic | null;
+}
+
+export interface EmailConfigConnectionTestResponse {
+  ok: boolean;
+  message: string;
+  item: EmailConfigPublic;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  latency_ms?: number | null;
+  preview?: string | null;
 }
 
 export interface ToolApprovalRequest {

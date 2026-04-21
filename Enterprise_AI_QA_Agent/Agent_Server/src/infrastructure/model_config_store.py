@@ -5,7 +5,11 @@ import json
 
 import pymysql
 
-from src.application.model_adapters.provider_profiles import normalize_provider, resolve_provider_profile
+from src.application.model_adapters.provider_profiles import (
+    normalize_provider,
+    normalize_transport,
+    resolve_provider_profile,
+)
 from src.core.config import Settings
 from src.schemas.model_config import (
     ModelCapabilitiesOverride,
@@ -30,6 +34,7 @@ class MySQLModelConfigStore:
                         `api_key` TEXT NULL,
                         `base_url` VARCHAR(1024) NOT NULL,
                         `provider` VARCHAR(64) NOT NULL,
+                        `transport` VARCHAR(64) NULL,
                         `capability_overrides` JSON NULL,
                         `is_active` TINYINT(1) NOT NULL DEFAULT 0,
                         `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -58,6 +63,28 @@ class MySQLModelConfigStore:
                         """
                     )
                 cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'transport'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `transport` VARCHAR(64) NULL AFTER `provider`
+                        """
+                    )
+                cur.execute(
+                    f"""
+                    UPDATE `{self._settings.llm_model_table}`
+                    SET `transport` =
+                        CASE
+                            WHEN LOWER(TRIM(`provider`)) IN ('anthropic') THEN 'anthropic_messages'
+                            WHEN LOWER(TRIM(`provider`)) IN ('google', 'gemini') THEN 'google_gemini_generate_content'
+                            ELSE 'openai_chat_completions'
+                        END
+                    WHERE `transport` IS NULL OR TRIM(`transport`) = ''
+                    """
+                )
+                cur.execute(
                     f"SELECT COUNT(*) AS total FROM `{self._settings.llm_model_table}`"
                 )
                 total = cur.fetchone()["total"]
@@ -65,8 +92,8 @@ class MySQLModelConfigStore:
                     cur.executemany(
                         f"""
                         INSERT INTO `{self._settings.llm_model_table}`
-                        (model_name, api_key, base_url, provider, is_active)
-                        VALUES (%s, %s, %s, %s, %s)
+                        (model_name, api_key, base_url, provider, transport, is_active)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         [
                             (
@@ -74,6 +101,7 @@ class MySQLModelConfigStore:
                                 "",
                                 "https://api.anthropic.com",
                                 "anthropic",
+                                "anthropic_messages",
                                 0,
                             ),
                             (
@@ -81,6 +109,7 @@ class MySQLModelConfigStore:
                                 "",
                                 "https://api.openai.com/v1",
                                 "openai",
+                                "openai_chat_completions",
                                 0,
                             ),
                             (
@@ -88,6 +117,7 @@ class MySQLModelConfigStore:
                                 "",
                                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                                 "qwen",
+                                "openai_chat_completions",
                                 0,
                             ),
                             (
@@ -95,6 +125,7 @@ class MySQLModelConfigStore:
                                 "",
                                 "https://api.deepseek.com/v1",
                                 "deepseek",
+                                "openai_chat_completions",
                                 0,
                             ),
                         ],
@@ -107,7 +138,7 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     ORDER BY id ASC
                     """
@@ -124,7 +155,7 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -141,7 +172,7 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -155,12 +186,13 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     INSERT INTO `{self._settings.llm_model_table}`
-                    (`model_name`, `api_key`, `base_url`, `provider`, `capability_overrides`, `is_active`)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (`model_name`, `api_key`, `base_url`, `provider`, `transport`, `capability_overrides`, `is_active`)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         `api_key`=VALUES(`api_key`),
                         `base_url`=VALUES(`base_url`),
                         `provider`=VALUES(`provider`),
+                        `transport`=VALUES(`transport`),
                         `capability_overrides`=VALUES(`capability_overrides`),
                         `is_active`=VALUES(`is_active`)
                     """,
@@ -169,6 +201,7 @@ class MySQLModelConfigStore:
                         payload.api_key if payload.api_key else ((existing_row or {}).get("api_key") or ""),
                         payload.base_url.rstrip("/"),
                         normalize_provider(payload.provider),
+                        normalize_transport(payload.transport, provider=payload.provider),
                         self._serialize_capability_overrides(
                             payload,
                             existing_row=existing_row,
@@ -179,7 +212,7 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -195,7 +228,7 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -225,6 +258,7 @@ class MySQLModelConfigStore:
                         `api_key`=%s,
                         `base_url`=%s,
                         `provider`=%s,
+                        `transport`=%s,
                         `capability_overrides`=%s,
                         `is_active`=%s
                     WHERE `model_name`=%s
@@ -234,6 +268,7 @@ class MySQLModelConfigStore:
                         payload.api_key if payload.api_key else (existing_row.get("api_key") or ""),
                         payload.base_url.rstrip("/"),
                         normalize_provider(payload.provider),
+                        normalize_transport(payload.transport, provider=payload.provider),
                         self._serialize_capability_overrides(
                             payload,
                             existing_row=existing_row,
@@ -245,7 +280,7 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -271,8 +306,8 @@ class MySQLModelConfigStore:
                 )
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                        SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
+                    , capability_overrides, transport
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -309,7 +344,7 @@ class MySQLModelConfigStore:
                     cur.execute(
                         f"""
                         SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                        , capability_overrides
+                        , capability_overrides, transport
                         FROM `{self._settings.llm_model_table}`
                         ORDER BY id ASC
                         LIMIT 1
@@ -325,7 +360,7 @@ class MySQLModelConfigStore:
                         cur.execute(
                             f"""
                             SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                            , capability_overrides
+                            , capability_overrides, transport
                             FROM `{self._settings.llm_model_table}`
                             WHERE model_name=%s
                             """,
@@ -386,7 +421,7 @@ class MySQLModelConfigStore:
     def _row_to_record(self, row: dict) -> ModelConfigRecord:
         provider = normalize_provider(row["provider"] or "")
         profile = resolve_provider_profile(provider)
-        transport = profile.transport
+        transport = normalize_transport(row.get("transport"), provider=provider)
         capability_overrides = self._parse_capability_overrides(row.get("capability_overrides"))
         capabilities = capability_overrides.apply_to(profile.capabilities)
         base_url = (row["base_url"] or "").rstrip("/")

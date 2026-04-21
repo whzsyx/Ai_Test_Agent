@@ -21,6 +21,8 @@ from src.schemas.session import (
     SendMessageRequest,
     SessionMode,
     SessionStatus,
+    ToolApprovalRequest,
+    ToolApprovalStatus,
 )
 
 
@@ -49,6 +51,7 @@ class CoordinatorRuntimeService:
         self._agent_registry = agent_registry
         self._parent_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
+        self._watch_tasks: dict[str, asyncio.Task[None]] = {}
         self._max_consecutive_failures = 3
 
     async def dispatch(
@@ -274,6 +277,20 @@ class CoordinatorRuntimeService:
             status=notification_status,
             failure_reason=result_text if notification_status == "failed" else "",
         )
+        if notification_status == SessionStatus.waiting_approval.value:
+            watch_task = asyncio.create_task(
+                self._watch_child_session_until_settled(
+                    parent_session_id=parent_session_id,
+                    parent_turn_id=parent_turn_id,
+                    parent_trace_id=parent_trace_id,
+                    child_session_id=child_session_id,
+                    worker=worker,
+                )
+            )
+            self._watch_tasks[worker.task_id] = watch_task
+            watch_task.add_done_callback(
+                lambda _finished, task_id=worker.task_id: self._watch_tasks.pop(task_id, None)
+            )
 
     async def _deliver_notification(
         self,
@@ -310,6 +327,12 @@ class CoordinatorRuntimeService:
                         "worker_status": status,
                     },
                 ),
+            )
+            await self._sync_child_approvals_to_parent(
+                parent_session_id=parent_session_id,
+                parent_turn_id=parent_turn_id,
+                child_session_id=child_session_id,
+                worker=worker,
             )
 
             parent_session = await self._store.get_session(parent_session_id)
@@ -362,7 +385,7 @@ class CoordinatorRuntimeService:
             auto_resume = (
                 parent_session.session_mode == SessionMode.coordinator
                 or (parent_session.selected_agent or "") == "coordinator"
-            ) and parent_session.status not in {
+            ) and status != SessionStatus.waiting_approval.value and parent_session.status not in {
                 SessionStatus.running,
                 SessionStatus.waiting_approval,
             }
@@ -404,11 +427,159 @@ class CoordinatorRuntimeService:
                     "child_session_id": child_session_id,
                     "worker_agent_key": worker.agent_key,
                     "worker_status": status,
+                    "persist_transcript": False,
+                    "context_eligible": False,
+                    "transcript_bucket": "event",
                 },
             )
             parent_session.messages.append(notification_message)
             parent_session.updated_at = datetime.utcnow()
             await self._store.save_session(parent_session)
+
+    async def _watch_child_session_until_settled(
+        self,
+        parent_session_id: str,
+        parent_turn_id: str,
+        parent_trace_id: str,
+        child_session_id: str,
+        worker: WorkerDispatchSpec,
+    ) -> None:
+        running_marked = False
+        while True:
+            await asyncio.sleep(1)
+            child_session = await self._store.get_session(child_session_id)
+            if child_session is None:
+                return
+
+            status = child_session.status.value
+            if status == SessionStatus.waiting_approval.value:
+                continue
+
+            if status == SessionStatus.running.value:
+                if not running_marked:
+                    await self._mark_worker_status(
+                        parent_session_id=parent_session_id,
+                        task_id=worker.task_id,
+                        status=status,
+                        child_session_id=child_session_id,
+                    )
+                    running_marked = True
+                continue
+
+            child_detail = await self._session_service.get_session(child_session_id)
+            result_text = self._extract_worker_result(child_detail.messages)
+            usage = {
+                "total_messages": len(child_detail.messages),
+                "tool_uses": sum(1 for message in child_detail.messages if message.role == MessageRole.tool),
+                "duration_ms": 0,
+                "event_count": child_detail.event_count,
+                "snapshot_count": child_detail.snapshot_count,
+            }
+            notification_xml = self._build_task_notification(
+                task_id=worker.task_id,
+                child_session_id=child_session_id,
+                agent_key=worker.agent_key,
+                trace_id=parent_trace_id,
+                status=status,
+                summary=f'Worker "{worker.description}" finished with status {status}.',
+                result=result_text,
+                usage=usage,
+            )
+            await self._deliver_notification(
+                parent_session_id=parent_session_id,
+                parent_turn_id=parent_turn_id,
+                child_session_id=child_session_id,
+                worker=worker,
+                content=notification_xml,
+                status=status,
+                failure_reason=result_text if status == SessionStatus.failed.value else "",
+            )
+            return
+
+    async def _sync_child_approvals_to_parent(
+        self,
+        parent_session_id: str,
+        parent_turn_id: str,
+        child_session_id: str,
+        worker: WorkerDispatchSpec,
+    ) -> None:
+        if not child_session_id:
+            return
+
+        child_approvals = await self._store.list_approvals(child_session_id)
+        parent_approvals = await self._store.list_approvals(parent_session_id)
+        existing_proxy_by_child_id: dict[str, ToolApprovalRequest] = {}
+        for approval in parent_approvals:
+            metadata = approval.metadata if isinstance(approval.metadata, dict) else {}
+            if str(metadata.get("proxy_child_session_id") or "") != child_session_id:
+                continue
+            child_approval_id = str(metadata.get("proxy_child_approval_id") or "").strip()
+            if child_approval_id:
+                existing_proxy_by_child_id[child_approval_id] = approval
+
+        for child_approval in child_approvals:
+            proxy = existing_proxy_by_child_id.get(child_approval.id)
+            proxy_id = proxy.id if proxy is not None else f"worker-approval-{worker.task_id}-{child_approval.id}"
+            metadata = {
+                **(child_approval.metadata if isinstance(child_approval.metadata, dict) else {}),
+                "proxy_child_session_id": child_session_id,
+                "proxy_child_approval_id": child_approval.id,
+                "proxy_task_id": worker.task_id,
+                "proxy_parent_turn_id": parent_turn_id,
+                "proxy_worker_agent_key": worker.agent_key,
+                "selected_agent_key": (
+                    child_approval.metadata.get("selected_agent_key")
+                    if isinstance(child_approval.metadata, dict) and child_approval.metadata.get("selected_agent_key")
+                    else worker.agent_key
+                ),
+            }
+            mirrored = ToolApprovalRequest(
+                id=proxy_id,
+                session_id=parent_session_id,
+                tool_key=child_approval.tool_key,
+                tool_name=child_approval.tool_name,
+                reason=child_approval.reason,
+                status=child_approval.status,
+                created_at=child_approval.created_at,
+                resolved_at=child_approval.resolved_at,
+                decision_note=child_approval.decision_note,
+                metadata=metadata,
+            )
+            previous_status = proxy.status if proxy is not None else None
+            await self._store.save_approval(parent_session_id, mirrored)
+            if proxy is None and mirrored.status == ToolApprovalStatus.pending:
+                await self._store.append_event(
+                    parent_session_id,
+                    ExecutionEvent(
+                        type="approval.created",
+                        session_id=parent_session_id,
+                        timestamp=datetime.utcnow(),
+                        payload={
+                            "turn_id": parent_turn_id,
+                            "message": "A worker approval request has been synchronized from a child session.",
+                            "approval_id": mirrored.id,
+                            "tool_key": mirrored.tool_key,
+                            "tool_name": mirrored.tool_name,
+                            "reason": mirrored.reason,
+                            "child_session_id": child_session_id,
+                        },
+                    ),
+                )
+            elif proxy is not None and previous_status != mirrored.status and mirrored.status != ToolApprovalStatus.pending:
+                await self._store.append_event(
+                    parent_session_id,
+                    ExecutionEvent(
+                        type="approval.resolved",
+                        session_id=parent_session_id,
+                        timestamp=datetime.utcnow(),
+                        payload={
+                            "approval_id": mirrored.id,
+                            "tool_key": mirrored.tool_key,
+                            "decision": mirrored.status.value,
+                            "child_session_id": child_session_id,
+                        },
+                    ),
+                )
 
     async def _register_worker_dispatches(
         self,
@@ -526,6 +697,15 @@ class CoordinatorRuntimeService:
             f"{usage_block}\n"
             "</task-notification>"
         )
+
+    def _extract_worker_result(self, messages: list[ChatMessage]) -> str:
+        for message in reversed(messages):
+            if message.role == MessageRole.assistant and message.content.strip():
+                return message.content
+        for message in reversed(messages):
+            if message.role != MessageRole.user and message.content.strip():
+                return message.content
+        return ""
 
     def _is_agent_available(self, agent_key: str) -> bool:
         try:

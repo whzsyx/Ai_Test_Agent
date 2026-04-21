@@ -204,3 +204,19 @@ def normalize_provider(provider: str) -> str:
         if value == profile.provider or value in profile.aliases:
             return profile.provider
     return value or "openai"
+
+
+def normalize_transport(
+    transport: str | None,
+    *,
+    provider: str | None = None,
+) -> ModelTransport:
+    value = str(transport or "").strip().lower()
+    if value in {
+        "anthropic_messages",
+        "openai_chat_completions",
+        "google_gemini_generate_content",
+    }:
+        return value  # type: ignore[return-value]
+    profile = resolve_provider_profile(provider or "openai")
+    return profile.transport

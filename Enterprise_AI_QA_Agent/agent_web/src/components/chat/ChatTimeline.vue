@@ -172,7 +172,15 @@ watch(streamingSignature, () => {
   void scrollToBoundary();
 });
 
-function labelForRole(role: ChatMessage["role"]) {
+function messageKind(message: ChatMessage) {
+  return String(message.metadata?.message_kind || "").trim();
+}
+
+function labelForMessage(message: ChatMessage) {
+  const kind = messageKind(message);
+  if (kind === "task_notification") return "Worker Notification";
+  if (kind === "coordinator_assignment") return "Worker Assignment";
+  const role = message.role;
   if (role === "user") return "User Prompt";
   if (role === "assistant") return "Agent Response";
   if (role === "tool") return "Tool Output";
@@ -332,7 +340,7 @@ function escapeHtml(content: string) {
       :class="`conversation-entry-${message.role}`"
     >
       <div class="conversation-entry-meta">
-        <span>{{ labelForRole(message.role) }}</span>
+        <span>{{ labelForMessage(message) }}</span>
         <span>
           {{ new Date(message.created_at).toLocaleString("zh-CN") }}
           <template v-if="deliveryLabel(message)">

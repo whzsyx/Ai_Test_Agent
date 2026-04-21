@@ -4,7 +4,7 @@ from src.application.model_adapters.anthropic_messages import AnthropicMessagesA
 from src.application.model_adapters.base import ProviderAdapter
 from src.application.model_adapters.google_gemini import GoogleGeminiGenerateContentAdapter
 from src.application.model_adapters.openai_chat import OpenAIChatCompletionsAdapter
-from src.application.model_adapters.provider_profiles import resolve_provider_profile
+from src.application.model_adapters.provider_profiles import normalize_provider, normalize_transport
 from src.schemas.model_config import ModelConfigRecord
 
 
@@ -13,12 +13,17 @@ class AdapterRegistry:
         self._adapters = list(adapters)
 
     def resolve(self, config: ModelConfigRecord) -> ProviderAdapter:
-        profile = resolve_provider_profile(config.provider)
+        resolved = config.model_copy(
+            update={
+                "provider": normalize_provider(config.provider),
+                "transport": normalize_transport(config.transport, provider=config.provider),
+            }
+        )
         for adapter in self._adapters:
-            if adapter.matches(config.model_copy(update={"provider": profile.provider, "transport": profile.transport})):
+            if adapter.matches(resolved):
                 return adapter
         raise ValueError(
-            f"No provider adapter matched provider='{profile.provider}' transport='{profile.transport}'."
+            f"No provider adapter matched provider='{resolved.provider}' transport='{resolved.transport}'."
         )
 
 

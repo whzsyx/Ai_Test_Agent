@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import smtplib
 from time import perf_counter
 
 import httpx
@@ -10,7 +11,11 @@ from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
 from src.schemas.model_config import ModelInvocationRequest
-from src.schemas.email_config import EmailConfigUpdateRequest
+from src.schemas.email_config import (
+    EmailConfigActionResponse,
+    EmailConfigConnectionTestResponse,
+    EmailConfigUpdateRequest,
+)
 from src.schemas.settings import (
     ModelConfigActionResponse,
     ModelConfigConnectionTestResponse,
@@ -115,3 +120,77 @@ class SettingsService:
 
     def update_email_config(self, payload: EmailConfigUpdateRequest):
         return self._email_config_store.to_public(self._email_config_store.update(payload))
+
+    def activate_email_config(self, provider: str):
+        item = self._email_config_store.activate(provider)
+        return EmailConfigActionResponse(
+            ok=True,
+            message=f"Email provider '{item.provider}' is now enabled and set as default.",
+            item=self._email_config_store.to_public(item),
+        )
+
+    def delete_email_config(self, provider: str):
+        deleted, replacement = self._email_config_store.delete(provider)
+        message = f"Email provider '{deleted.provider}' was deleted."
+        if replacement is not None:
+            message += f" '{replacement.provider}' is now enabled as the default channel."
+        return EmailConfigActionResponse(
+            ok=True,
+            message=message,
+            item=self._email_config_store.to_public(replacement) if replacement else None,
+        )
+
+    def test_email_config_connection(self, provider: str):
+        record = self._email_config_store.get_by_provider(provider)
+        public_item = self._email_config_store.to_public(record)
+
+        if not record.smtp_host or not record.smtp_port:
+            return EmailConfigConnectionTestResponse(
+                ok=False,
+                message=f"Email provider '{provider}' is missing SMTP host or port.",
+                item=public_item,
+                smtp_host=record.smtp_host,
+                smtp_port=record.smtp_port,
+            )
+
+        started_at = perf_counter()
+        try:
+            if record.use_tls:
+                with smtplib.SMTP_SSL(record.smtp_host, int(record.smtp_port), timeout=10) as client:
+                    if record.smtp_username:
+                        client.login(record.smtp_username, record.smtp_password or "")
+                    code, response = client.noop()
+            else:
+                with smtplib.SMTP(record.smtp_host, int(record.smtp_port), timeout=10) as client:
+                    client.ehlo()
+                    try:
+                        client.starttls()
+                        client.ehlo()
+                    except smtplib.SMTPException:
+                        pass
+                    if record.smtp_username:
+                        client.login(record.smtp_username, record.smtp_password or "")
+                    code, response = client.noop()
+        except (OSError, smtplib.SMTPException) as exc:
+            return EmailConfigConnectionTestResponse(
+                ok=False,
+                message=f"Connection test failed: {exc}",
+                item=public_item,
+                smtp_host=record.smtp_host,
+                smtp_port=record.smtp_port,
+                latency_ms=int((perf_counter() - started_at) * 1000),
+            )
+
+        preview = f"SMTP NOOP {code}"
+        if response:
+            preview = f"{preview} / {str(response).strip()[:120]}"
+
+        return EmailConfigConnectionTestResponse(
+            ok=True,
+            message=f"Connection test succeeded for '{provider}'.",
+            item=public_item,
+            smtp_host=record.smtp_host,
+            smtp_port=record.smtp_port,
+            latency_ms=int((perf_counter() - started_at) * 1000),
+            preview=preview,
+        )

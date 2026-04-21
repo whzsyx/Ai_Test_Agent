@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 
@@ -39,6 +40,7 @@ class ContentPart(BaseModel):
 class UnifiedMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     tool_call_id: str | None = None
+    tool_calls: list[ModelToolCall] = Field(default_factory=list)
     parts: list[ContentPart] = Field(default_factory=list)
 
 
@@ -151,6 +153,7 @@ class ModelInvocationRequest(BaseModel):
             UnifiedMessage(
                 role=self._coerce_role(item.get("role")),
                 tool_call_id=str(item.get("tool_call_id") or "") or None,
+                tool_calls=self._coerce_tool_calls(item.get("tool_calls")),
                 parts=self._coerce_parts_from_message(item),
             )
             for item in self.messages
@@ -181,6 +184,47 @@ class ModelInvocationRequest(BaseModel):
                 )
             ]
         return cls._coerce_parts(item.get("content"))
+
+    @classmethod
+    def _coerce_tool_calls(cls, value: Any) -> list[ModelToolCall]:
+        if not isinstance(value, list):
+            return []
+        tool_calls: list[ModelToolCall] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                continue
+            function_block = item.get("function")
+            if isinstance(function_block, dict):
+                name = str(function_block.get("name") or "").strip()
+                arguments = function_block.get("arguments", {})
+            else:
+                name = str(item.get("name") or "").strip()
+                arguments = item.get("arguments", {})
+            if not name:
+                continue
+            tool_calls.append(
+                ModelToolCall(
+                    id=str(item.get("id") or f"call_{index}"),
+                    name=name,
+                    arguments=cls._coerce_tool_arguments(arguments),
+                )
+            )
+        return tool_calls
+
+    @classmethod
+    def _coerce_tool_arguments(cls, value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            try:
+                loaded = json.loads(raw)
+            except Exception:
+                return {"raw": raw}
+            return loaded if isinstance(loaded, dict) else {"raw": raw}
+        return {}
 
     @classmethod
     def _coerce_parts(cls, content: Any) -> list[ContentPart]:

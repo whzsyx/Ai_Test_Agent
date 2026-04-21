@@ -311,3 +311,4 @@ claude_code_ui_Agent/
 tests/
 data/
 .pytest_cli_runtime/
+scripts/

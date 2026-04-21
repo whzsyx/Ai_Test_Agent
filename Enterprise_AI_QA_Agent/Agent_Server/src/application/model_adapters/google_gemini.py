@@ -17,8 +17,7 @@ class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
     adapter_key = "google_gemini_generate_content"
 
     def matches(self, config: ModelConfigRecord) -> bool:
-        provider = str(config.provider or "").strip().lower()
-        return config.transport == "google_gemini_generate_content" or provider in {"google", "gemini"}
+        return config.transport == "google_gemini_generate_content"
 
     def describe(self, config: ModelConfigRecord) -> AdapterDescriptor:
         return AdapterDescriptor(
@@ -43,7 +42,7 @@ class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
         tool_name_map: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "contents": self._build_contents(request),
+            "contents": self._build_contents(request, tool_name_map),
             "generationConfig": {
                 "maxOutputTokens": config.max_tokens,
             },
@@ -175,7 +174,11 @@ class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
             },
         }
 
-    def _build_contents(self, request: ModelInvocationRequest) -> list[dict[str, Any]]:
+    def _build_contents(
+        self,
+        request: ModelInvocationRequest,
+        tool_name_map: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         contents: list[dict[str, Any]] = []
         for message in request.structured_messages:
             if message.role == "system":
@@ -186,10 +189,21 @@ class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
                 role = "model"
             else:
                 role = "user"
+            parts = self._serialize_parts(message)
+            if message.role == "assistant" and message.tool_calls:
+                for tool_call in message.tool_calls:
+                    parts.append(
+                        {
+                            "functionCall": {
+                                "name": (tool_name_map or {}).get(tool_call.name, tool_call.name),
+                                "args": tool_call.arguments or {},
+                            }
+                        }
+                    )
             contents.append(
                 {
                     "role": role,
-                    "parts": self._serialize_parts(message),
+                    "parts": parts,
                 }
             )
         return contents

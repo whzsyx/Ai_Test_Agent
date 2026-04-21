@@ -67,6 +67,22 @@ class EmailConfigUpdateRequest(BaseModel):
     use_tls: bool = True
 
 
+class EmailConfigActionResponse(BaseModel):
+    ok: bool
+    message: str
+    item: EmailConfigPublic | None = None
+
+
+class EmailConfigConnectionTestResponse(BaseModel):
+    ok: bool
+    message: str
+    item: EmailConfigPublic
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    latency_ms: int | None = None
+    preview: str | None = None
+
+
 class SettingsBundle(BaseModel):
     model_configs: list[dict] = Field(default_factory=list)
     email_configs: list[EmailConfigPublic] = Field(default_factory=list)

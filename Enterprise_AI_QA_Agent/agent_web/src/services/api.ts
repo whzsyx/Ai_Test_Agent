@@ -2,6 +2,8 @@ import type {
   AgentDescriptor,
   ConversationResponse,
   EmailConfigPublic,
+  EmailConfigActionResponse,
+  EmailConfigConnectionTestResponse,
   EmailConfigUpdateRequest,
   ExecutionEvent,
   HealthResponse,
@@ -83,6 +85,21 @@ export const api = {
     return request("/api/v1/settings/email", {
       method: "PUT",
       body: JSON.stringify(payload),
+    });
+  },
+  activateEmailConfig(provider: "aliyun" | "cybermail"): Promise<EmailConfigActionResponse> {
+    return request(`/api/v1/settings/email/${encodeURIComponent(provider)}/activate`, {
+      method: "POST",
+    });
+  },
+  testEmailConfigConnection(provider: "aliyun" | "cybermail"): Promise<EmailConfigConnectionTestResponse> {
+    return request(`/api/v1/settings/email/${encodeURIComponent(provider)}/test-connection`, {
+      method: "POST",
+    });
+  },
+  deleteEmailConfig(provider: "aliyun" | "cybermail"): Promise<EmailConfigActionResponse> {
+    return request(`/api/v1/settings/email/${encodeURIComponent(provider)}`, {
+      method: "DELETE",
     });
   },
   createSession(

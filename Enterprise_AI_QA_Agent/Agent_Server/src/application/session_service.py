@@ -24,6 +24,7 @@ from src.schemas.session import (
     ExecutionEvent,
     HeadlessExecutionRequest,
     InterruptSessionRequest,
+    MessageKind,
     MessageRole,
     PendingInputQueueEntry,
     ResumeSessionRequest,
@@ -59,6 +60,7 @@ class SessionService:
         self._verification_service = verification_service or VerificationService()
         self._session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
+        self._approval_forward_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def list_sessions(self) -> list[SessionSummary]:
         sessions = await self._store.list_sessions()
@@ -275,13 +277,19 @@ class SessionService:
             if payload.decision not in {ToolApprovalStatus.approved, ToolApprovalStatus.denied}:
                 raise ValueError("Approval decision must be approved or denied.")
 
+            session = await self._require_session(session_id)
+            existing_approvals = await self._store.list_approvals(session_id)
+            proxy_approval = next((item for item in existing_approvals if item.id == approval_id), None)
+            proxy_metadata = proxy_approval.metadata if proxy_approval is not None else {}
+            proxy_child_session_id = str(proxy_metadata.get("proxy_child_session_id") or "").strip()
+            proxy_child_approval_id = str(proxy_metadata.get("proxy_child_approval_id") or "").strip()
+
             approval = await self._store.resolve_approval(
                 session_id=session_id,
                 approval_id=approval_id,
                 status=payload.decision,
                 reason=payload.reason,
             )
-            session = await self._require_session(session_id)
             await self._store.append_event(
                 session_id,
                 self._make_event(
@@ -294,6 +302,21 @@ class SessionService:
                     },
                 ),
             )
+            if proxy_child_session_id and proxy_child_approval_id:
+                task = asyncio.create_task(
+                    self._forward_proxy_approval_decision(
+                        parent_session_id=session_id,
+                        parent_approval_id=approval_id,
+                        child_session_id=proxy_child_session_id,
+                        child_approval_id=proxy_child_approval_id,
+                        payload=ApprovalDecisionRequest(decision=payload.decision, reason=payload.reason),
+                    )
+                )
+                self._approval_forward_tasks[approval_id] = task
+                task.add_done_callback(
+                    lambda _finished, proxy_id=approval_id: self._approval_forward_tasks.pop(proxy_id, None)
+                )
+                return approval
             assistant_message_id = str(uuid4())
             stream_chunk_handler = self._build_stream_chunk_handler(
                 session_id=session_id,
@@ -419,34 +442,44 @@ class SessionService:
         if payload.model_key:
             session.preferred_model = payload.model_key
 
+        user_message_metadata = self._transcript_hygiene_service.user_message_metadata(
+            {
+                "turn_id": execution_request.turn_id,
+                "requested_agent": payload.agent_key,
+                "requested_model": payload.model_key,
+                "message_kind": execution_request.message_kind.value,
+                "submit_mode": execution_request.submit_mode,
+                "command_name": execution_request.command_name,
+                "attachment_count": len(execution_request.attachments),
+                "execution_lane": (
+                    execution_request.routing_decision.execution_lane
+                    if execution_request.routing_decision
+                    else ""
+                ),
+                "queue_behavior": (
+                    execution_request.routing_decision.queue_behavior
+                    if execution_request.routing_decision
+                    else ""
+                ),
+                "input_summary": execution_request.input_summary,
+                **payload.metadata,
+            }
+        )
+        if execution_request.message_kind in {MessageKind.task_notification, MessageKind.coordinator_assignment}:
+            user_message_metadata.update(
+                {
+                    "persist_transcript": False,
+                    "context_eligible": False,
+                    "transcript_bucket": "event",
+                }
+            )
+
         user_message = ChatMessage(
             id=str(uuid4()),
             role=MessageRole.user,
             content=payload.content.strip(),
             created_at=datetime.utcnow(),
-            metadata=self._transcript_hygiene_service.user_message_metadata(
-                {
-                    "turn_id": execution_request.turn_id,
-                    "requested_agent": payload.agent_key,
-                    "requested_model": payload.model_key,
-                    "message_kind": execution_request.message_kind.value,
-                    "submit_mode": execution_request.submit_mode,
-                    "command_name": execution_request.command_name,
-                    "attachment_count": len(execution_request.attachments),
-                    "execution_lane": (
-                        execution_request.routing_decision.execution_lane
-                        if execution_request.routing_decision
-                        else ""
-                    ),
-                    "queue_behavior": (
-                        execution_request.routing_decision.queue_behavior
-                        if execution_request.routing_decision
-                        else ""
-                    ),
-                    "input_summary": execution_request.input_summary,
-                    **payload.metadata,
-                }
-            ),
+            metadata=user_message_metadata,
         )
         session.messages.append(user_message)
         await self._store.save_session(session)
@@ -1015,6 +1048,32 @@ class SessionService:
             output=assistant_message,
             events=events[-10:],
         )
+
+    async def _forward_proxy_approval_decision(
+        self,
+        parent_session_id: str,
+        parent_approval_id: str,
+        child_session_id: str,
+        child_approval_id: str,
+        payload: ApprovalDecisionRequest,
+    ) -> None:
+        try:
+            await self.resolve_approval(child_session_id, child_approval_id, payload)
+        except Exception as exc:
+            await self._store.append_event(
+                parent_session_id,
+                self._make_event(
+                    parent_session_id,
+                    "worker.approval_forward_failed",
+                    {
+                        "approval_id": parent_approval_id,
+                        "child_session_id": child_session_id,
+                        "child_approval_id": child_approval_id,
+                        "message": "Failed to forward approval decision to the child worker session.",
+                        "error": str(exc),
+                    },
+                ),
+            )
 
     async def _require_session(self, session_id: str) -> SessionRecord:
         session = await self._store.get_session(session_id)

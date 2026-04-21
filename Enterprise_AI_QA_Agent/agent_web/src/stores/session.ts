@@ -45,6 +45,12 @@ function messageDeliveryStatus(message: ChatMessage | undefined) {
   return String(message?.metadata?.delivery_status || "").trim();
 }
 
+function hasStreamingAssistantMessage(messages: ChatMessage[]) {
+  return messages.some(
+    (message) => message.role === "assistant" && messageDeliveryStatus(message) === "streaming",
+  );
+}
+
 function normalizeTranscriptBucket(value: unknown): TranscriptBucket {
   const bucket = String(value || "").trim();
   if (bucket === "tool" || bucket === "error") {
@@ -169,7 +175,10 @@ function mergeSessionMessages(
   const serverIds = new Set(serverMessages.map((message) => message.id));
   const localById = new Map(localMessages.map((message) => [message.id, message]));
   const allowTransientLocalMessages =
-    sessionStatus === "running" || sessionStatus === "waiting_approval" || sessionStatus === "interrupted";
+    sessionStatus === "running" ||
+    sessionStatus === "waiting_approval" ||
+    sessionStatus === "interrupted" ||
+    hasStreamingAssistantMessage(localMessages);
 
   const merged = serverMessages.map((serverMessage) => {
     const localMessage = localById.get(serverMessage.id);
@@ -250,11 +259,7 @@ export const useSessionStore = defineStore("session", {
       return state.agents.find((item) => item.key === state.selectedAgentKey) ?? null;
     },
     isAssistantStreaming(state) {
-      return state.messages.some(
-        (message) =>
-          message.role === "assistant" &&
-          String(message.metadata?.delivery_status || "").trim() === "streaming",
-      );
+      return hasStreamingAssistantMessage(state.messages);
     },
     isBusy(state): boolean {
       return (
@@ -345,6 +350,7 @@ export const useSessionStore = defineStore("session", {
       if (this.session.is_interrupted || this.session.status === "interrupted") return "interrupted";
       if (this.workerFailureGuard?.blocked || this.session.status === "failed") return "failed";
       if (
+        this.isAssistantStreaming ||
         this.session.status === "running" ||
         this.workerDispatches.some((item) => item.status === "running")
       ) {

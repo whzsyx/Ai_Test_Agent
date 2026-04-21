@@ -19,6 +19,12 @@ interface CapabilityOption {
   hint: string;
 }
 
+const TRANSPORT_OPTIONS: SelectOption[] = [
+  { label: "OpenAI Chat Completions", value: "openai_chat_completions" },
+  { label: "Anthropic Messages", value: "anthropic_messages" },
+  { label: "Google Gemini Generate Content", value: "google_gemini_generate_content" },
+];
+
 const loading = ref(false);
 const saving = ref(false);
 const showEditorModal = ref(false);
@@ -63,6 +69,7 @@ const baseCapabilities: ModelCapabilities = {
 const modelDraft = reactive<ModelConfigUpdateRequest>({
   model_name: "",
   provider: "",
+  transport: "openai_chat_completions",
   base_url: "",
   api_key: null,
   is_active: false,
@@ -75,7 +82,6 @@ const capabilityDraft = reactive<ModelCapabilities>({ ...baseCapabilities });
 const isEditing = computed(() => Boolean(editingModelName.value));
 const providerOptions = computed<SelectOption[]>(() => {
   const seen = new Set<string>();
-
   return modelConfigs.value
     .map((item) => item.provider.trim())
     .filter((provider) => {
@@ -90,10 +96,7 @@ const providerOptions = computed<SelectOption[]>(() => {
       return true;
     })
     .sort((left, right) => left.localeCompare(right))
-    .map((provider) => ({
-      label: provider,
-      value: provider,
-    }));
+    .map((provider) => ({ label: provider, value: provider }));
 });
 
 onMounted(() => {
@@ -108,12 +111,12 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => [showEditorModal.value, modelDraft.provider, modelDraft.use_provider_defaults] as const,
-  ([visible, provider, useProviderDefaults]) => {
+  () => [showEditorModal.value, modelDraft.provider, modelDraft.transport, modelDraft.use_provider_defaults] as const,
+  ([visible, provider, transport, useProviderDefaults]) => {
     if (!visible || !useProviderDefaults) {
       return;
     }
-    applyCapabilityDraft(inferProviderCapabilities(provider));
+    applyCapabilityDraft(inferCapabilities(provider, transport || "openai_chat_completions"));
   },
 );
 
@@ -146,12 +149,13 @@ function showMessage(tone: MessageTone, text: string) {
 function resetModelDraft() {
   modelDraft.model_name = "";
   modelDraft.provider = "";
+  modelDraft.transport = "openai_chat_completions";
   modelDraft.base_url = "";
   modelDraft.api_key = null;
   modelDraft.is_active = modelConfigs.value.length === 0;
   modelDraft.use_provider_defaults = true;
   modelDraft.capability_overrides = {};
-  applyCapabilityDraft(inferProviderCapabilities(""));
+  applyCapabilityDraft(inferCapabilities("", modelDraft.transport));
 }
 
 function openCreateModal() {
@@ -164,6 +168,7 @@ function openEditModal(item: ModelConfigPublic) {
   editingModelName.value = item.name;
   modelDraft.model_name = item.name;
   modelDraft.provider = item.provider;
+  modelDraft.transport = item.transport;
   modelDraft.base_url = item.api_base_url;
   modelDraft.api_key = null;
   modelDraft.is_active = item.is_active;
@@ -184,13 +189,15 @@ function applyCapabilityDraft(capabilities: Partial<ModelCapabilities>) {
   });
 }
 
-function inferProviderCapabilities(provider: string): ModelCapabilities {
-  const normalized = provider.trim().toLowerCase();
+function inferCapabilities(provider: string, transport: string): ModelCapabilities {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedTransport = transport.trim().toLowerCase();
   const capabilities: ModelCapabilities = { ...baseCapabilities };
+
   const openAiVisionProviders = new Set([
     "openai",
-    "azure-openai",
-    "azure_openai",
+    "anthropic",
+    "deepseek",
     "qwen",
     "dashscope",
     "zhipu",
@@ -203,32 +210,39 @@ function inferProviderCapabilities(provider: string): ModelCapabilities {
     "hunyuan",
     "baidu",
     "ernie",
-    "deepseek",
     "moonshot",
+    "kimi",
   ]);
 
-  if (normalized === "anthropic") {
+  if (normalizedTransport === "anthropic_messages") {
     capabilities.vision = true;
     capabilities.image_url_input = false;
-  } else if (normalized === "google" || normalized === "gemini") {
+    capabilities.image_base64_input = true;
+    return capabilities;
+  }
+
+  if (normalizedTransport === "google_gemini_generate_content") {
     capabilities.vision = true;
     capabilities.multi_image = true;
     capabilities.file_input = true;
     capabilities.image_url_input = false;
-  } else if (openAiVisionProviders.has(normalized)) {
-    capabilities.vision = true;
+    capabilities.image_base64_input = true;
+    return capabilities;
   }
 
+  capabilities.image_url_input = true;
+  capabilities.image_base64_input = true;
+  if (openAiVisionProviders.has(normalizedProvider)) {
+    capabilities.vision = true;
+  }
   return capabilities;
 }
 
 function buildCapabilityOverrides(): ModelCapabilitiesOverride {
   const overrides: ModelCapabilitiesOverride = {};
-
   capabilityOptions.forEach((option) => {
     overrides[option.key] = capabilityDraft[option.key];
   });
-
   return overrides;
 }
 
@@ -240,8 +254,13 @@ function hasCapabilityOverrides(overrides: ModelCapabilitiesOverride | undefined
 }
 
 async function saveModel() {
-  if (!modelDraft.model_name.trim() || !modelDraft.provider.trim() || !modelDraft.base_url.trim()) {
-    showMessage("error", "模型名称、提供商和 Base URL 不能为空。");
+  if (
+    !modelDraft.model_name.trim() ||
+    !modelDraft.provider.trim() ||
+    !modelDraft.transport?.trim() ||
+    !modelDraft.base_url.trim()
+  ) {
+    showMessage("error", "模型名称、供应商、协议和 Base URL 不能为空。");
     return;
   }
 
@@ -250,6 +269,7 @@ async function saveModel() {
   const payload: ModelConfigUpdateRequest = {
     model_name: modelDraft.model_name.trim(),
     provider: modelDraft.provider.trim().toLowerCase(),
+    transport: modelDraft.transport.trim(),
     base_url: modelDraft.base_url.trim(),
     api_key: modelDraft.api_key?.trim() ? modelDraft.api_key.trim() : null,
     is_active: modelDraft.is_active,
@@ -342,7 +362,7 @@ async function deleteModel(item: ModelConfigPublic) {
     <div class="settings-pane-head">
       <div>
         <h3>模型设置</h3>
-        <p>维护当前系统可用的大模型配置，并指定默认使用的模型。</p>
+        <p>维护当前系统可用的大模型配置，并显式区分供应商、协议与接入地址。</p>
       </div>
     </div>
 
@@ -366,6 +386,11 @@ async function deleteModel(item: ModelConfigPublic) {
           <div class="settings-model-card__provider-row">
             <i class="fa-solid fa-server"></i>
             <span>{{ item.provider }}</span>
+          </div>
+
+          <div class="settings-model-card__provider-row">
+            <i class="fa-solid fa-arrows-rotate"></i>
+            <span>{{ item.transport }}</span>
           </div>
 
           <div class="settings-model-card__stats settings-model-card__stats-plain">
@@ -409,7 +434,6 @@ async function deleteModel(item: ModelConfigPublic) {
             <button
               type="button"
               class="settings-model-card__action settings-model-card__action-edit"
-              :disabled="busyActionKey === actionKey(item.name, 'edit')"
               title="编辑模型"
               @click="openEditModal(item)"
             >
@@ -453,11 +477,11 @@ async function deleteModel(item: ModelConfigPublic) {
         <div class="form-grid two">
           <label>
             <span>模型名称</span>
-            <input v-model="modelDraft.model_name" type="text" placeholder="deepseek-chat / gpt-5.4" />
+            <input v-model="modelDraft.model_name" type="text" placeholder="claude-opus-4-7 / gpt-5.4" />
           </label>
 
           <label class="settings-provider-field">
-            <span>提供商</span>
+            <span>供应商</span>
             <NSelect
               v-model:value="modelDraft.provider"
               class="settings-provider-select"
@@ -469,7 +493,17 @@ async function deleteModel(item: ModelConfigPublic) {
             />
           </label>
 
-          <label class="full">
+          <label class="settings-provider-field">
+            <span>协议</span>
+            <NSelect
+              v-model:value="modelDraft.transport"
+              class="settings-provider-select"
+              :options="TRANSPORT_OPTIONS"
+              placeholder="请选择 transport"
+            />
+          </label>
+
+          <label>
             <span>Base URL</span>
             <input v-model="modelDraft.base_url" type="text" placeholder="https://api.deepseek.com/v1" />
           </label>
@@ -490,11 +524,11 @@ async function deleteModel(item: ModelConfigPublic) {
           <div class="settings-capability-panel__head">
             <div>
               <strong>能力覆盖</strong>
-              <p>默认跟随提供商能力；如果需要，可在当前模型上单独覆盖。</p>
+              <p>默认根据供应商和协议推断能力；如果需要，可在当前模型上单独覆盖。</p>
             </div>
             <label class="checkbox-row">
               <input v-model="modelDraft.use_provider_defaults" type="checkbox" />
-              <span>跟随提供商默认能力</span>
+              <span>跟随默认能力</span>
             </label>
           </div>
 

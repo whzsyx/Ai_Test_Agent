@@ -171,13 +171,22 @@ class OpenAIChatCompletionsAdapter(ProviderAdapter):
                 payload.append(
                     {
                         "role": "tool",
-                        "tool_call_id": message.tool_call_id,
+                        "tool_call_id": item.tool_call_id,
                         "name": (tool_name_map or {}).get(tool_name, tool_name),
                         "content": self._serialize_tool_result(tool_part),
                     }
                 )
                 continue
-            payload.append({"role": role, "content": self._serialize_parts(item)})
+            message_payload: dict[str, Any] = {
+                "role": role,
+                "content": self._serialize_parts(item),
+            }
+            if role == "assistant" and item.tool_calls:
+                message_payload["tool_calls"] = self._serialize_assistant_tool_calls(
+                    item.tool_calls,
+                    tool_name_map,
+                )
+            payload.append(message_payload)
         return payload
 
     def _serialize_parts(self, message: UnifiedMessage) -> str | list[dict[str, Any]]:
@@ -218,3 +227,22 @@ class OpenAIChatCompletionsAdapter(ProviderAdapter):
         if part.payload:
             return json.dumps(part.payload, ensure_ascii=False)
         return ""
+
+    def _serialize_assistant_tool_calls(
+        self,
+        tool_calls: list[ModelToolCall],
+        tool_name_map: dict[str, str] | None,
+    ) -> list[dict[str, Any]]:
+        serialized: list[dict[str, Any]] = []
+        for item in tool_calls:
+            serialized.append(
+                {
+                    "id": item.id,
+                    "type": "function",
+                    "function": {
+                        "name": (tool_name_map or {}).get(item.name, item.name),
+                        "arguments": json.dumps(item.arguments or {}, ensure_ascii=False),
+                    },
+                }
+            )
+        return serialized

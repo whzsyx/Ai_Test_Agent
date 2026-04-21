@@ -17,7 +17,7 @@ class AnthropicMessagesAdapter(ProviderAdapter):
     adapter_key = "anthropic_messages"
 
     def matches(self, config: ModelConfigRecord) -> bool:
-        return config.transport == "anthropic_messages" or str(config.provider).strip().lower() == "anthropic"
+        return config.transport == "anthropic_messages"
 
     def describe(self, config: ModelConfigRecord) -> AdapterDescriptor:
         return AdapterDescriptor(
@@ -39,7 +39,7 @@ class AnthropicMessagesAdapter(ProviderAdapter):
             "model": config.model_id,
             "max_tokens": config.max_tokens,
             "system": request.system_prompt,
-            "messages": self._build_messages(request),
+            "messages": self._build_messages(request, tool_name_map),
         }
         if config.temperature is not None:
             payload["temperature"] = config.temperature
@@ -170,7 +170,11 @@ class AnthropicMessagesAdapter(ProviderAdapter):
             },
         }
 
-    def _build_messages(self, request: ModelInvocationRequest) -> list[dict[str, Any]]:
+    def _build_messages(
+        self,
+        request: ModelInvocationRequest,
+        tool_name_map: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
         for item in request.structured_messages:
             role = item.role
@@ -191,7 +195,18 @@ class AnthropicMessagesAdapter(ProviderAdapter):
                     }
                 )
                 continue
-            payload.append({"role": role, "content": self._serialize_parts(item)})
+            content_blocks = self._serialize_parts(item)
+            if role == "assistant" and item.tool_calls:
+                for tool_call in item.tool_calls:
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tool_call.id,
+                            "name": (tool_name_map or {}).get(tool_call.name, tool_call.name),
+                            "input": tool_call.arguments or {},
+                        }
+                    )
+            payload.append({"role": role, "content": content_blocks})
         return payload
 
     def _serialize_parts(self, message: UnifiedMessage) -> list[dict[str, Any]]:

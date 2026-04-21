@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.application.model_adapters.openai_chat import OpenAIChatCompletionsAdapter
-from src.application.model_adapters.provider_profiles import normalize_provider, resolve_provider_profile
+from src.application.model_adapters.provider_profiles import normalize_provider, normalize_transport
 from src.application.model_adapters.registry import AdapterRegistry, build_default_adapter_registry
 from src.schemas.model_config import ModelConfigRecord, ModelInvocationRequest
 from src.schemas.tool_runtime import ModelToolCall
@@ -25,8 +25,12 @@ class ModelCompatibilityLayer:
 
     def resolve_adapter(self, config: ModelConfigRecord):
         normalized = normalize_provider(config.provider)
-        profile = resolve_provider_profile(normalized)
-        resolved = config.model_copy(update={"provider": normalized, "transport": profile.transport})
+        resolved = config.model_copy(
+            update={
+                "provider": normalized,
+                "transport": normalize_transport(config.transport, provider=normalized),
+            }
+        )
         return self._adapter_registry.resolve(resolved)
 
     def resolve_profile(self, config: ModelConfigRecord):

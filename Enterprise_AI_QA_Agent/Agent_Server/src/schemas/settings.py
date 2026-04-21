@@ -3,12 +3,13 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from src.schemas.email_config import EmailConfigPublic
-from src.schemas.model_config import ModelCapabilitiesOverride, ModelConfigPublic
+from src.schemas.model_config import ModelCapabilitiesOverride, ModelConfigPublic, ModelTransport
 
 
 class ModelConfigUpdateRequest(BaseModel):
     model_name: str
     provider: str
+    transport: ModelTransport | None = None
     base_url: str
     api_key: str | None = None
     is_active: bool = False
@@ -19,6 +20,7 @@ class ModelConfigUpdateRequest(BaseModel):
 class ModelConfigEditRequest(BaseModel):
     model_name: str
     provider: str
+    transport: ModelTransport | None = None
     base_url: str
     api_key: str | None = None
     is_active: bool = False
