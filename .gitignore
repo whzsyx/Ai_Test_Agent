@@ -312,3 +312,4 @@ tests/
 data/
 .pytest_cli_runtime/
 scripts/
+ui-main/
