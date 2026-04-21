@@ -35,6 +35,7 @@ const messageVisible = ref(false);
 const messageText = ref("");
 const messageTone = ref<MessageTone>("success");
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
+const showCapabilities = ref(false);
 
 const capabilityOptions: CapabilityOption[] = [
   { key: "tool_calling", label: "工具调用", hint: "允许模型发起工具调用" },
@@ -161,6 +162,7 @@ function resetModelDraft() {
 function openCreateModal() {
   editingModelName.value = null;
   resetModelDraft();
+  showCapabilities.value = false;
   showEditorModal.value = true;
 }
 
@@ -175,6 +177,7 @@ function openEditModal(item: ModelConfigPublic) {
   modelDraft.use_provider_defaults = !hasCapabilityOverrides(item.capability_overrides);
   modelDraft.capability_overrides = { ...item.capability_overrides };
   applyCapabilityDraft(item.capabilities);
+  showCapabilities.value = false;
   showEditorModal.value = true;
 }
 
@@ -485,6 +488,7 @@ async function deleteModel(item: ModelConfigPublic) {
             <NSelect
               v-model:value="modelDraft.provider"
               class="settings-provider-select"
+              menu-class="settings-provider-select-menu"
               filterable
               tag
               clearable
@@ -498,6 +502,7 @@ async function deleteModel(item: ModelConfigPublic) {
             <NSelect
               v-model:value="modelDraft.transport"
               class="settings-provider-select"
+              menu-class="settings-provider-select-menu"
               :options="TRANSPORT_OPTIONS"
               placeholder="请选择 transport"
             />
@@ -521,18 +526,21 @@ async function deleteModel(item: ModelConfigPublic) {
         </div>
 
         <section class="settings-capability-panel">
-          <div class="settings-capability-panel__head">
-            <div>
-              <strong>能力覆盖</strong>
-              <p>默认根据供应商和协议推断能力；如果需要，可在当前模型上单独覆盖。</p>
+          <div class="settings-capability-panel__head" @click="showCapabilities = !showCapabilities" style="cursor: pointer; user-select: none;">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+              <i class="fa-solid" :class="showCapabilities ? 'fa-chevron-down' : 'fa-chevron-right'" style="margin-top: 4px;"></i>
+              <div>
+                <strong>能力覆盖</strong>
+                <p>默认根据供应商和协议推断能力；如果需要，可在当前模型上单独覆盖。</p>
+              </div>
             </div>
-            <label class="checkbox-row">
+            <label class="checkbox-row" @click.stop>
               <input v-model="modelDraft.use_provider_defaults" type="checkbox" />
               <span>跟随默认能力</span>
             </label>
           </div>
 
-          <div class="settings-capability-grid">
+          <div v-show="showCapabilities" class="settings-capability-grid">
             <label
               v-for="option in capabilityOptions"
               :key="option.key"

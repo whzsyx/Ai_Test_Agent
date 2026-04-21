@@ -21,8 +21,7 @@ const visibleMessages = computed(() =>
 const historyRef = ref<HTMLElement | null>(null);
 const endRef = ref<HTMLElement | null>(null);
 const scrollContainerRef = ref<HTMLElement | null>(null);
-const COMPOSER_GAP = 50;
-const BOUNDARY_RESUME_THRESHOLD = 80;
+const BOUNDARY_RESUME_THRESHOLD = 150;
 let resizeObserver: ResizeObserver | null = null;
 let suppressScrollSync = false;
 let releaseScrollSyncFrame = 0;
@@ -49,7 +48,8 @@ function getComposerBoundaryTop() {
   if (!composer) {
     return null;
   }
-  return composer.getBoundingClientRect().top - COMPOSER_GAP;
+  // Added 60px to push the boundary line downwards
+  return composer.getBoundingClientRect().top + 28; 
 }
 
 function getTailDistanceToBoundary() {
@@ -61,12 +61,13 @@ function getTailDistanceToBoundary() {
   return tail.getBoundingClientRect().bottom - boundaryTop;
 }
 
-function isWithinFollowZone() {
-  const distance = getTailDistanceToBoundary();
-  if (distance === null) {
+function isAtBottom() {
+  const container = scrollContainerRef.value;
+  if (!container) {
     return true;
   }
-  return distance <= BOUNDARY_RESUME_THRESHOLD;
+  // User is considered at bottom if they are within the threshold
+  return container.scrollHeight - Math.ceil(container.scrollTop) - container.clientHeight <= BOUNDARY_RESUME_THRESHOLD;
 }
 
 function withProgrammaticScroll(callback: () => void) {
@@ -89,7 +90,15 @@ function handleScroll() {
     userOverrideActive.value = false;
     return;
   }
-  userOverrideActive.value = !isWithinFollowZone();
+  const overflow = getTailDistanceToBoundary();
+  if (overflow === null) {
+    userOverrideActive.value = !isAtBottom();
+  } else {
+    // If the tail is higher than the composer top, user is not at the bottom visual boundary
+    // But if it overflows the composer top, and we are not forcing scroll, 
+    // it means user has scrolled up
+    userOverrideActive.value = overflow < -BOUNDARY_RESUME_THRESHOLD || !isAtBottom();
+  }
 }
 
 function handleWheel(event: WheelEvent) {
@@ -117,26 +126,27 @@ async function scrollToBoundary(force = false) {
     return;
   }
 
-  const tail = endRef.value;
-  if (!tail) {
-    withProgrammaticScroll(() => {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: "auto",
+  const overflow = getTailDistanceToBoundary();
+  // If the content isn't long enough to hit the composer, or we don't know the composer pos
+  if (overflow === null || overflow <= 0) {
+    if (force) {
+      withProgrammaticScroll(() => {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: "auto",
+        });
       });
-    });
+    }
     return;
   }
-  const overflow = getTailDistanceToBoundary();
-  if (force || (overflow !== null && overflow > 0)) {
-    withProgrammaticScroll(() => {
-      tail.scrollIntoView({
-        block: "end",
-        inline: "nearest",
-        behavior: "auto",
-      });
+
+  withProgrammaticScroll(() => {
+    // Just scroll down by the exact overflow amount so the tail sits perfectly above the composer
+    container.scrollTo({
+      top: container.scrollTop + overflow,
+      behavior: "auto",
     });
-  }
+  });
 }
 
 onMounted(() => {
@@ -167,9 +177,18 @@ onBeforeUnmount(() => {
   }
 });
 
+watch(
+  () => visibleMessages.value.length,
+  (newLength, oldLength) => {
+    if (newLength > oldLength) {
+      userOverrideActive.value = false;
+      void scrollToBoundary(true);
+    }
+  }
+);
+
 watch(messageRenderSignature, (_, previousValue) => {
-  const shouldForce = !previousValue;
-  if (shouldForce) {
+  if (!previousValue) {
     userOverrideActive.value = false;
     void scrollToBoundary(true);
   }

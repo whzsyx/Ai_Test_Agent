@@ -996,25 +996,31 @@ function secretKeyLabel(provider: EmailProvider) {
         <div class="form-grid two">
           <label class="full">
             <span>通道名称</span>
-            <input v-model="draft.config_name" placeholder="例如：阿里云通知通道 / SendGrid 营销邮件" />
+            <input v-model="draft.config_name" type="text" placeholder="例如：阿里云通知通道 / SendGrid 营销邮件" />
           </label>
 
-          <label>
+          <label class="settings-provider-field">
             <span>提供商</span>
             <NSelect
               :value="draft.provider"
+              class="settings-provider-select"
+              menu-class="settings-provider-select-menu"
               :options="PROVIDER_OPTIONS"
               filterable
               consistent-menu-width
+              placeholder="请选择提供商"
               @update:value="(value) => handleProviderChange(String(value))"
             />
           </label>
 
-          <label v-if="providerSupportsModeSwitch">
+          <label v-if="providerSupportsModeSwitch" class="settings-provider-field">
             <span>接入方式</span>
             <NSelect
               :value="draft.delivery_mode"
+              class="settings-provider-select"
+              menu-class="settings-provider-select-menu"
               :options="API_SMTP_MODE_OPTIONS"
+              placeholder="请选择接入方式"
               @update:value="(value) => handleModeChange(String(value))"
             />
           </label>
@@ -1023,6 +1029,7 @@ function secretKeyLabel(provider: EmailProvider) {
             <span>发信域名</span>
             <input
               v-model="draft.extra_config.sending_domain"
+              type="text"
               placeholder="例如：mail.example.com"
             />
           </label>
@@ -1032,6 +1039,7 @@ function secretKeyLabel(provider: EmailProvider) {
               <span>{{ apiKeyLabel(draft.provider) }}</span>
               <input
                 v-model="draft.api_key"
+                type="password"
                 :placeholder="isCreateMode ? apiKeyLabel(draft.provider) : `留空则保留当前${apiKeyLabel(draft.provider)}`"
               />
             </label>
@@ -1040,6 +1048,7 @@ function secretKeyLabel(provider: EmailProvider) {
               <span>{{ secretKeyLabel(draft.provider) }}</span>
               <input
                 v-model="draft.secret_key"
+                type="password"
                 :placeholder="isCreateMode ? secretKeyLabel(draft.provider) : `留空则保留当前${secretKeyLabel(draft.provider)}`"
               />
             </label>
@@ -1048,7 +1057,7 @@ function secretKeyLabel(provider: EmailProvider) {
           <template v-else>
             <label>
               <span>SMTP Host</span>
-              <input v-model="draft.smtp_host" placeholder="smtp.example.com" />
+              <input v-model="draft.smtp_host" type="text" placeholder="smtp.example.com" />
             </label>
 
             <label>
@@ -1058,13 +1067,14 @@ function secretKeyLabel(provider: EmailProvider) {
 
             <label>
               <span>SMTP 用户名</span>
-              <input v-model="draft.smtp_username" placeholder="SMTP 登录用户名" />
+              <input v-model="draft.smtp_username" type="text" placeholder="SMTP 登录用户名" />
             </label>
 
             <label>
               <span>SMTP 密码</span>
               <input
                 v-model="draft.api_key"
+                type="password"
                 :placeholder="isCreateMode ? 'SMTP 密码' : '留空则保留当前 SMTP 密码'"
               />
             </label>
@@ -1072,17 +1082,17 @@ function secretKeyLabel(provider: EmailProvider) {
 
           <label>
             <span>发信邮箱</span>
-            <input v-model="draft.sender_email" placeholder="notice@example.com" />
+            <input v-model="draft.sender_email" type="email" placeholder="notice@example.com" />
           </label>
 
           <label>
             <span>测试邮箱</span>
-            <input v-model="draft.test_email" placeholder="test@example.com" />
+            <input v-model="draft.test_email" type="email" placeholder="test@example.com" />
           </label>
 
           <label>
             <span>发件人名称</span>
-            <input v-model="draft.extra_config.sender_name" placeholder="系统通知 / 品牌名称" />
+            <input v-model="draft.extra_config.sender_name" type="text" placeholder="系统通知 / 品牌名称" />
           </label>
 
           <label class="full">
@@ -1107,8 +1117,8 @@ function secretKeyLabel(provider: EmailProvider) {
         </div>
 
         <div class="settings-modal-actions">
-          <button class="secondary-btn" type="button" @click="closeEditorModal">取消</button>
-          <button class="primary-btn" type="button" :disabled="saving" @click="saveEmail">
+          <button class="secondary-btn narrow" type="button" @click="closeEditorModal">取消</button>
+          <button class="primary-btn narrow" type="button" :disabled="saving" @click="saveEmail">
             {{ saving ? "保存中..." : isCreateMode ? "创建邮件配置" : "保存邮件配置" }}
           </button>
         </div>

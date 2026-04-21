@@ -1,78 +1,273 @@
 <script setup lang="ts">
-import { useSessionStore } from "../stores/session";
+import { computed, ref } from "vue";
+import { toolsPlugins, type ToolsPluginDefinition, type ToolsPluginKey } from "../features/tools/plugins";
 
-const sessionStore = useSessionStore();
+const defaultPlugin = toolsPlugins[0];
+const activeTab = ref<ToolsPluginKey>(defaultPlugin.key);
+
+const activePlugin = computed(
+  () => toolsPlugins.find((item) => item.key === activeTab.value) ?? defaultPlugin,
+);
 </script>
 
 <template>
-  <section class="view-page view-tools-page">
-    <div class="page-head wide">
-       <h2>Skills 知识增强与测试工具</h2>
+  <section class="view-page tools-page">
+    <div class="page-head">
+      <div>
+        <h2>Skills 与工具管理</h2>
+        <p class="head-desc">管理 Agent 增强知识、漏洞扫描引擎及后端已注册工具链</p>
+      </div>
       <div class="page-head-actions">
-       <button class="secondary-btn"><i class="fa-brands fa-github"></i> Github 安装</button>
-        <button class="primary-btn"><i class="fa-solid fa-upload"></i> 上传 .md 技能包</button>
+        <template v-if="activeTab === 'skills'">
+          <button class="secondary-btn"><i class="fa-brands fa-github"></i> Github 导入</button>
+          <button class="primary-btn"><i class="fa-solid fa-upload"></i> 上传技能包</button>
+        </template>
+        <template v-else-if="activeTab === 'apidocs'">
+          <button class="primary-btn"><i class="fa-solid fa-plus"></i> 添加文档源</button>
+        </template>
       </div>
     </div>
 
-     <h3 class="section-title">已安装 Skills (程序化指导知识)</h3>
-    <p class="head-desc long">Skills 是 Markdown 格式的指令集，执行时将作为“便签”注入到 LLM 系统提示词中，增强 Agent 的专业能力。</p>
+    <!-- 二级导航栏 -->
+    <nav class="tools-secondary-nav">
+      <button 
+        v-for="plugin in toolsPlugins" 
+        :key="plugin.key"
+        class="tools-tab-btn" 
+        :class="{ active: activeTab === plugin.key }"
+        @click="activeTab = plugin.key"
+      >
+        <i :class="[`fa-${plugin.iconType}`, plugin.icon]"></i>
+        <span>{{ plugin.label }}</span>
+      </button>
+    </nav>
 
-    <div class="skills-grid">
-      <article class="skill-card">
-        <div class="skill-icon"><i class="fa-brands fa-markdown"></i></div>
-        <div class="skill-body">
-          <div class="skill-head">
-            <h4>webapp-testing-guidelines</h4>
-           <span class="skill-state enabled">已启用</span>
-          </div>
-           <p>提供 Web 表单、弹窗交互、瞬态 UI 处理的标准测试规范。</p>
-          <div class="mono muted-small">Source: anthropics/webapp-testing</div>
-        </div>
-      </article>
-
-      <article class="skill-card dimmed">
-        <div class="skill-icon"><i class="fa-brands fa-markdown"></i></div>
-        <div class="skill-body">
-          <div class="skill-head">
-            <h4>api-security-fuzzing</h4>
-           <span class="skill-state disabled">已禁用</span>
-          </div>
-           <p>提供 API 安全测试的负载生成指导，包括认证绕过、SQLi 和 XSS 样式探针。</p>
-           <div class="mono muted-small">Source: 本地上传 (MinIO)</div>
-        </div>
-      </article>
-    </div>
-
-     <h3 class="section-title">安全与系统探测器 (Scanners)</h3>
-    <div class="scanner-grid">
-      <article class="scanner-card">
-        <i class="fa-solid fa-satellite-dish"></i>
-         <span>Nuclei 引擎</span>
-        <small>基于模板的快速漏洞扫描</small>
-      </article>
-      <article class="scanner-card">
-        <i class="fa-solid fa-database"></i>
-       <span>SQLMap 注入</span>
-        <small>自动化 SQL 注入与探测</small>
-      </article>
-      <article class="scanner-card">
-        <i class="fa-solid fa-bug"></i>
-         <span>XSStrike 探测</span>
-        <small>高级 XSS 跨站模糊测试</small>
-      </article>
-      <article class="scanner-card">
-        <i class="fa-solid fa-bolt"></i>
-       <span>定制 Fuzzing</span>
-        <small>自动组装与注入 Payload</small>
-      </article>
-    </div>
-
-    <div class="registry-strip" v-if="sessionStore.agents.length">
-       <div class="registry-strip-title">当前后端已注册 Agent / Tool</div>
-      <div class="registry-tags">
-        <span v-for="agent in sessionStore.agents" :key="agent.key" class="registry-tag">{{ agent.name }}</span>
-        <span v-for="tool in sessionStore.tools" :key="tool.key" class="registry-tag light">{{ tool.name }}</span>
-      </div>
+    <!-- Tab 内容区域 -->
+    <div class="tools-content-area">
+      <component :is="activePlugin.component" />
     </div>
   </section>
 </template>
+
+<style scoped>
+.tools-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 24px 32px;
+}
+
+.page-head {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+}
+
+.page-head h2 {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.head-desc {
+  font-size: 13px;
+  margin: 0;
+}
+
+.tools-secondary-nav {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+
+.tools-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+}
+
+.tools-tab-btn i {
+  font-size: 15px;
+}
+
+.tools-tab-btn:hover {
+  color: var(--text);
+}
+
+.tools-tab-btn.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+
+.tools-content-area {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.tools-tab-pane {
+  animation: fadeIn 0.3s ease;
+}
+
+.pane-header {
+  margin-bottom: 24px;
+}
+
+.pane-header .section-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.pane-header .head-desc {
+  margin: 0;
+}
+
+.flex-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.api-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.api-doc-card {
+  display: flex;
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+
+.api-doc-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
+}
+
+.api-doc-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.api-doc-icon.postman {
+  background: rgba(249, 115, 22, 0.1);
+  color: #f97316;
+}
+
+.api-doc-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.api-doc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.api-doc-head h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.api-doc-content p {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.api-doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.muted-divider {
+  color: var(--border-strong);
+  font-size: 12px;
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.badge-blue {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+.badge-orange {
+  background: rgba(249, 115, 22, 0.1);
+  color: #ea580c;
+}
+
+.api-doc-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+
+.small-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.registry-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 0;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+}
+
+.registry-empty i {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+</style>

@@ -27,8 +27,8 @@ const composerAnchorStyle = computed(() => ({
 
 function updateRuntimeLayout() {
   const height = composerAnchorRef.value?.offsetHeight ?? 0;
-  composerAnchorHeight.value = Math.max(160, Math.round(height || 196));
-  runtimePanelSize.value = Math.max(96, Math.round(height || 112));
+  composerAnchorHeight.value = height > 0 ? Math.round(height) : 10;
+  runtimePanelSize.value = Math.max(112, Math.round(height || 112));
 }
 
 onMounted(() => {
