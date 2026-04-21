@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from src.schemas.email_config import EmailConfigUpdateRequest, EmailProvider
+from src.schemas.email_config import EmailConfigCreateRequest, EmailConfigUpdateRequest
 from src.schemas.settings import ModelConfigUpdateRequest
 
 
@@ -58,30 +58,38 @@ async def list_email_configs(request: Request):
     return request.app.state.settings_service.list_email_configs()
 
 
-@router.put("/email")
-async def update_email_config(payload: EmailConfigUpdateRequest, request: Request):
-    return request.app.state.settings_service.update_email_config(payload)
+@router.post("/email")
+async def create_email_config(payload: EmailConfigCreateRequest, request: Request):
+    return request.app.state.settings_service.create_email_config(payload)
 
 
-@router.post("/email/{provider}/activate")
-async def activate_email_config(provider: EmailProvider, request: Request):
+@router.patch("/email/{config_id}")
+async def update_email_config(config_id: int, payload: EmailConfigUpdateRequest, request: Request):
     try:
-        return request.app.state.settings_service.activate_email_config(provider)
+        return request.app.state.settings_service.update_email_config(config_id, payload)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Email provider '{provider}' not found.") from exc
+        raise HTTPException(status_code=404, detail=f"Email channel '{config_id}' not found.") from exc
 
 
-@router.post("/email/{provider}/test-connection")
-async def test_email_config_connection(provider: EmailProvider, request: Request):
+@router.post("/email/{config_id}/activate")
+async def activate_email_config(config_id: int, request: Request):
     try:
-        return request.app.state.settings_service.test_email_config_connection(provider)
+        return request.app.state.settings_service.activate_email_config(config_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Email provider '{provider}' not found.") from exc
+        raise HTTPException(status_code=404, detail=f"Email channel '{config_id}' not found.") from exc
 
 
-@router.delete("/email/{provider}")
-async def delete_email_config(provider: EmailProvider, request: Request):
+@router.post("/email/{config_id}/test-connection")
+async def test_email_config_connection(config_id: int, request: Request):
     try:
-        return request.app.state.settings_service.delete_email_config(provider)
+        return request.app.state.settings_service.test_email_config_connection(config_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Email provider '{provider}' not found.") from exc
+        raise HTTPException(status_code=404, detail=f"Email channel '{config_id}' not found.") from exc
+
+
+@router.delete("/email/{config_id}")
+async def delete_email_config(config_id: int, request: Request):
+    try:
+        return request.app.state.settings_service.delete_email_config(config_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Email channel '{config_id}' not found.") from exc

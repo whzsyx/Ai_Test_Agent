@@ -3,105 +3,430 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { NPopover, NSelect, type SelectOption } from "naive-ui";
 
 import { api } from "../../../services/api";
-import type { EmailConfigPublic, EmailConfigUpdateRequest } from "../../../types";
+import type {
+  EmailConfigCreateRequest,
+  EmailConfigPublic,
+  EmailConfigUpdateRequest,
+} from "../../../types";
 
-type EmailProvider = "aliyun" | "cybermail";
 type MessageTone = "success" | "error";
+type DeliveryMode = "api" | "smtp";
+type EmailProvider =
+  | "aliyun"
+  | "tencent_ses"
+  | "cybermail"
+  | "sendgrid"
+  | "mailgun"
+  | "postmark"
+  | "resend"
+  | "brevo"
+  | "mailchimp"
+  | "zoho_campaigns";
 
 interface ProviderGuide {
-  label: string;
   title: string;
-  description: string;
+  summary: string;
+  strengths: string[];
   requirements: string[];
-  notes: string[];
   docs: Array<{ label: string; href: string }>;
 }
 
-const DEFAULT_ALIYUN_REGION = "cn-hangzhou";
-const BUILTIN_PROVIDERS: EmailProvider[] = ["aliyun", "cybermail"];
+interface ProviderProfile {
+  value: EmailProvider;
+  label: string;
+  channelLabel: string;
+  strengths: string;
+  deliverability: string;
+  freeTier: string;
+  supportsApi: boolean;
+  supportsSmtp: boolean;
+  defaultMode: DeliveryMode;
+  defaultName: string;
+  defaultPort?: number | null;
+  defaultHost?: string | null;
+  guide: ProviderGuide;
+}
 
-const ALIYUN_SMTP_HOSTS: Record<string, string> = {
-  "cn-hangzhou": "smtpdm.aliyun.com",
-  "ap-southeast-1": "smtpdm-ap-southeast-1.aliyuncs.com",
-  "us-east-1": "smtpdm-us-east-1.aliyuncs.com",
-  "eu-central-1": "smtpdm-eu-central-1.aliyuncs.com",
-};
+interface EmailDraft {
+  config_name: string;
+  provider: EmailProvider;
+  delivery_mode: DeliveryMode;
+  api_key: string;
+  secret_key: string;
+  sender_email: string;
+  test_email: string;
+  test_mode: boolean;
+  enabled: boolean;
+  is_default: boolean;
+  description: string;
+  smtp_host: string;
+  smtp_port: number | null;
+  smtp_username: string;
+  extra_config: Record<string, string>;
+}
 
-const ALIYUN_REGION_OPTIONS: SelectOption[] = [
-  { label: "中国（杭州）", value: "cn-hangzhou" },
-  { label: "新加坡", value: "ap-southeast-1" },
-  { label: "美国（弗吉尼亚）", value: "us-east-1" },
-  { label: "德国（法兰克福）", value: "eu-central-1" },
+const DEFAULT_SMTP_PORT = 587;
+const CYBERMAIL_HOST = "mail.cyberpersons.com";
+const CYBERMAIL_PORT = 587;
+const SENDGRID_SMTP_HOST = "smtp.sendgrid.net";
+const SENDGRID_SMTP_PORT = 587;
+const BREVO_SMTP_HOST = "smtp-relay.brevo.com";
+const BREVO_SMTP_PORT = 587;
+const ZOHO_SMTP_HOST = "smtp.zoho.com";
+const ZOHO_SMTP_PORT = 587;
+const TENCENT_SES_SMTP_HOST = "smtp.qcloudmail.com";
+const TENCENT_SES_SMTP_PORT = 465;
+
+const PROVIDER_PROFILES: ProviderProfile[] = [
+  {
+    value: "aliyun",
+    label: "阿里云邮件推送",
+    channelLabel: "DirectMail API / SMTP",
+    strengths: "国内稳定，与阿里云生态集成好",
+    deliverability: "高",
+    freeTier: "需查询官网",
+    supportsApi: true,
+    supportsSmtp: true,
+    defaultMode: "api",
+    defaultName: "阿里云邮件推送",
+    defaultPort: 465,
+    defaultHost: "",
+    guide: {
+      title: "阿里云邮件推送",
+      summary: "支持 DirectMail API 和 SMTP 两种接入方式，国内业务常用。",
+      strengths: [
+        "DirectMail API 适合系统事务邮件。",
+        "SMTP 适合兼容历史系统或第三方网关。",
+      ],
+      requirements: [
+        "先完成发信域名和发信地址验证。",
+        "API 模式需要 AccessKey ID / Secret。",
+        "SMTP 模式需要发信地址和 SMTP 密码。",
+      ],
+      docs: [
+        {
+          label: "DirectMail API",
+          href: "https://next.api.aliyun.com/document/Dm/2015-11-23/SingleSendMail",
+        },
+        {
+          label: "SMTP 发送邮件",
+          href: "https://help.aliyun.com/zh/direct-mail/user-guide/send-emails-using-smtp",
+        },
+      ],
+    },
+  },
+  {
+    value: "tencent_ses",
+    label: "腾讯云 SES",
+    channelLabel: "腾讯云 SES",
+    strengths: "国内送达率高，与微信生态整合好",
+    deliverability: "97% - 99%+",
+    freeTier: "新用户 10 万封/月",
+    supportsApi: true,
+    supportsSmtp: true,
+    defaultMode: "api",
+    defaultName: "腾讯云 SES",
+    defaultPort: TENCENT_SES_SMTP_PORT,
+    defaultHost: TENCENT_SES_SMTP_HOST,
+    guide: {
+      title: "腾讯云 SES",
+      summary: "支持 API 与 SMTP，适合金融、电商等国内高送达业务。",
+      strengths: [
+        "域名认证流程完善，适合大体量事务邮件。",
+        "可选 SMTP 密码，兼容旧系统迁移。",
+      ],
+      requirements: [
+        "完成发信域名、SPF / DKIM / DMARC 配置。",
+        "API 模式需要 SecretId / SecretKey。",
+        "SMTP 模式需要发信地址、SMTP 用户名与密码。",
+      ],
+      docs: [
+        {
+          label: "腾讯云 SES",
+          href: "https://www.tencentcloud.com/zh/document/product/1084",
+        },
+      ],
+    },
+  },
+  {
+    value: "cybermail",
+    label: "CyberMail SMTP",
+    channelLabel: "CyberMail SMTP",
+    strengths: "企业内网或日系环境常见，SMTP 接入清晰",
+    deliverability: "高",
+    freeTier: "无公开免费额度",
+    supportsApi: false,
+    supportsSmtp: true,
+    defaultMode: "smtp",
+    defaultName: "CyberMail SMTP",
+    defaultPort: CYBERMAIL_PORT,
+    defaultHost: CYBERMAIL_HOST,
+    guide: {
+      title: "CyberMail SMTP",
+      summary: "使用固定 SMTP 主机与端口，适合企业事务邮件接入。",
+      strengths: [
+        "SMTP 迁移成本低。",
+        "适合已有邮件管理员体系的企业。",
+      ],
+      requirements: [
+        "填写 SMTP 用户名和密码。",
+        "发信邮箱需要与管理员分配身份一致。",
+      ],
+      docs: [
+        {
+          label: "CyberMail SMTP 说明",
+          href: "https://cloud-sup.cybersolutions.co.jp/hc/ja/articles/360039314431-%E4%BB%96%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0%E3%81%8B%E3%82%89SMTP%E9%80%81%E4%BF%A1%E3%81%99%E3%82%8B%E8%A8%AD%E5%AE%9A",
+        },
+      ],
+    },
+  },
+  {
+    value: "sendgrid",
+    label: "SendGrid",
+    channelLabel: "Twilio SendGrid",
+    strengths: "国际主流，文档完善，并发能力强",
+    deliverability: "95% - 96%",
+    freeTier: "100 封/天",
+    supportsApi: true,
+    supportsSmtp: true,
+    defaultMode: "api",
+    defaultName: "SendGrid",
+    defaultPort: SENDGRID_SMTP_PORT,
+    defaultHost: SENDGRID_SMTP_HOST,
+    guide: {
+      title: "SendGrid",
+      summary: "支持 Web API 和 SMTP Relay，适合国际业务。",
+      strengths: [
+        "文档完善，生态成熟。",
+        "高并发事务邮件支持好。",
+      ],
+      requirements: [
+        "API 模式需要 API Key。",
+        "SMTP 模式通常使用用户名 apikey 和 API Key 作为密码。",
+      ],
+      docs: [
+        {
+          label: "API Keys",
+          href: "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys",
+        },
+        {
+          label: "SMTP Relay",
+          href: "https://www.twilio.com/docs/sendgrid/for-developers/sending-email/integrating-with-the-smtp-api",
+        },
+      ],
+    },
+  },
+  {
+    value: "mailgun",
+    label: "Mailgun",
+    channelLabel: "Mailgun API",
+    strengths: "开发者友好，事务性邮件能力强",
+    deliverability: "高",
+    freeTier: "100 封/天",
+    supportsApi: true,
+    supportsSmtp: false,
+    defaultMode: "api",
+    defaultName: "Mailgun",
+    guide: {
+      title: "Mailgun",
+      summary: "常见于事务性通知和事件触发邮件场景。",
+      strengths: [
+        "API 简洁，域名管理清晰。",
+        "Webhook 与事件追踪能力较强。",
+      ],
+      requirements: [
+        "需要 API Key。",
+        "通常还需要发信域名。",
+      ],
+      docs: [
+        {
+          label: "Mailgun API",
+          href: "https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/messages/post-v3--domain-name--messages",
+        },
+      ],
+    },
+  },
+  {
+    value: "postmark",
+    label: "Postmark",
+    channelLabel: "Postmark API",
+    strengths: "专注事务性邮件，速度快",
+    deliverability: "高",
+    freeTier: "100 封/月",
+    supportsApi: true,
+    supportsSmtp: false,
+    defaultMode: "api",
+    defaultName: "Postmark",
+    guide: {
+      title: "Postmark",
+      summary: "偏事务邮件，强调送达速度和开发者体验。",
+      strengths: [
+        "Server Token 模式清晰。",
+        "模板和 webhook 体验稳定。",
+      ],
+      requirements: [
+        "需要 Server API Token。",
+      ],
+      docs: [
+        {
+          label: "Postmark API",
+          href: "https://postmarkapp.com/developer/user-guide/send-email-with-api",
+        },
+      ],
+    },
+  },
+  {
+    value: "resend",
+    label: "Resend",
+    channelLabel: "Resend API",
+    strengths: "现代化，开发者体验优秀",
+    deliverability: "高",
+    freeTier: "3000 封/月",
+    supportsApi: true,
+    supportsSmtp: false,
+    defaultMode: "api",
+    defaultName: "Resend",
+    guide: {
+      title: "Resend",
+      summary: "新兴热门邮件服务，API 体验很好。",
+      strengths: [
+        "上手快，前后端一体化体验好。",
+        "事务邮件与 React 邮件生态友好。",
+      ],
+      requirements: [
+        "需要 API Key。",
+        "建议先完成发信域名验证。",
+      ],
+      docs: [
+        {
+          label: "Resend API Keys",
+          href: "https://resend.com/docs/dashboard/api-keys/introduction",
+        },
+        {
+          label: "Resend Domains",
+          href: "https://resend.com/docs/dashboard/domains/introduction",
+        },
+      ],
+    },
+  },
+  {
+    value: "brevo",
+    label: "Brevo",
+    channelLabel: "Brevo API / SMTP",
+    strengths: "功能全面，集成 CRM 和自动化",
+    deliverability: "92% - 94%",
+    freeTier: "300 封/天",
+    supportsApi: true,
+    supportsSmtp: true,
+    defaultMode: "api",
+    defaultName: "Brevo",
+    defaultPort: BREVO_SMTP_PORT,
+    defaultHost: BREVO_SMTP_HOST,
+    guide: {
+      title: "Brevo",
+      summary: "原 Sendinblue，营销与事务邮件都可用。",
+      strengths: [
+        "支持 API 和 SMTP。",
+        "CRM 和自动化能力一体化。",
+      ],
+      requirements: [
+        "API 模式需要 API Key。",
+        "SMTP 模式需要 SMTP 用户名与密码。",
+      ],
+      docs: [
+        {
+          label: "Brevo API Key",
+          href: "https://developers.brevo.com/docs/getting-started",
+        },
+        {
+          label: "Brevo SMTP",
+          href: "https://help.brevo.com/hc/en-us/articles/209467485-What-are-the-Brevo-SMTP-server-parameters",
+        },
+      ],
+    },
+  },
+  {
+    value: "mailchimp",
+    label: "Mailchimp",
+    channelLabel: "Mailchimp API",
+    strengths: "营销能力强，可视化编辑成熟",
+    deliverability: "90% - 95%",
+    freeTier: "免费版功能受限",
+    supportsApi: true,
+    supportsSmtp: false,
+    defaultMode: "api",
+    defaultName: "Mailchimp",
+    guide: {
+      title: "Mailchimp",
+      summary: "适合营销邮件和中小企业运营场景。",
+      strengths: [
+        "营销自动化和模板能力强。",
+        "适合内容运营团队。",
+      ],
+      requirements: [
+        "需要 API Key。",
+      ],
+      docs: [
+        {
+          label: "Mailchimp API Keys",
+          href: "https://mailchimp.com/developer/marketing/docs/fundamentals/?form=MG0AV3",
+        },
+      ],
+    },
+  },
+  {
+    value: "zoho_campaigns",
+    label: "Zoho Campaigns",
+    channelLabel: "Zoho Campaigns",
+    strengths: "多语言支持和合规能力较好",
+    deliverability: "95%+",
+    freeTier: "付费版 ¥28 起/用户",
+    supportsApi: true,
+    supportsSmtp: true,
+    defaultMode: "api",
+    defaultName: "Zoho Campaigns",
+    defaultPort: ZOHO_SMTP_PORT,
+    defaultHost: ZOHO_SMTP_HOST,
+    guide: {
+      title: "Zoho Campaigns",
+      summary: "适合跨国企业营销和事务邮件混合场景。",
+      strengths: [
+        "支持多语言和 GDPR 合规。",
+        "可根据场景切 API 或 SMTP。",
+      ],
+      requirements: [
+        "API 模式需要 API Key 或 OAuth 凭据。",
+        "SMTP 模式需要 SMTP 主机、端口、用户名与密码。",
+      ],
+      docs: [
+        {
+          label: "Zoho Campaigns API",
+          href: "https://www.zoho.com/campaigns/help/developers/get-started-api.html",
+        },
+      ],
+    },
+  },
 ];
 
-const ALIYUN_PORT_OPTIONS: SelectOption[] = [
-  { label: "465（SSL 直连，推荐）", value: 465 },
-  { label: "80（普通 SMTP / STARTTLS）", value: 80 },
-  { label: "25（普通 SMTP / STARTTLS）", value: 25 },
-];
+const PROVIDER_BY_KEY = Object.fromEntries(
+  PROVIDER_PROFILES.map((profile) => [profile.value, profile]),
+) as Record<EmailProvider, ProviderProfile>;
 
-const CYBERMAIL_PORT_OPTIONS: SelectOption[] = [
-  { label: "465（SSL）", value: 465 },
-  { label: "587（提交端口）", value: 587 },
-  { label: "25（内部中继）", value: 25 },
-];
-
-const PROVIDER_LABELS: Record<EmailProvider, string> = {
-  aliyun: "阿里云邮件推送",
-  cybermail: "CyberMail SMTP",
-};
-
-const PROVIDER_OPTIONS: SelectOption[] = BUILTIN_PROVIDERS.map((provider) => ({
-  label: PROVIDER_LABELS[provider],
-  value: provider,
+const PROVIDER_OPTIONS: SelectOption[] = PROVIDER_PROFILES.map((profile) => ({
+  label: profile.label,
+  value: profile.value,
 }));
 
-const PROVIDER_GUIDES: Record<EmailProvider, ProviderGuide> = {
-  aliyun: {
-    label: "阿里云",
-    title: "DirectMail SMTP",
-    description: "适合系统通知、告警和自动化结果投递，按阿里云 SMTP 发信方式配置。",
-    requirements: [
-      "先在阿里云 DirectMail 控制台完成发信域名和发信地址配置。",
-      "SMTP 登录用户名使用完整发信地址。",
-      "需要在发信地址里单独设置 SMTP 密码。",
-    ],
-    notes: [
-      "区域会决定默认 SMTP Host。",
-      "465 端口走 SSL，80 / 25 端口按普通 SMTP 连接。",
-    ],
-    docs: [
-      { label: "通过 SMTP 发送邮件", href: "https://help.aliyun.com/zh/direct-mail/user-guide/send-emails-using-smtp" },
-      { label: "SMTP Endpoint 列表", href: "https://help.aliyun.com/zh/direct-mail/smtp-endpoints" },
-    ],
-  },
-  cybermail: {
-    label: "CyberMail",
-    title: "企业邮箱 SMTP",
-    description: "适合已有企业邮箱系统接入，通常按企业管理员提供的 SMTP 域名配置。",
-    requirements: [
-      "外发通常需要填写 SMTP Host、端口、用户名和密码。",
-      "如果走外部访问域名，一般要求 SMTP 认证。",
-      "内部中继场景可按 MailGates 主机 + 25 端口配置。",
-    ],
-    notes: [
-      "465 通常用于 SSL，587 常用于提交端口。",
-      "不同企业实例的 SMTP Host 可能不同，请以管理员提供的信息为准。",
-    ],
-    docs: [
-      {
-        label: "他系统から SMTP 送信する設定",
-        href: "https://cloud-sup.cybersolutions.co.jp/hc/ja/articles/360039314431-%E4%BB%96%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0%E3%81%8B%E3%82%89SMTP%E9%80%81%E4%BF%A1%E3%81%99%E3%82%8B%E8%A8%AD%E5%AE%9A",
-      },
-    ],
-  },
-};
+const API_SMTP_MODE_OPTIONS: SelectOption[] = [
+  { label: "API 接入", value: "api" },
+  { label: "SMTP 接入", value: "smtp" },
+];
 
 const loading = ref(false);
 const saving = ref(false);
 const showEditorModal = ref(false);
 const isCreateMode = ref(false);
-const editingProvider = ref<EmailProvider>("aliyun");
+const editingConfigId = ref<number | null>(null);
 const busyActionKey = ref("");
 const emailConfigs = ref<EmailConfigPublic[]>([]);
 const messageVisible = ref(false);
@@ -109,48 +434,13 @@ const messageText = ref("");
 const messageTone = ref<MessageTone>("success");
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
 
-const aliyunDraft = reactive<EmailConfigUpdateRequest>({
-  provider: "aliyun",
-  enabled: false,
-  is_default: false,
-  from_email: "",
-  from_name: "",
-  reply_to: "",
-  region: DEFAULT_ALIYUN_REGION,
-  smtp_host: "",
-  smtp_port: 465,
-  smtp_username: "",
-  smtp_password: "",
-  access_key_id: null,
-  access_key_secret: null,
-  account_name: null,
-  use_tls: true,
-});
+const draft = reactive<EmailDraft>(buildEmptyDraft("aliyun"));
 
-const cybermailDraft = reactive<EmailConfigUpdateRequest>({
-  provider: "cybermail",
-  enabled: false,
-  is_default: false,
-  from_email: "",
-  from_name: "",
-  reply_to: "",
-  region: null,
-  smtp_host: "",
-  smtp_port: 465,
-  smtp_username: "",
-  smtp_password: "",
-  access_key_id: null,
-  access_key_secret: null,
-  account_name: null,
-  use_tls: true,
-});
-
-const existingProviders = computed(() => new Set(emailConfigs.value.map((item) => item.provider)));
-const availableProviders = computed<SelectOption[]>(() =>
-  PROVIDER_OPTIONS.filter((option) => !existingProviders.value.has(option.value as EmailProvider)),
+const activeProfile = computed(() => PROVIDER_BY_KEY[draft.provider]);
+const providerSupportsModeSwitch = computed(
+  () => activeProfile.value.supportsApi && activeProfile.value.supportsSmtp,
 );
-const activeGuide = computed(() => PROVIDER_GUIDES[editingProvider.value]);
-const aliyunResolvedHost = computed(() => resolveAliyunHost(aliyunDraft.region));
+const providerGuide = computed(() => activeProfile.value.guide);
 
 onMounted(() => {
   void loadSettings();
@@ -163,11 +453,51 @@ onBeforeUnmount(() => {
   }
 });
 
+function buildEmptyDraft(provider: EmailProvider): EmailDraft {
+  const profile = PROVIDER_BY_KEY[provider];
+  return {
+    config_name: profile.defaultName,
+    provider,
+    delivery_mode: profile.defaultMode,
+    api_key: "",
+    secret_key: "",
+    sender_email: "",
+    test_email: "",
+    test_mode: false,
+    enabled: false,
+    is_default: false,
+    description: "",
+    smtp_host: profile.defaultHost ?? "",
+    smtp_port: profile.defaultPort ?? DEFAULT_SMTP_PORT,
+    smtp_username: "",
+    extra_config: {
+      sending_domain: "",
+    },
+  };
+}
+
+function applyDraft(nextDraft: EmailDraft) {
+  draft.config_name = nextDraft.config_name;
+  draft.provider = nextDraft.provider;
+  draft.delivery_mode = nextDraft.delivery_mode;
+  draft.api_key = nextDraft.api_key;
+  draft.secret_key = nextDraft.secret_key;
+  draft.sender_email = nextDraft.sender_email;
+  draft.test_email = nextDraft.test_email;
+  draft.test_mode = nextDraft.test_mode;
+  draft.enabled = nextDraft.enabled;
+  draft.is_default = nextDraft.is_default;
+  draft.description = nextDraft.description;
+  draft.smtp_host = nextDraft.smtp_host;
+  draft.smtp_port = nextDraft.smtp_port;
+  draft.smtp_username = nextDraft.smtp_username;
+  draft.extra_config = { ...nextDraft.extra_config };
+}
+
 async function loadSettings() {
   loading.value = true;
   try {
     emailConfigs.value = await api.listEmailConfigs();
-    hydrateEmailDrafts(emailConfigs.value);
   } catch (err) {
     showMessage("error", err instanceof Error ? err.message : "加载邮件设置失败。");
   } finally {
@@ -179,227 +509,242 @@ function showMessage(tone: MessageTone, text: string) {
   messageTone.value = tone;
   messageText.value = text;
   messageVisible.value = true;
-
   if (messageTimer) {
     clearTimeout(messageTimer);
   }
-
   messageTimer = setTimeout(() => {
     messageVisible.value = false;
     messageTimer = null;
   }, 2600);
 }
 
-function resolveAliyunHost(region?: string | null) {
-  const normalized = (region ?? "").trim() || DEFAULT_ALIYUN_REGION;
-  return ALIYUN_SMTP_HOSTS[normalized] ?? ALIYUN_SMTP_HOSTS[DEFAULT_ALIYUN_REGION];
+function getProviderLabel(provider: string) {
+  return PROVIDER_BY_KEY[provider as EmailProvider]?.label ?? provider;
 }
 
-function hydrateEmailDrafts(items: EmailConfigPublic[]) {
-  const aliyun = items.find((item) => item.provider === "aliyun");
-  if (aliyun) {
-    aliyunDraft.enabled = aliyun.enabled;
-    aliyunDraft.is_default = aliyun.is_default;
-    aliyunDraft.from_email = aliyun.from_email;
-    aliyunDraft.from_name = aliyun.from_name;
-    aliyunDraft.reply_to = aliyun.reply_to;
-    aliyunDraft.region = aliyun.region ?? DEFAULT_ALIYUN_REGION;
-    aliyunDraft.smtp_host = aliyun.smtp_host ?? resolveAliyunHost(aliyun.region);
-    aliyunDraft.smtp_port = aliyun.smtp_port ?? 465;
-    aliyunDraft.smtp_username = aliyun.smtp_username ?? aliyun.from_email ?? "";
-    aliyunDraft.smtp_password = "";
-    aliyunDraft.use_tls = aliyun.smtp_port === 465;
-  }
-
-  const cybermail = items.find((item) => item.provider === "cybermail");
-  if (cybermail) {
-    cybermailDraft.enabled = cybermail.enabled;
-    cybermailDraft.is_default = cybermail.is_default;
-    cybermailDraft.from_email = cybermail.from_email;
-    cybermailDraft.from_name = cybermail.from_name;
-    cybermailDraft.reply_to = cybermail.reply_to;
-    cybermailDraft.smtp_host = cybermail.smtp_host ?? "";
-    cybermailDraft.smtp_port = cybermail.smtp_port ?? 465;
-    cybermailDraft.smtp_username = cybermail.smtp_username ?? "";
-    cybermailDraft.smtp_password = "";
-    cybermailDraft.use_tls = cybermail.smtp_port === 465 ? true : cybermail.use_tls;
-  }
-}
-
-function resetDraft(provider: EmailProvider) {
-  if (provider === "aliyun") {
-    aliyunDraft.provider = "aliyun";
-    aliyunDraft.enabled = false;
-    aliyunDraft.is_default = false;
-    aliyunDraft.from_email = "";
-    aliyunDraft.from_name = "";
-    aliyunDraft.reply_to = "";
-    aliyunDraft.region = DEFAULT_ALIYUN_REGION;
-    aliyunDraft.smtp_host = resolveAliyunHost(DEFAULT_ALIYUN_REGION);
-    aliyunDraft.smtp_port = 465;
-    aliyunDraft.smtp_username = "";
-    aliyunDraft.smtp_password = "";
-    aliyunDraft.use_tls = true;
-    return;
-  }
-
-  cybermailDraft.provider = "cybermail";
-  cybermailDraft.enabled = false;
-  cybermailDraft.is_default = false;
-  cybermailDraft.from_email = "";
-  cybermailDraft.from_name = "";
-  cybermailDraft.reply_to = "";
-  cybermailDraft.smtp_host = "";
-  cybermailDraft.smtp_port = 465;
-  cybermailDraft.smtp_username = "";
-  cybermailDraft.smtp_password = "";
-  cybermailDraft.use_tls = true;
+function getDeliveryMode(item: EmailConfigPublic): DeliveryMode {
+  const value = item.extra_config?.delivery_mode;
+  return value === "smtp" ? "smtp" : "api";
 }
 
 function describeChannel(item: EmailConfigPublic) {
-  if (item.provider === "aliyun") {
-    const region = item.region || DEFAULT_ALIYUN_REGION;
-    const host = item.smtp_host || resolveAliyunHost(region);
-    const port = item.smtp_port || 465;
-    return `${region} / ${host}:${port}`;
+  const mode = getDeliveryMode(item);
+  if (mode === "smtp") {
+    const host = item.smtp_host || "未配置 SMTP Host";
+    const port = item.smtp_port ? `:${item.smtp_port}` : "";
+    return `${host}${port}`;
   }
-  const host = item.smtp_host || "未填写 SMTP Host";
-  const port = item.smtp_port || 465;
-  return `${host}:${port}`;
+  const provider = item.provider as EmailProvider;
+  if (provider === "aliyun") {
+    return "DirectMail API";
+  }
+  if (provider === "tencent_ses") {
+    return "SES API";
+  }
+  return "API 接入";
 }
 
-function describeSecret(item: EmailConfigPublic) {
-  if (item.provider === "aliyun") {
-    return item.has_smtp_password ? "SMTP 密码已配置" : "SMTP 密码未配置";
+function describeAuth(item: EmailConfigPublic) {
+  const mode = getDeliveryMode(item);
+  const provider = item.provider as EmailProvider;
+  if (mode === "smtp") {
+    return item.has_api_key ? "SMTP 认证已配置" : "SMTP 认证未配置";
   }
-  return item.has_smtp_password ? "SMTP 认证已配置" : "SMTP 认证未配置";
+  if (provider === "aliyun") {
+    return item.has_api_key && item.has_secret_key ? "AccessKey 已配置" : "AccessKey 未配置";
+  }
+  if (provider === "tencent_ses") {
+    return item.has_api_key && item.has_secret_key ? "SecretId / Key 已配置" : "SecretId / Key 未配置";
+  }
+  return item.has_api_key ? "API Key 已配置" : "API Key 未配置";
+}
+
+function describeSenderName(item: EmailConfigPublic) {
+  return String(item.extra_config?.sender_name || "").trim() || "未设置";
+}
+
+function actionKey(configId: number, action: string) {
+  return `${configId}:${action}`;
 }
 
 function openCreateModal() {
-  if (!availableProviders.value.length) {
-    showMessage("error", "当前内置邮件通道已全部创建，请直接编辑现有卡片。");
-    return;
-  }
-
   isCreateMode.value = true;
-  editingProvider.value = availableProviders.value[0].value as EmailProvider;
-  resetDraft(editingProvider.value);
+  editingConfigId.value = null;
+  applyDraft(buildEmptyDraft("aliyun"));
   showEditorModal.value = true;
 }
 
-function openEditModal(provider: EmailProvider) {
+function openEditModal(item: EmailConfigPublic) {
+  const provider = item.provider as EmailProvider;
+  const profile = PROVIDER_BY_KEY[provider] ?? PROVIDER_BY_KEY.aliyun;
+  const mode = getDeliveryMode(item);
   isCreateMode.value = false;
-  editingProvider.value = provider;
+  editingConfigId.value = item.id;
+  applyDraft({
+    config_name: item.config_name,
+    provider,
+    delivery_mode: profile.supportsSmtp && !profile.supportsApi ? "smtp" : mode,
+    api_key: "",
+    secret_key: "",
+    sender_email: item.sender_email || "",
+    test_email: item.test_email || "",
+    test_mode: item.test_mode,
+    enabled: item.enabled,
+    is_default: item.is_default,
+    description: item.description || "",
+    smtp_host: item.smtp_host || profile.defaultHost || "",
+    smtp_port: item.smtp_port || profile.defaultPort || DEFAULT_SMTP_PORT,
+    smtp_username: item.smtp_username || "",
+    extra_config: {
+      sending_domain: String(item.extra_config?.sending_domain || ""),
+      sender_name: String(item.extra_config?.sender_name || ""),
+      api_token_label: String(item.extra_config?.api_token_label || ""),
+    },
+  });
   showEditorModal.value = true;
 }
 
 function closeEditorModal() {
   showEditorModal.value = false;
+  editingConfigId.value = null;
 }
 
-function actionKey(provider: EmailProvider, action: string) {
-  return `${provider}:${action}`;
-}
-
-async function withAction(provider: EmailProvider, action: string, runner: () => Promise<void>) {
-  busyActionKey.value = actionKey(provider, action);
-  try {
-    await runner();
-  } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "邮件配置操作失败。");
-  } finally {
-    busyActionKey.value = "";
+function syncModeDefaults(provider: EmailProvider, mode: DeliveryMode) {
+  const profile = PROVIDER_BY_KEY[provider];
+  if (mode === "smtp") {
+    draft.smtp_host = profile.defaultHost ?? draft.smtp_host ?? "";
+    draft.smtp_port = profile.defaultPort ?? draft.smtp_port ?? DEFAULT_SMTP_PORT;
+    if (provider === "sendgrid" && !draft.smtp_username.trim()) {
+      draft.smtp_username = "apikey";
+    }
+  } else if (!profile.supportsSmtp) {
+    draft.smtp_host = profile.defaultHost ?? "";
+    draft.smtp_port = profile.defaultPort ?? DEFAULT_SMTP_PORT;
+    draft.smtp_username = "";
   }
 }
 
-async function testConnection(item: EmailConfigPublic) {
-  await withAction(item.provider, "test", async () => {
-    const result = await api.testEmailConfigConnection(item.provider);
-    if (result.ok) {
-      if (result.preview) {
-        showMessage("success", `连接测试成功：${PROVIDER_LABELS[item.provider]}，${result.preview}`);
-      } else {
-        showMessage("success", `连接测试成功：${PROVIDER_LABELS[item.provider]}`);
-      }
-      return;
-    }
-    showMessage("error", `连接测试失败：${PROVIDER_LABELS[item.provider]}`);
-  });
-}
-
-async function activateChannel(item: EmailConfigPublic) {
-  await withAction(item.provider, "activate", async () => {
-    await api.activateEmailConfig(item.provider);
-    showMessage("success", `已启用并设为默认通道：${PROVIDER_LABELS[item.provider]}`);
-    await loadSettings();
-  });
-}
-
-async function deleteChannel(item: EmailConfigPublic) {
-  const confirmed = window.confirm(`确定删除邮件通道“${PROVIDER_LABELS[item.provider]}”吗？`);
-  if (!confirmed) {
+function handleProviderChange(value: string) {
+  const provider = value as EmailProvider;
+  if (!PROVIDER_BY_KEY[provider] || provider === draft.provider) {
     return;
   }
-
-  await withAction(item.provider, "delete", async () => {
-    await api.deleteEmailConfig(item.provider);
-    showMessage("success", `已删除邮件通道：${PROVIDER_LABELS[item.provider]}`);
-    await loadSettings();
-  });
+  const nextDraft = buildEmptyDraft(provider);
+  nextDraft.config_name = draft.config_name.trim() ? draft.config_name : nextDraft.config_name;
+  nextDraft.enabled = draft.enabled;
+  nextDraft.is_default = draft.is_default;
+  nextDraft.test_mode = draft.test_mode;
+  nextDraft.test_email = draft.test_email;
+  nextDraft.description = draft.description;
+  applyDraft(nextDraft);
 }
 
-function buildAliyunPayload(): EmailConfigUpdateRequest {
-  const region = (aliyunDraft.region ?? "").trim() || DEFAULT_ALIYUN_REGION;
-  const port = Number(aliyunDraft.smtp_port || 465);
-  const fromEmail = aliyunDraft.from_email.trim();
+function handleModeChange(value: string) {
+  const mode = value as DeliveryMode;
+  draft.delivery_mode = mode;
+  syncModeDefaults(draft.provider, mode);
+}
 
+function buildExtraConfig() {
+  const extra: Record<string, unknown> = {
+    delivery_mode: draft.delivery_mode,
+  };
+  if (draft.extra_config.sending_domain?.trim()) {
+    extra.sending_domain = draft.extra_config.sending_domain.trim();
+  }
+  if (draft.extra_config.sender_name?.trim()) {
+    extra.sender_name = draft.extra_config.sender_name.trim();
+  }
+  if (draft.extra_config.api_token_label?.trim()) {
+    extra.api_token_label = draft.extra_config.api_token_label.trim();
+  }
+  return extra;
+}
+
+function buildCreatePayload(): EmailConfigCreateRequest {
+  const smtpEnabled = draft.delivery_mode === "smtp";
   return {
-    provider: "aliyun",
-    enabled: aliyunDraft.enabled,
-    is_default: aliyunDraft.is_default,
-    from_email: fromEmail,
-    from_name: aliyunDraft.from_name.trim(),
-    reply_to: aliyunDraft.reply_to.trim(),
-    access_key_id: null,
-    access_key_secret: null,
-    account_name: null,
-    region,
-    smtp_host: resolveAliyunHost(region),
-    smtp_port: port,
-    smtp_username: fromEmail || null,
-    smtp_password: aliyunDraft.smtp_password.trim() || null,
-    use_tls: port === 465,
+    config_name: draft.config_name.trim(),
+    provider: draft.provider,
+    enabled: draft.enabled || draft.is_default,
+    is_default: draft.is_default,
+    api_key: draft.api_key.trim() || null,
+    secret_key: draft.secret_key.trim() || null,
+    sender_email: draft.sender_email.trim(),
+    test_email: draft.test_email.trim() || null,
+    test_mode: draft.test_mode,
+    description: draft.description.trim() || null,
+    smtp_host: smtpEnabled ? draft.smtp_host.trim() || null : null,
+    smtp_port: smtpEnabled ? Number(draft.smtp_port || DEFAULT_SMTP_PORT) : null,
+    smtp_username: smtpEnabled ? draft.smtp_username.trim() || null : null,
+    extra_config: buildExtraConfig(),
   };
 }
 
-function buildCyberMailPayload(): EmailConfigUpdateRequest {
-  const port = Number(cybermailDraft.smtp_port || 465);
+function buildUpdatePayload(): EmailConfigUpdateRequest {
+  return buildCreatePayload();
+}
 
-  return {
-    provider: "cybermail",
-    enabled: cybermailDraft.enabled,
-    is_default: cybermailDraft.is_default,
-    from_email: cybermailDraft.from_email.trim(),
-    from_name: cybermailDraft.from_name.trim(),
-    reply_to: cybermailDraft.reply_to.trim(),
-    access_key_id: null,
-    access_key_secret: null,
-    account_name: null,
-    region: null,
-    smtp_host: cybermailDraft.smtp_host.trim() || null,
-    smtp_port: port,
-    smtp_username: cybermailDraft.smtp_username.trim() || null,
-    smtp_password: cybermailDraft.smtp_password.trim() || null,
-    use_tls: port === 465,
-  };
+function validateDraft() {
+  if (!draft.config_name.trim()) {
+    showMessage("error", "请填写通道名称。");
+    return false;
+  }
+  if (!draft.sender_email.trim()) {
+    showMessage("error", "请填写发信邮箱。");
+    return false;
+  }
+  if (draft.delivery_mode === "api") {
+    if (!draft.api_key.trim() && isCreateMode.value) {
+      showMessage("error", "请填写 API Key / AccessKey。");
+      return false;
+    }
+    if ((draft.provider === "aliyun" || draft.provider === "tencent_ses") && !draft.secret_key.trim() && isCreateMode.value) {
+      showMessage("error", "请填写 SecretKey。");
+      return false;
+    }
+    if (draft.provider === "mailgun" && !draft.extra_config.sending_domain?.trim()) {
+      showMessage("error", "Mailgun 需要填写发信域名。");
+      return false;
+    }
+    if (draft.provider === "resend" && !draft.extra_config.sending_domain?.trim()) {
+      showMessage("error", "Resend 建议填写已验证域名。");
+      return false;
+    }
+  } else {
+    if (!draft.smtp_host.trim()) {
+      showMessage("error", "请填写 SMTP Host。");
+      return false;
+    }
+    if (!draft.smtp_port) {
+      showMessage("error", "请填写 SMTP 端口。");
+      return false;
+    }
+    if (!draft.smtp_username.trim()) {
+      showMessage("error", "请填写 SMTP 用户名。");
+      return false;
+    }
+    if (!draft.api_key.trim() && isCreateMode.value) {
+      showMessage("error", "请填写 SMTP 密码。");
+      return false;
+    }
+  }
+  return true;
 }
 
 async function saveEmail() {
+  if (!validateDraft()) {
+    return;
+  }
   saving.value = true;
   try {
-    const payload = editingProvider.value === "aliyun" ? buildAliyunPayload() : buildCyberMailPayload();
-    const saved = await api.updateEmailConfig(payload);
-    showMessage("success", `${isCreateMode.value ? "已新增" : "已保存"}：${PROVIDER_LABELS[saved.provider]}`);
+    if (isCreateMode.value) {
+      const created = await api.createEmailConfig(buildCreatePayload());
+      showMessage("success", `已新增邮件通道：${created.config_name}`);
+    } else if (editingConfigId.value !== null) {
+      const updated = await api.updateEmailConfig(editingConfigId.value, buildUpdatePayload());
+      showMessage("success", `已更新邮件通道：${updated.config_name}`);
+    }
     closeEditorModal();
     await loadSettings();
   } catch (err) {
@@ -407,6 +752,65 @@ async function saveEmail() {
   } finally {
     saving.value = false;
   }
+}
+
+async function withAction(configId: number, action: string, runner: () => Promise<void>) {
+  busyActionKey.value = actionKey(configId, action);
+  try {
+    await runner();
+  } catch (err) {
+    showMessage("error", err instanceof Error ? err.message : "邮件通道操作失败。");
+  } finally {
+    busyActionKey.value = "";
+  }
+}
+
+async function testConnection(item: EmailConfigPublic) {
+  await withAction(item.id, "test", async () => {
+    const result = await api.testEmailConfigConnection(item.id);
+    showMessage(result.ok ? "success" : "error", result.preview ? `${result.message} ${result.preview}` : result.message);
+  });
+}
+
+async function activateChannel(item: EmailConfigPublic) {
+  await withAction(item.id, "activate", async () => {
+    const result = await api.activateEmailConfig(item.id);
+    showMessage("success", result.message);
+    await loadSettings();
+  });
+}
+
+async function deleteChannel(item: EmailConfigPublic) {
+  const confirmed = window.confirm(`确定删除邮件通道“${item.config_name}”吗？`);
+  if (!confirmed) {
+    return;
+  }
+  await withAction(item.id, "delete", async () => {
+    const result = await api.deleteEmailConfig(item.id);
+    showMessage("success", result.message);
+    await loadSettings();
+  });
+}
+
+function requiresSendingDomain(provider: EmailProvider) {
+  return ["tencent_ses", "mailgun", "resend", "aliyun"].includes(provider);
+}
+
+function apiKeyLabel(provider: EmailProvider) {
+  switch (provider) {
+    case "aliyun":
+      return "Access Key ID";
+    case "tencent_ses":
+      return "SecretId";
+    case "postmark":
+      return "Server API Token";
+    default:
+      return "API Key";
+  }
+}
+
+function secretKeyLabel(provider: EmailProvider) {
+  return provider === "aliyun" ? "Access Key Secret" : "SecretKey";
 }
 </script>
 
@@ -425,16 +829,16 @@ async function saveEmail() {
     <div class="settings-pane-head">
       <div>
         <h3>邮件设置</h3>
-        <p>卡片里直接完成新增、删除、启用、测试和编辑配置。</p>
+        <p>邮件通道按提供商独立建模。新增时先选择提供商，再切换对应配置表单。</p>
       </div>
     </div>
 
     <div class="settings-pane-block settings-model-grid-shell">
-      <div class="settings-model-grid">
+      <div class="settings-model-grid settings-email-grid">
         <article
           v-for="item in emailConfigs"
-          :key="item.provider"
-          class="settings-model-card settings-model-card-static"
+          :key="item.id"
+          class="settings-model-card settings-model-card-static settings-email-card"
         >
           <div class="settings-model-card__header">
             <span class="settings-model-card__badge" :class="item.enabled ? 'settings-model-card__badge-current' : ''">
@@ -446,12 +850,17 @@ async function saveEmail() {
           </div>
 
           <div class="settings-model-card__name">
-            <strong>{{ PROVIDER_LABELS[item.provider] }}</strong>
+            <strong>{{ item.config_name }}</strong>
+          </div>
+
+          <div class="settings-model-card__provider-row">
+            <i class="fa-solid fa-layer-group"></i>
+            <span>{{ getProviderLabel(item.provider) }}</span>
           </div>
 
           <div class="settings-model-card__provider-row">
             <i class="fa-solid fa-envelope"></i>
-            <span>{{ item.from_email || "尚未配置发信地址" }}</span>
+            <span>{{ item.sender_email || "未配置发信邮箱" }}</span>
           </div>
 
           <div class="settings-model-card__provider-row">
@@ -459,126 +868,124 @@ async function saveEmail() {
             <span>{{ describeChannel(item) }}</span>
           </div>
 
-          <div class="settings-model-card__stats settings-model-card__stats-plain">
-            <div class="settings-model-card__stat settings-model-card__stat-full">
-              <span>认证状态</span>
-              <strong>{{ describeSecret(item) }}</strong>
-            </div>
-            <div class="settings-model-card__stat settings-model-card__stat-full">
-              <span>发件人名称</span>
-              <strong>{{ item.from_name || "未设置" }}</strong>
-            </div>
+          <div class="settings-model-card__stat">
+            <span>认证状态</span>
+            <strong>{{ describeAuth(item) }}</strong>
           </div>
 
-          <div class="settings-model-card__spacer"></div>
+          <div class="settings-model-card__stat">
+            <span>发件人名称</span>
+            <strong>{{ describeSenderName(item) }}</strong>
+          </div>
 
-          <div class="settings-model-card__actions">
-            <NPopover trigger="hover" placement="top" :show-arrow="true">
+          <div class="settings-model-card__actions settings-email-card__actions">
+            <NPopover trigger="hover" placement="top" :show-arrow="false">
               <template #trigger>
-                <button type="button" class="settings-model-card__action settings-model-card__action-test" title="查看说明">
+                <button class="settings-model-card__action" type="button" aria-label="查看说明">
                   <i class="fa-solid fa-circle-info"></i>
                 </button>
               </template>
-              <div class="settings-email-popover">
-                <strong>{{ PROVIDER_GUIDES[item.provider].title }}</strong>
-                <p>{{ PROVIDER_GUIDES[item.provider].description }}</p>
+              <div class="settings-email-popover settings-email-popover-wide">
+                <strong>{{ PROVIDER_BY_KEY[item.provider as EmailProvider]?.guide.title || getProviderLabel(item.provider) }}</strong>
+                <p>{{ PROVIDER_BY_KEY[item.provider as EmailProvider]?.guide.summary }}</p>
                 <ul>
-                  <li v-for="note in PROVIDER_GUIDES[item.provider].requirements" :key="note">{{ note }}</li>
+                  <li
+                    v-for="requirement in PROVIDER_BY_KEY[item.provider as EmailProvider]?.guide.requirements || []"
+                    :key="requirement"
+                  >
+                    {{ requirement }}
+                  </li>
                 </ul>
               </div>
             </NPopover>
 
             <button
-              type="button"
               class="settings-model-card__action settings-model-card__action-test"
-              :disabled="busyActionKey === actionKey(item.provider, 'test')"
-              title="测试连接"
+              type="button"
+              :disabled="busyActionKey === actionKey(item.id, 'test')"
               @click="testConnection(item)"
             >
-              <i
-                class="fa-solid"
-                :class="busyActionKey === actionKey(item.provider, 'test') ? 'fa-spinner fa-spin' : 'fa-plug-circle-check'"
-              ></i>
+              <i class="fa-solid fa-plug-circle-check"></i>
             </button>
 
             <button
-              type="button"
               class="settings-model-card__action settings-model-card__action-activate"
-              :disabled="(item.enabled && item.is_default) || busyActionKey === actionKey(item.provider, 'activate')"
-              title="启用并设为默认"
+              type="button"
+              :disabled="item.is_default || busyActionKey === actionKey(item.id, 'activate')"
               @click="activateChannel(item)"
             >
-              <i
-                class="fa-solid"
-                :class="busyActionKey === actionKey(item.provider, 'activate') ? 'fa-spinner fa-spin' : 'fa-circle-check'"
-              ></i>
+              <i class="fa-solid fa-circle-check"></i>
             </button>
 
             <button
-              type="button"
               class="settings-model-card__action settings-model-card__action-edit"
-              title="编辑配置"
-              @click="openEditModal(item.provider)"
+              type="button"
+              @click="openEditModal(item)"
             >
               <i class="fa-solid fa-pen-to-square"></i>
             </button>
 
             <button
-              type="button"
               class="settings-model-card__action settings-model-card__action-danger"
-              :disabled="busyActionKey === actionKey(item.provider, 'delete')"
-              title="删除通道"
+              type="button"
+              :disabled="busyActionKey === actionKey(item.id, 'delete')"
               @click="deleteChannel(item)"
             >
-              <i
-                class="fa-solid"
-                :class="busyActionKey === actionKey(item.provider, 'delete') ? 'fa-spinner fa-spin' : 'fa-trash-can'"
-              ></i>
+              <i class="fa-solid fa-trash"></i>
             </button>
           </div>
         </article>
 
-        <button type="button" class="settings-model-card settings-model-card-add" @click="openCreateModal">
-          <div class="settings-model-card-add__icon">+</div>
+        <button
+          class="settings-model-card settings-model-card-add settings-email-card settings-email-card-add"
+          type="button"
+          @click="openCreateModal"
+        >
+          <span class="settings-model-card-add__icon">+</span>
           <div class="settings-model-card-add__body">
             <strong>新增邮件通道</strong>
-            <p>
-              {{ availableProviders.length ? "创建新的邮件推送配置" : "当前内置邮件提供商已全部创建" }}
-            </p>
+            <p>根据提供商动态切换表单，创建新的邮件推送配置。</p>
           </div>
         </button>
       </div>
     </div>
 
     <div v-if="showEditorModal" class="settings-modal-overlay" @click.self="closeEditorModal">
-      <section class="settings-modal-card settings-modal-card-clean">
+      <div class="settings-modal-card settings-modal-card-clean">
         <div class="settings-modal-head">
           <div>
-            <h4>{{ isCreateMode ? "新增邮件通道" : PROVIDER_LABELS[editingProvider] }}</h4>
-            <p>{{ isCreateMode ? "创建新的邮件推送配置" : "修改当前邮件推送配置" }}</p>
+            <h4>{{ isCreateMode ? "新增邮件通道" : "编辑邮件通道" }}</h4>
+            <p>
+              {{ isCreateMode ? "先选择提供商，再填写该提供商对应的核心配置。" : "根据当前提供商调整配置，切换接入方式会同步切换字段。" }}
+            </p>
           </div>
-          <button type="button" class="settings-modal-close" @click="closeEditorModal">×</button>
+          <button class="settings-modal-close" type="button" @click="closeEditorModal">
+            ×
+          </button>
         </div>
 
         <div class="settings-email-modal-tip">
-          <NPopover trigger="hover" placement="bottom-start" :show-arrow="true">
+          <NPopover trigger="hover" placement="bottom-end" :show-arrow="false">
             <template #trigger>
-              <button type="button" class="settings-email-tip-btn">
+              <button class="settings-email-tip-btn" type="button">
                 <i class="fa-solid fa-circle-info"></i>
                 <span>配置说明</span>
               </button>
             </template>
             <div class="settings-email-popover settings-email-popover-wide">
-              <strong>{{ activeGuide.title }}</strong>
-              <p>{{ activeGuide.description }}</p>
+              <strong>{{ providerGuide.title }}</strong>
+              <p>{{ providerGuide.summary }}</p>
               <ul>
-                <li v-for="item in activeGuide.requirements" :key="item">{{ item }}</li>
-              </ul>
-              <ul>
-                <li v-for="item in activeGuide.notes" :key="item">{{ item }}</li>
+                <li v-for="item in providerGuide.strengths" :key="item">{{ item }}</li>
               </ul>
               <div class="settings-email-docs">
-                <a v-for="doc in activeGuide.docs" :key="doc.href" :href="doc.href" target="_blank" rel="noreferrer">
+                <a
+                  v-for="doc in providerGuide.docs"
+                  :key="doc.href"
+                  :href="doc.href"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {{ doc.label }}
                 </a>
               </div>
@@ -587,132 +994,125 @@ async function saveEmail() {
         </div>
 
         <div class="form-grid two">
-          <label v-if="isCreateMode" class="full">
+          <label class="full">
+            <span>通道名称</span>
+            <input v-model="draft.config_name" placeholder="例如：阿里云通知通道 / SendGrid 营销邮件" />
+          </label>
+
+          <label>
             <span>提供商</span>
             <NSelect
-              v-model:value="editingProvider"
-              class="settings-provider-select"
-              :options="availableProviders"
-              :consistent-menu-width="false"
+              :value="draft.provider"
+              :options="PROVIDER_OPTIONS"
+              filterable
+              consistent-menu-width
+              @update:value="(value) => handleProviderChange(String(value))"
             />
           </label>
 
-          <template v-if="editingProvider === 'aliyun'">
+          <label v-if="providerSupportsModeSwitch">
+            <span>接入方式</span>
+            <NSelect
+              :value="draft.delivery_mode"
+              :options="API_SMTP_MODE_OPTIONS"
+              @update:value="(value) => handleModeChange(String(value))"
+            />
+          </label>
+
+          <label :class="providerSupportsModeSwitch ? '' : 'full'" v-if="requiresSendingDomain(draft.provider)">
+            <span>发信域名</span>
+            <input
+              v-model="draft.extra_config.sending_domain"
+              placeholder="例如：mail.example.com"
+            />
+          </label>
+
+          <template v-if="draft.delivery_mode === 'api'">
             <label>
-              <span>发信区域</span>
-              <NSelect
-                v-model:value="aliyunDraft.region"
-                class="settings-provider-select"
-                :options="ALIYUN_REGION_OPTIONS"
-                :consistent-menu-width="false"
+              <span>{{ apiKeyLabel(draft.provider) }}</span>
+              <input
+                v-model="draft.api_key"
+                :placeholder="isCreateMode ? apiKeyLabel(draft.provider) : `留空则保留当前${apiKeyLabel(draft.provider)}`"
               />
             </label>
 
-            <label>
-              <span>SMTP 服务地址</span>
-              <input :value="aliyunResolvedHost" type="text" readonly class="settings-readonly-input" />
-            </label>
-
-            <label>
-              <span>SMTP 端口</span>
-              <NSelect
-                v-model:value="aliyunDraft.smtp_port"
-                class="settings-provider-select"
-                :options="ALIYUN_PORT_OPTIONS"
-                :consistent-menu-width="false"
+            <label v-if="draft.provider === 'aliyun' || draft.provider === 'tencent_ses'">
+              <span>{{ secretKeyLabel(draft.provider) }}</span>
+              <input
+                v-model="draft.secret_key"
+                :placeholder="isCreateMode ? secretKeyLabel(draft.provider) : `留空则保留当前${secretKeyLabel(draft.provider)}`"
               />
-            </label>
-
-            <label>
-              <span>发信地址</span>
-              <input v-model="aliyunDraft.from_email" type="email" placeholder="notice@example.com" />
-            </label>
-
-            <label>
-              <span>SMTP 密码</span>
-              <input v-model="aliyunDraft.smtp_password" type="password" placeholder="留空则保留当前 SMTP 密码" />
-            </label>
-
-            <label>
-              <span>发件人名称</span>
-              <input v-model="aliyunDraft.from_name" type="text" placeholder="Enterprise AI QA Agent" />
-            </label>
-
-            <label class="full">
-              <span>Reply-To</span>
-              <input v-model="aliyunDraft.reply_to" type="email" placeholder="reply@example.com" />
-            </label>
-
-            <label class="checkbox-row">
-              <input v-model="aliyunDraft.enabled" type="checkbox" />
-              <span>启用该邮件提供商</span>
-            </label>
-
-            <label class="checkbox-row">
-              <input v-model="aliyunDraft.is_default" type="checkbox" />
-              <span>设为默认邮件通道</span>
             </label>
           </template>
 
           <template v-else>
             <label>
               <span>SMTP Host</span>
-              <input v-model="cybermailDraft.smtp_host" type="text" placeholder="smtp.example.jp" />
+              <input v-model="draft.smtp_host" placeholder="smtp.example.com" />
             </label>
 
             <label>
               <span>SMTP 端口</span>
-              <NSelect
-                v-model:value="cybermailDraft.smtp_port"
-                class="settings-provider-select"
-                :options="CYBERMAIL_PORT_OPTIONS"
-                :consistent-menu-width="false"
-              />
+              <input v-model.number="draft.smtp_port" type="number" min="1" max="65535" placeholder="587" />
             </label>
 
             <label>
               <span>SMTP 用户名</span>
-              <input v-model="cybermailDraft.smtp_username" type="text" placeholder="mailer@example.com" />
+              <input v-model="draft.smtp_username" placeholder="SMTP 登录用户名" />
             </label>
 
             <label>
               <span>SMTP 密码</span>
-              <input v-model="cybermailDraft.smtp_password" type="password" placeholder="留空则保留当前 SMTP 密码" />
-            </label>
-
-            <label>
-              <span>发信地址</span>
-              <input v-model="cybermailDraft.from_email" type="email" placeholder="mailer@example.com" />
-            </label>
-
-            <label>
-              <span>发件人名称</span>
-              <input v-model="cybermailDraft.from_name" type="text" placeholder="Enterprise AI QA Agent" />
-            </label>
-
-            <label class="full">
-              <span>Reply-To</span>
-              <input v-model="cybermailDraft.reply_to" type="email" placeholder="reply@example.com" />
-            </label>
-
-            <label class="checkbox-row">
-              <input v-model="cybermailDraft.enabled" type="checkbox" />
-              <span>启用该邮件提供商</span>
-            </label>
-
-            <label class="checkbox-row">
-              <input v-model="cybermailDraft.is_default" type="checkbox" />
-              <span>设为默认邮件通道</span>
+              <input
+                v-model="draft.api_key"
+                :placeholder="isCreateMode ? 'SMTP 密码' : '留空则保留当前 SMTP 密码'"
+              />
             </label>
           </template>
+
+          <label>
+            <span>发信邮箱</span>
+            <input v-model="draft.sender_email" placeholder="notice@example.com" />
+          </label>
+
+          <label>
+            <span>测试邮箱</span>
+            <input v-model="draft.test_email" placeholder="test@example.com" />
+          </label>
+
+          <label>
+            <span>发件人名称</span>
+            <input v-model="draft.extra_config.sender_name" placeholder="系统通知 / 品牌名称" />
+          </label>
+
+          <label class="full">
+            <span>说明</span>
+            <textarea v-model="draft.description" placeholder="备注当前邮件通道的用途"></textarea>
+          </label>
+
+          <label class="checkbox-row">
+            <input v-model="draft.test_mode" type="checkbox" />
+            <span>开启测试模式</span>
+          </label>
+
+          <label class="checkbox-row">
+            <input v-model="draft.enabled" type="checkbox" />
+            <span>启用该邮件通道</span>
+          </label>
+
+          <label class="checkbox-row">
+            <input v-model="draft.is_default" type="checkbox" />
+            <span>设为默认邮件通道</span>
+          </label>
         </div>
 
-        <div class="settings-actions">
-          <button class="primary-btn narrow" :disabled="loading || saving" @click="saveEmail()">
-            {{ saving ? "保存中..." : isCreateMode ? "保存新邮件通道" : "保存邮件配置" }}
+        <div class="settings-modal-actions">
+          <button class="secondary-btn" type="button" @click="closeEditorModal">取消</button>
+          <button class="primary-btn" type="button" :disabled="saving" @click="saveEmail">
+            {{ saving ? "保存中..." : isCreateMode ? "创建邮件配置" : "保存邮件配置" }}
           </button>
         </div>
-      </section>
+      </div>
     </div>
   </section>
 </template>

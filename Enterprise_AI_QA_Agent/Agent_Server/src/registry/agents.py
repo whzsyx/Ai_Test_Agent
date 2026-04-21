@@ -29,6 +29,7 @@ class AgentRegistry:
                         "observation-search",
                         "test-case-generator",
                         "cli-executor",
+                        "send-email",
                         "report-writer",
                     ],
                     supported_skills=[
@@ -75,6 +76,7 @@ class AgentRegistry:
                     supported_tools=[
                         "cli-executor",
                         "file-artifact-manager",
+                        "send-email",
                         "report-writer",
                         "session-history",
                         "session-timeline",
@@ -97,6 +99,7 @@ class AgentRegistry:
                         "browser-automation",
                         "dom-inspector",
                         "file-artifact-manager",
+                        "send-email",
                         "report-writer",
                     ],
                     supported_skills=["ui-exploration", "artifact-collection"],
@@ -115,6 +118,7 @@ class AgentRegistry:
                     supported_tools=[
                         "api-tester",
                         "knowledge-rag",
+                        "send-email",
                         "report-writer",
                     ],
                     supported_skills=["api-validation", "assertion-design"],
@@ -130,7 +134,7 @@ class AgentRegistry:
                     role="reporter",
                     summary="Turn runtime evidence into structured QA output.",
                     description="Produces final findings, summaries, and delivery-ready reports.",
-                    supported_tools=["report-writer", "knowledge-rag", "session-history", "session-timeline", "observation-search"],
+                    supported_tools=["report-writer", "knowledge-rag", "session-history", "session-timeline", "observation-search", "send-email"],
                     supported_skills=["report-synthesis"],
                     supported_models=["claude-sonnet-4", "gpt-5.4"],
                     default_model="claude-sonnet-4",

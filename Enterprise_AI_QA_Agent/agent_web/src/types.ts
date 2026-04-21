@@ -163,41 +163,57 @@ export interface ModelConfigConnectionTestResponse {
 }
 
 export interface EmailConfigPublic {
-  provider: "aliyun" | "cybermail";
+  id: number;
+  config_name: string;
+  provider: string;
   enabled: boolean;
   is_default: boolean;
-  from_email: string;
-  from_name: string;
-  reply_to: string;
-  access_key_id?: string | null;
-  account_name?: string | null;
-  region?: string | null;
+  sender_email: string;
+  test_email?: string | null;
+  test_mode: boolean;
+  description?: string | null;
   smtp_host?: string | null;
   smtp_port?: number | null;
   smtp_username?: string | null;
-  use_tls: boolean;
-  has_access_key_secret: boolean;
-  has_smtp_password: boolean;
+  extra_config?: Record<string, unknown>;
+  has_api_key: boolean;
+  has_secret_key: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
 
-export interface EmailConfigUpdateRequest {
-  provider: "aliyun" | "cybermail";
+export interface EmailConfigCreateRequest {
+  config_name: string;
+  provider: string;
   enabled: boolean;
   is_default: boolean;
-  from_email: string;
-  from_name: string;
-  reply_to: string;
-  access_key_id?: string | null;
-  access_key_secret?: string | null;
-  account_name?: string | null;
-  region?: string | null;
+  api_key?: string | null;
+  secret_key?: string | null;
+  sender_email: string;
+  test_email?: string | null;
+  test_mode: boolean;
+  description?: string | null;
   smtp_host?: string | null;
   smtp_port?: number | null;
   smtp_username?: string | null;
-  smtp_password?: string | null;
-  use_tls: boolean;
+  extra_config?: Record<string, unknown>;
+}
+
+export interface EmailConfigUpdateRequest {
+  config_name: string;
+  provider: string;
+  enabled: boolean;
+  is_default: boolean;
+  api_key?: string | null;
+  secret_key?: string | null;
+  sender_email: string;
+  test_email?: string | null;
+  test_mode: boolean;
+  description?: string | null;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  smtp_username?: string | null;
+  extra_config?: Record<string, unknown>;
 }
 
 export interface EmailConfigActionResponse {

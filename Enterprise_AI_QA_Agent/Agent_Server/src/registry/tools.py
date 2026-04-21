@@ -412,7 +412,7 @@ class ToolRegistry:
                 descriptor=ToolDescriptor(
                     key="message-dispatch",
                     name="Message Dispatch",
-                    description="Send execution notifications as email or persist message payloads as local delivery artifacts.",
+                    description="Send execution notifications as email using the active email channel, or persist message payloads as local delivery artifacts.",
                     category="communication",
                     permission_level="ask",
                     input_schema={
@@ -438,6 +438,32 @@ class ToolRegistry:
                     tags=["message", "notification", "email"],
                 ),
                 handler_key="message-dispatch",
+            ),
+            "send-email": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="send-email",
+                    name="Send Email",
+                    description="Send an email through the currently active email channel without specifying provider details.",
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "to": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "One or more recipient email addresses.",
+                            },
+                            "subject": {"type": "string", "description": "Email subject line."},
+                            "content": {"type": "string", "description": "Plain text email body."},
+                            "content_html": {"type": "string", "description": "Optional HTML email body."},
+                        },
+                        "required": ["to", "subject"],
+                    },
+                    output_schema={"delivery": "object", "artifacts": "array"},
+                    tags=["email", "message", "notification"],
+                ),
+                handler_key="send-email",
             ),
             "report-writer": ToolModule(
                 descriptor=ToolDescriptor(

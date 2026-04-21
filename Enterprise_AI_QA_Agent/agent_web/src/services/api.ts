@@ -2,6 +2,7 @@ import type {
   AgentDescriptor,
   ConversationResponse,
   EmailConfigPublic,
+  EmailConfigCreateRequest,
   EmailConfigActionResponse,
   EmailConfigConnectionTestResponse,
   EmailConfigUpdateRequest,
@@ -81,24 +82,30 @@ export const api = {
   listEmailConfigs(): Promise<EmailConfigPublic[]> {
     return request("/api/v1/settings/email");
   },
-  updateEmailConfig(payload: EmailConfigUpdateRequest): Promise<EmailConfigPublic> {
+  createEmailConfig(payload: EmailConfigCreateRequest): Promise<EmailConfigPublic> {
     return request("/api/v1/settings/email", {
-      method: "PUT",
+      method: "POST",
       body: JSON.stringify(payload),
     });
   },
-  activateEmailConfig(provider: "aliyun" | "cybermail"): Promise<EmailConfigActionResponse> {
-    return request(`/api/v1/settings/email/${encodeURIComponent(provider)}/activate`, {
+  updateEmailConfig(configId: number, payload: EmailConfigUpdateRequest): Promise<EmailConfigPublic> {
+    return request(`/api/v1/settings/email/${configId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  activateEmailConfig(configId: number): Promise<EmailConfigActionResponse> {
+    return request(`/api/v1/settings/email/${configId}/activate`, {
       method: "POST",
     });
   },
-  testEmailConfigConnection(provider: "aliyun" | "cybermail"): Promise<EmailConfigConnectionTestResponse> {
-    return request(`/api/v1/settings/email/${encodeURIComponent(provider)}/test-connection`, {
+  testEmailConfigConnection(configId: number): Promise<EmailConfigConnectionTestResponse> {
+    return request(`/api/v1/settings/email/${configId}/test-connection`, {
       method: "POST",
     });
   },
-  deleteEmailConfig(provider: "aliyun" | "cybermail"): Promise<EmailConfigActionResponse> {
-    return request(`/api/v1/settings/email/${encodeURIComponent(provider)}`, {
+  deleteEmailConfig(configId: number): Promise<EmailConfigActionResponse> {
+    return request(`/api/v1/settings/email/${configId}`, {
       method: "DELETE",
     });
   },

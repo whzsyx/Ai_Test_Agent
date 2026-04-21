@@ -7,6 +7,17 @@ const props = defineProps<{
   messages: ChatMessage[];
 }>();
 
+const visibleMessages = computed(() =>
+  props.messages.filter(
+    (message) =>
+      !(
+        message.role === "assistant" &&
+        isStreamingAssistant(message) &&
+        !String(message.content || "").trim()
+      ),
+  ),
+);
+
 const historyRef = ref<HTMLElement | null>(null);
 const endRef = ref<HTMLElement | null>(null);
 const scrollContainerRef = ref<HTMLElement | null>(null);
@@ -18,7 +29,7 @@ let releaseScrollSyncFrame = 0;
 const userOverrideActive = ref(false);
 
 const messageRenderSignature = computed(() =>
-  props.messages
+  visibleMessages.value
     .map((message) => {
       const deliveryStatus = String(message.metadata?.delivery_status || "").trim();
       return `${message.id}:${message.content.length}:${deliveryStatus}`;
@@ -26,7 +37,7 @@ const messageRenderSignature = computed(() =>
     .join("|"),
 );
 const streamingSignature = computed(() =>
-  props.messages
+  visibleMessages.value
     .filter((message) => isStreamingAssistant(message))
     .map((message) => `${message.id}:${message.content.length}`)
     .join("|"),
@@ -332,9 +343,9 @@ function escapeHtml(content: string) {
 </script>
 
 <template>
-  <div ref="historyRef" class="home-history" v-if="messages.length">
+  <div ref="historyRef" class="home-history" v-if="visibleMessages.length">
     <article
-      v-for="message in props.messages"
+      v-for="message in visibleMessages"
       :key="message.id"
       class="conversation-entry"
       :class="`conversation-entry-${message.role}`"

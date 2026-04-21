@@ -2222,6 +2222,7 @@ textarea {
 :root[data-theme="dark"] .home-agent-select,
 :root[data-theme="dark"] .form-grid input,
 :root[data-theme="dark"] .form-grid select,
+:root[data-theme="dark"] .form-grid textarea,
 :root[data-theme="dark"] .settings-tabs button,
 :root[data-theme="dark"] .settings-provider-switch .secondary-btn,
 :root[data-theme="dark"] .settings-list-item,
@@ -2249,6 +2250,7 @@ textarea {
 :root[data-theme="dark"] .search-box input,
 :root[data-theme="dark"] .form-grid input,
 :root[data-theme="dark"] .form-grid select,
+:root[data-theme="dark"] .form-grid textarea,
 :root[data-theme="dark"] .settings-tabs button,
 :root[data-theme="dark"] .settings-provider-switch .secondary-btn {
   background: var(--surface-soft);
@@ -3539,7 +3541,8 @@ textarea {
 }
 
 .form-grid input,
-.form-grid select {
+.form-grid select,
+.form-grid textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -3547,6 +3550,11 @@ textarea {
   color: #000;
   background: #fff;
   outline: none;
+}
+
+.form-grid textarea {
+  resize: vertical;
+  min-height: 96px;
 }
 
 .form-grid .full {
@@ -3600,6 +3608,11 @@ textarea {
   align-content: start;
 }
 
+.settings-email-grid {
+  grid-template-columns: repeat(auto-fill, 332px);
+  gap: 24px;
+}
+
 .settings-model-card {
   position: relative;
   text-align: left;
@@ -3629,6 +3642,67 @@ textarea {
 
 .settings-model-card-static:hover {
   transform: none;
+}
+
+.settings-email-card {
+  width: 332px;
+  min-height: 320px;
+  height: 320px;
+  padding: 18px 18px 16px;
+  gap: 10px;
+}
+
+.settings-email-card .settings-model-card__name strong {
+  font-size: 15px;
+  line-height: 1.38;
+}
+
+.settings-email-card .settings-model-card__provider-row {
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.settings-email-card .settings-model-card__provider-row i {
+  font-size: 10px;
+}
+
+.settings-email-card .settings-model-card__stat span {
+  font-size: 11px;
+}
+
+.settings-email-card .settings-model-card__stat strong {
+  font-size: 13px;
+}
+
+.settings-email-card .settings-model-card__actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  justify-content: flex-start;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.settings-email-card .settings-model-card__action {
+  width: 48px;
+  min-width: 48px;
+  height: 42px;
+  flex: 0 0 48px;
+}
+
+.settings-email-card-add .settings-model-card-add__icon {
+  width: 54px;
+  height: 54px;
+  font-size: 30px;
+}
+
+.settings-email-card-add .settings-model-card-add__body strong {
+  font-size: 16px;
+}
+
+.settings-email-card-add .settings-model-card-add__body p {
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .settings-model-card__header {

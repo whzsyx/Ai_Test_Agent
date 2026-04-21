@@ -1,70 +1,86 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-EmailProvider = Literal["aliyun", "cybermail"]
+EmailProvider = str
 
 
 class EmailConfigRecord(BaseModel):
+    id: int | None = None
+    config_name: str
     provider: EmailProvider
+    api_key: str | None = None
+    secret_key: str | None = None
+    sender_email: str = ""
+    test_email: str | None = None
+    test_mode: bool = False
     enabled: bool = False
     is_default: bool = False
-    from_email: str = ""
-    from_name: str = ""
-    reply_to: str = ""
-    access_key_id: str | None = None
-    access_key_secret: str | None = None
-    account_name: str | None = None
-    region: str | None = None
+    description: str | None = None
     smtp_host: str | None = None
     smtp_port: int | None = None
     smtp_username: str | None = None
-    smtp_password: str | None = None
-    use_tls: bool = True
+    extra_config: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
 class EmailConfigPublic(BaseModel):
+    id: int
+    config_name: str
     provider: EmailProvider
     enabled: bool = False
     is_default: bool = False
-    from_email: str = ""
-    from_name: str = ""
-    reply_to: str = ""
-    access_key_id: str | None = None
-    account_name: str | None = None
-    region: str | None = None
+    sender_email: str = ""
+    test_email: str | None = None
+    test_mode: bool = False
+    description: str | None = None
     smtp_host: str | None = None
     smtp_port: int | None = None
     smtp_username: str | None = None
-    use_tls: bool = True
-    has_access_key_secret: bool = False
-    has_smtp_password: bool = False
+    extra_config: dict[str, Any] = Field(default_factory=dict)
+    has_api_key: bool = False
+    has_secret_key: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
-class EmailConfigUpdateRequest(BaseModel):
+class EmailConfigCreateRequest(BaseModel):
+    config_name: str
     provider: EmailProvider
+    api_key: str | None = None
+    secret_key: str | None = None
+    sender_email: str = ""
+    test_email: str | None = None
+    test_mode: bool = False
     enabled: bool = False
     is_default: bool = False
-    from_email: str = ""
-    from_name: str = ""
-    reply_to: str = ""
-    access_key_id: str | None = None
-    access_key_secret: str | None = None
-    account_name: str | None = None
-    region: str | None = None
+    description: str | None = None
     smtp_host: str | None = None
     smtp_port: int | None = None
     smtp_username: str | None = None
-    smtp_password: str | None = None
-    use_tls: bool = True
+    extra_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class EmailConfigUpdateRequest(BaseModel):
+    config_name: str
+    provider: EmailProvider
+    api_key: str | None = None
+    secret_key: str | None = None
+    sender_email: str = ""
+    test_email: str | None = None
+    test_mode: bool = False
+    enabled: bool = False
+    is_default: bool = False
+    description: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_username: str | None = None
+    extra_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class EmailConfigActionResponse(BaseModel):

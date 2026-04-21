@@ -47,7 +47,10 @@ function messageDeliveryStatus(message: ChatMessage | undefined) {
 
 function hasStreamingAssistantMessage(messages: ChatMessage[]) {
   return messages.some(
-    (message) => message.role === "assistant" && messageDeliveryStatus(message) === "streaming",
+    (message) =>
+      message.role === "assistant" &&
+      messageDeliveryStatus(message) === "streaming" &&
+      Boolean(String(message.content || "").trim()),
   );
 }
 
@@ -223,7 +226,7 @@ function mergeSessionMessages(
     if (status !== "streaming") {
       return false;
     }
-    return Boolean(message.content.trim()) || Boolean(message.metadata?.is_optimistic_stream);
+    return Boolean(message.content.trim());
   });
 
   return [...merged, ...localOnlyMessages];
