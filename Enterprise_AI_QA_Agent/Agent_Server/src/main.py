@@ -31,6 +31,7 @@ from src.application.prompt_service import PromptSubmissionService
 from src.application.registry_service import RegistryService
 from src.application.runtime_service import RuntimeService
 from src.application.session_service import SessionService
+from src.application.skill_management_service import SkillManagementService
 from src.application.skill_runtime_service import SkillRuntimeService
 from src.application.settings_service import SettingsService
 from src.application.tool_job_service import ToolJobService
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
     email_config_store.initialize()
     model_registry = ModelRegistry(model_config_store)
     skill_registry = SkillRegistry()
+    skill_management_service = SkillManagementService(skill_registry=skill_registry)
     mcp_registry = MCPRegistry()
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
     mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
@@ -133,6 +135,7 @@ async def lifespan(app: FastAPI):
     app.state.email_config_store = email_config_store
     app.state.model_registry = model_registry
     app.state.skill_registry = skill_registry
+    app.state.skill_management_service = skill_management_service
     app.state.mcp_registry = mcp_registry
     app.state.skill_runtime_service = skill_runtime_service
     app.state.mcp_runtime_service = mcp_runtime_service

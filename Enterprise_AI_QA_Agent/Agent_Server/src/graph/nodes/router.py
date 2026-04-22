@@ -60,6 +60,13 @@ def build_router_node(
         state["active_mcp_servers"] = mcp_runtime_service.list_active_servers()
         state["mcp_prompt_blocks"] = mcp_runtime_service.build_prompt_blocks(state["active_mcp_servers"])
         state["available_tool_keys"] = [tool.key for tool in tools]
+        context_bundle = dict(state.get("context_bundle") or {})
+        context_bundle["available_skills"] = [
+            skill.model_dump(mode="python")
+            for skill in skill_registry.list()
+        ]
+        context_bundle["selected_agent_supported_skills"] = list(agent.supported_skills)
+        state["context_bundle"] = context_bundle
         append_graph_event(
             state,
             "graph.route_selected",

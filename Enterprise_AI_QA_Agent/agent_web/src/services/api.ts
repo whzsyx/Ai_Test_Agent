@@ -19,6 +19,9 @@ import type {
   ToolDescriptor,
   ToolJobDetail,
   ToolJobRecord,
+  SkillDescriptor,
+  SkillInstallRequest,
+  SkillUpsertRequest,
   SessionVerificationResponse,
 } from "../types";
 
@@ -48,6 +51,29 @@ export const api = {
   },
   listTools(): Promise<ToolDescriptor[]> {
     return request("/api/v1/registry/tools");
+  },
+  listSkills(): Promise<SkillDescriptor[]> {
+    return request("/api/v1/registry/skills");
+  },
+  getSkill(skillKey: string): Promise<SkillDescriptor> {
+    return request(`/api/v1/registry/skills/${encodeURIComponent(skillKey)}`);
+  },
+  upsertSkill(skillKey: string, payload: SkillUpsertRequest): Promise<SkillDescriptor> {
+    return request(`/api/v1/registry/skills/${encodeURIComponent(skillKey)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  installSkill(payload: SkillInstallRequest): Promise<SkillDescriptor> {
+    return request("/api/v1/registry/skills/install", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteSkill(skillKey: string): Promise<{ ok: boolean; message: string }> {
+    return request(`/api/v1/registry/skills/${encodeURIComponent(skillKey)}`, {
+      method: "DELETE",
+    });
   },
   listModelConfigs(): Promise<ModelConfigPublic[]> {
     return request("/api/v1/settings/models");

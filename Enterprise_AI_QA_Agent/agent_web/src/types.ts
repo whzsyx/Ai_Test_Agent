@@ -57,6 +57,32 @@ export interface ToolDescriptor {
   tags?: string[];
 }
 
+export interface SkillDescriptor {
+  key: string;
+  name: string;
+  summary: string;
+  description: string;
+  recommended_agents: string[];
+  tags: string[];
+  installed?: boolean;
+  managed_root?: string;
+  path?: string;
+  source?: string;
+  references?: string[];
+  content?: string;
+}
+
+export interface SkillInstallRequest {
+  source_path?: string | null;
+  url?: string | null;
+  key?: string | null;
+  overwrite?: boolean;
+}
+
+export interface SkillUpsertRequest {
+  content: string;
+}
+
 export interface AgentDescriptor {
   key: string;
   name: string;

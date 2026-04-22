@@ -9,10 +9,10 @@ class MCPRegistry:
             "browser-mcp": MCPServerDescriptor(
                 key="browser-mcp",
                 name="Browser MCP",
-                summary="Expose browser control and page state through MCP.",
+                summary="Expose playwright-cli browser control and page state through MCP.",
                 transport="stdio",
                 status="ready",
-                capabilities=["navigate", "screenshot", "dom-query"],
+                capabilities=["inspect-page", "browser-automation", "browser-control"],
                 enabled=True,
             ),
             "filesystem-mcp": MCPServerDescriptor(
@@ -21,7 +21,7 @@ class MCPRegistry:
                 summary="Read and write run artifacts or fixture files.",
                 transport="stdio",
                 status="ready",
-                capabilities=["read-file", "write-file", "list-dir"],
+                capabilities=["read-file", "write-file", "write-artifact", "list-dir"],
                 enabled=True,
             ),
             "knowledge-mcp": MCPServerDescriptor(
@@ -46,3 +46,9 @@ class MCPRegistry:
 
     def list(self) -> list[MCPServerDescriptor]:
         return list(self._servers.values())
+
+    def list_enabled(self) -> list[MCPServerDescriptor]:
+        return [server for server in self._servers.values() if server.enabled]
+
+    def get(self, key: str) -> MCPServerDescriptor | None:
+        return self._servers.get(key)

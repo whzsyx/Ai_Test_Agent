@@ -1,42 +1,43 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
-from selenium.webdriver.common.by import By
-
 from src.core.config import Settings
+from src.application.python_playwright_cli import PythonPlaywrightCliRuntime
 from src.registry.mcp import MCPRegistry
 
 
 class MCPRuntimeService:
+    """Execute MCP-backed capabilities.
+
+    Browser capabilities use the Agent_Server native Python implementation of
+    the playwright-cli command contract.
+    """
+
     def __init__(self, mcp_registry: MCPRegistry, settings: Settings) -> None:
         self._mcp_registry = mcp_registry
         self._settings = settings
         self._artifact_root = Path(__file__).resolve().parents[2] / settings.artifact_root_dir
         self._artifact_root.mkdir(parents=True, exist_ok=True)
+        self._playwright_cli = PythonPlaywrightCliRuntime(settings)
 
     def list_active_servers(self) -> list[dict[str, Any]]:
-        servers = []
-        for server in self._mcp_registry.list():
-            if not server.enabled:
-                continue
-            servers.append(server.model_dump(mode="python"))
-        return servers
+        return [server.model_dump() for server in self._mcp_registry.list_enabled()]
 
-    def build_prompt_blocks(self, active_servers: list[dict[str, Any]]) -> list[str]:
+    def build_prompt_blocks(self, active_servers: list[dict[str, Any]] | None = None) -> list[str]:
         blocks: list[str] = []
-        for server in active_servers:
+        servers = active_servers or [server.model_dump() for server in self._mcp_registry.list_enabled()]
+        for server in servers:
             capabilities = ", ".join(server.get("capabilities", [])) or "none"
             blocks.append(
-                f"- {server.get('name', server.get('key', 'mcp'))}: "
-                f"transport={server.get('transport', 'unknown')}, "
-                f"capabilities={capabilities}, status={server.get('status', 'unknown')}"
+                f"MCP server {server.get('name', server.get('key', 'mcp'))} "
+                f"({server.get('key', 'mcp')}) exposes: {capabilities}. {server.get('summary', '')}"
             )
         return blocks
 
@@ -47,326 +48,558 @@ class MCPRuntimeService:
         payload: dict[str, Any],
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        if server_key == "browser-mcp":
-            if capability == "inspect-page":
-                return self._inspect_page(payload, context)
-            if capability == "browser-automation":
-                return self._run_browser_automation(payload, context)
-            if capability == "browser-control":
-                return self._run_browser_control(payload, context)
-        if server_key == "filesystem-mcp":
-            if capability == "write-artifact":
-                return self._write_artifact(payload, context)
-        raise ValueError(f"Unsupported MCP runtime call: {server_key}/{capability}")
+        server = self._mcp_registry.get(server_key)
+        if not server or not server.enabled:
+            return {"status": "failed", "error": f"MCP server '{server_key}' is not available."}
+        if capability not in server.capabilities:
+            return {"status": "failed", "error": f"Capability '{capability}' is not exposed by {server.name}."}
 
-    def _inspect_page(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        target_url = _resolve_target_url(payload, context)
+        if capability == "inspect-page":
+            return await self._inspect_page(payload, context)
+        if capability == "browser-automation":
+            return await self._run_browser_automation(payload, context)
+        if capability == "browser-control":
+            return await self._run_browser_control(payload, context)
+        if capability == "write-artifact":
+            return self._write_artifact(payload, context)
+        return {
+            "status": "success",
+            "summary": f"Capability '{capability}' acknowledged by {server.name}.",
+            "payload": payload,
+        }
+
+    async def _inspect_page(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        target_url = self._resolve_target_url(payload, context)
         if not target_url:
-            return {
-                "summary": "DOM Inspector requires a target URL in the prompt or tool arguments.",
-                "dom_summary": "No target URL provided.",
-                "headings": [],
-                "links": [],
-                "artifacts": [],
-            }
+            return {"status": "failed", "error": "No target_url or url was supplied for page inspection."}
 
-        artifact_dir = self._prepare_artifact_dir(context, "dom-inspector")
-        driver = self._create_driver()
+        artifact_dir = self._prepare_artifact_dir(context, "dom-inspection")
+        session_name = self._playwright_session_name(context, "dom-inspector")
+        command_log: list[dict[str, Any]] = []
+
         try:
-            driver.get(target_url)
-            html_path = artifact_dir / "page.html"
-            screenshot_path = artifact_dir / "page.png"
-            html_path.write_text(driver.page_source, encoding="utf-8", errors="ignore")
-            driver.save_screenshot(str(screenshot_path))
-            headings = [
-                item.text.strip()
-                for item in driver.find_elements(By.CSS_SELECTOR, "h1, h2, h3")
-                if item.text.strip()
-            ][:12]
-            links = [
-                item.get_attribute("href")
-                for item in driver.find_elements(By.CSS_SELECTOR, "a[href]")
-                if item.get_attribute("href")
-            ][:20]
-            forms = len(driver.find_elements(By.CSS_SELECTOR, "form"))
-            inputs = len(driver.find_elements(By.CSS_SELECTOR, "input, textarea, select"))
-            buttons = len(driver.find_elements(By.CSS_SELECTOR, "button, input[type='submit'], input[type='button']"))
-            artifacts = [
-                {"type": "html", "path": str(html_path)},
-                {"type": "screenshot", "path": str(screenshot_path)},
-            ]
-            summary = {
-                "title": driver.title.strip(),
-                "current_url": driver.current_url,
-                "forms": forms,
-                "inputs": inputs,
-                "buttons": buttons,
-                "headings": len(headings),
-                "links": len(links),
-            }
-            (artifact_dir / "summary.json").write_text(
-                json.dumps(summary, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["open", target_url, *self._playwright_open_args()],
+                    artifact_dir,
+                )
             )
-            artifacts.append({"type": "summary", "path": str(artifact_dir / "summary.json")})
-            return {
-                "summary": f"Inspected DOM in a real browser session for {target_url}.",
-                "target_url": target_url,
-                "title": driver.title.strip(),
-                "current_url": driver.current_url,
-                "dom_summary": (
-                    f"title={driver.title.strip() or 'n/a'}; headings={len(headings)}; "
-                    f"forms={forms}; inputs={inputs}; buttons={buttons}; links={len(links)}"
-                ),
+            command_log.extend(await self._resize_browser(session_name, artifact_dir))
+
+            snapshot_path = artifact_dir / "page_snapshot.yml"
+            screenshot_path = artifact_dir / "page.png"
+            html_path = artifact_dir / "page.html"
+            summary_path = artifact_dir / "summary.json"
+
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["snapshot", f"--filename={snapshot_path.name}"],
+                    artifact_dir,
+                )
+            )
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["screenshot", f"--filename={screenshot_path.name}"],
+                    artifact_dir,
+                )
+            )
+
+            metadata = await self._eval_json(
+                session_name,
+                artifact_dir,
+                """JSON.stringify({
+  title: document.title || "",
+  current_url: location.href,
+  forms: document.querySelectorAll("form").length,
+  inputs: document.querySelectorAll("input, textarea, select").length,
+  buttons: document.querySelectorAll("button, input[type='submit'], input[type='button']").length
+})""",
+                command_log,
+                default={},
+            )
+            headings = await self._eval_json(
+                session_name,
+                artifact_dir,
+                """JSON.stringify([...document.querySelectorAll("h1, h2, h3")]
+  .map((el) => (el.textContent || "").trim())
+  .filter(Boolean)
+  .slice(0, 12))""",
+                command_log,
+                default=[],
+            )
+            links = await self._eval_json(
+                session_name,
+                artifact_dir,
+                """JSON.stringify([...document.querySelectorAll("a[href]")]
+  .map((el) => el.href)
+  .filter(Boolean)
+  .slice(0, 20))""",
+                command_log,
+                default=[],
+            )
+            html = await self._eval_text(
+                session_name,
+                artifact_dir,
+                "document.documentElement.outerHTML",
+                command_log,
+            )
+            html_path.write_text(html, encoding="utf-8")
+
+            title = str(metadata.get("title") or "")
+            current_url = str(metadata.get("current_url") or target_url)
+            summary = {
+                "title": title,
+                "current_url": current_url,
+                "forms": int(metadata.get("forms") or 0),
+                "inputs": int(metadata.get("inputs") or 0),
+                "buttons": int(metadata.get("buttons") or 0),
                 "headings": headings,
                 "links": links,
-                "artifacts": artifacts,
-                "runtime_backend": f"{self._settings.browser_backend}:{self._settings.browser_default_name}",
+                "captured_at": datetime.utcnow().isoformat() + "Z",
+            }
+            summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            transcript_path = self._write_transcript(artifact_dir, command_log)
+
+            return {
+                "status": "success",
+                "summary": f"Inspected {target_url} with playwright-cli.",
+                "target_url": target_url,
+                "title": title,
+                "current_url": current_url,
+                "dom_summary": {
+                    "forms": summary["forms"],
+                    "inputs": summary["inputs"],
+                    "buttons": summary["buttons"],
+                    "headings": headings,
+                },
+                "links": links,
+                "runtime_backend": self._runtime_backend(),
+                "artifacts": [
+                    {"type": "html", "path": str(html_path)},
+                    {"type": "screenshot", "path": str(screenshot_path)},
+                    {"type": "snapshot", "path": str(snapshot_path)},
+                    {"type": "summary", "path": str(summary_path)},
+                    {"type": "transcript", "path": str(transcript_path)},
+                ],
             }
         finally:
-            driver.quit()
+            await self._close_playwright_session(session_name, artifact_dir)
 
-    def _run_browser_automation(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        target_url = _resolve_target_url(payload, context)
-        objective = str(payload.get("objective") or context.get("user_message") or "").strip()
+    async def _run_browser_automation(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        target_url = self._resolve_target_url(payload, context)
         if not target_url:
-            return {
-                "summary": "Browser Automation requires a target URL in the prompt or tool arguments.",
-                "steps": [],
-                "artifacts": [],
-            }
+            return {"status": "failed", "error": "No target_url or url was supplied for browser automation."}
 
         artifact_dir = self._prepare_artifact_dir(context, "browser-automation")
-        driver = self._create_driver()
-        steps: list[dict[str, Any]] = []
-        artifacts: list[dict[str, Any]] = []
+        session_name = self._playwright_session_name(context, "browser-automation")
+        command_log: list[dict[str, Any]] = []
+        executed_steps: list[dict[str, Any]] = []
+        objective = payload.get("objective") or context.get("user_message") or "Execute browser automation."
+
         try:
-            driver.get(target_url)
-            steps.append({"step": "open_url", "status": "completed", "detail": f"Opened {target_url}"})
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["open", target_url, *self._playwright_open_args()],
+                    artifact_dir,
+                )
+            )
+            command_log.extend(await self._resize_browser(session_name, artifact_dir))
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["screenshot", "--filename=initial.png"],
+                    artifact_dir,
+                )
+            )
 
-            initial_screenshot = artifact_dir / "initial.png"
-            driver.save_screenshot(str(initial_screenshot))
-            artifacts.append({"type": "screenshot", "label": "initial", "path": str(initial_screenshot)})
-
-            for index, action in enumerate(payload.get("actions", []), start=1):
-                action_type = str(action.get("type") or "").strip().lower()
-                if action_type == "click":
-                    selector = str(action.get("selector") or "").strip()
-                    driver.find_element(By.CSS_SELECTOR, selector).click()
-                    steps.append({"step": f"action_{index}", "status": "completed", "detail": f"Clicked {selector}"})
-                elif action_type == "input":
-                    selector = str(action.get("selector") or "").strip()
-                    value = str(action.get("value") or "")
-                    element = driver.find_element(By.CSS_SELECTOR, selector)
-                    element.clear()
-                    element.send_keys(value)
-                    steps.append({"step": f"action_{index}", "status": "completed", "detail": f"Filled {selector}"})
-                elif action_type == "wait":
-                    seconds = float(action.get("seconds") or 1)
-                    driver.implicitly_wait(int(max(seconds, 1)))
-                    steps.append({"step": f"action_{index}", "status": "completed", "detail": f"Waited {seconds} seconds"})
-                elif action_type == "screenshot":
-                    label = _slug(str(action.get("label") or f"action_{index}"))
-                    shot_path = artifact_dir / f"{label}.png"
-                    driver.save_screenshot(str(shot_path))
-                    artifacts.append({"type": "screenshot", "label": label, "path": str(shot_path)})
-                    steps.append({"step": f"action_{index}", "status": "completed", "detail": f"Captured screenshot {label}"})
-                elif action_type == "scroll":
-                    y = int(action.get("y") or 600)
-                    driver.execute_script("window.scrollBy(0, arguments[0]);", y)
-                    steps.append({"step": f"action_{index}", "status": "completed", "detail": f"Scrolled by {y}px"})
-                else:
-                    steps.append({"step": f"action_{index}", "status": "skipped", "detail": f"Unsupported action type '{action_type}'"})
+            for index, action in enumerate(self._normalize_actions(payload), start=1):
+                step = await self._execute_browser_action(session_name, artifact_dir, action, index, command_log)
+                executed_steps.append(step)
 
             final_screenshot = artifact_dir / "final.png"
-            driver.save_screenshot(str(final_screenshot))
-            artifacts.append({"type": "screenshot", "label": "final", "path": str(final_screenshot)})
+            final_snapshot = artifact_dir / "final_snapshot.yml"
             html_path = artifact_dir / "page.html"
-            html_path.write_text(driver.page_source, encoding="utf-8", errors="ignore")
-            artifacts.append({"type": "html", "path": str(html_path)})
+            summary_path = artifact_dir / "automation_summary.json"
 
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["screenshot", f"--filename={final_screenshot.name}"],
+                    artifact_dir,
+                )
+            )
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["snapshot", f"--filename={final_snapshot.name}"],
+                    artifact_dir,
+                )
+            )
+            metadata = await self._eval_json(
+                session_name,
+                artifact_dir,
+                """JSON.stringify({
+  title: document.title || "",
+  current_url: location.href
+})""",
+                command_log,
+                default={},
+            )
+            html = await self._eval_text(
+                session_name,
+                artifact_dir,
+                "document.documentElement.outerHTML",
+                command_log,
+            )
+            html_path.write_text(html, encoding="utf-8")
+
+            title = str(metadata.get("title") or "")
+            current_url = str(metadata.get("current_url") or target_url)
             summary = {
-                "title": driver.title.strip(),
-                "current_url": driver.current_url,
-                "forms": len(driver.find_elements(By.CSS_SELECTOR, "form")),
-                "inputs": len(driver.find_elements(By.CSS_SELECTOR, "input, textarea, select")),
-                "buttons": len(driver.find_elements(By.CSS_SELECTOR, "button, input[type='submit'], input[type='button']")),
                 "objective": objective,
-                "step_count": len(steps),
+                "target_url": target_url,
+                "title": title,
+                "current_url": current_url,
+                "steps": executed_steps,
+                "captured_at": datetime.utcnow().isoformat() + "Z",
             }
-            summary_path = artifact_dir / "summary.json"
             summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-            artifacts.append({"type": "summary", "path": str(summary_path)})
+            transcript_path = self._write_transcript(artifact_dir, command_log)
 
             return {
-                "summary": f"Executed Selenium browser automation for {target_url}.",
+                "status": "success",
+                "summary": f"Executed playwright-cli browser automation for {target_url}.",
                 "target_url": target_url,
                 "objective": objective,
-                "title": driver.title.strip(),
-                "current_url": driver.current_url,
-                "steps": steps,
-                "artifacts": artifacts,
-                "runtime_backend": f"{self._settings.browser_backend}:{self._settings.browser_default_name}",
+                "title": title,
+                "current_url": current_url,
+                "steps": executed_steps,
+                "runtime_backend": self._runtime_backend(),
+                "artifacts": [
+                    {"type": "screenshot", "path": str(artifact_dir / "initial.png")},
+                    {"type": "screenshot", "path": str(final_screenshot)},
+                    {"type": "snapshot", "path": str(final_snapshot)},
+                    {"type": "html", "path": str(html_path)},
+                    {"type": "summary", "path": str(summary_path)},
+                    {"type": "transcript", "path": str(transcript_path)},
+                ],
             }
         finally:
-            driver.quit()
+            await self._close_playwright_session(session_name, artifact_dir)
 
-    def _run_browser_control(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    async def _run_browser_control(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action") or "").strip().lower()
         if not action:
-            return {
-                "status": "failed",
-                "ok": False,
-                "summary": "Browser Control requires an action.",
-                "error": "missing_action",
-                "artifacts": [],
-            }
+            return {"status": "failed", "error": "browser-control requires an action."}
 
         if action in {"inspect", "snapshot", "dom"}:
-            return self._inspect_page(payload, context)
-
+            return await self._inspect_page(payload, context)
         if action in {"run_actions", "act", "automate"}:
-            return self._run_browser_automation(payload, context)
+            return await self._run_browser_automation(payload, context)
+        if action in {"command", "playwright-cli", "cli"}:
+            return await self._run_browser_cli_command(payload, context)
 
-        target_url = _resolve_target_url(payload, context)
+        target_url = self._resolve_target_url(payload, context)
         if not target_url:
-            return {
-                "status": "failed",
-                "ok": False,
-                "summary": "Browser Control requires a target URL.",
-                "error": "missing_target_url",
-                "artifacts": [],
-            }
+            return {"status": "failed", "error": f"browser-control action '{action}' requires a target_url or url."}
 
-        artifact_dir = self._prepare_artifact_dir(context, "browser-control")
-        driver = self._create_driver()
+        artifact_dir = self._prepare_artifact_dir(context, f"browser-control-{self._slug(action)}")
+        session_name = self._playwright_session_name(context, f"browser-control-{action}")
+        command_log: list[dict[str, Any]] = []
+
         try:
-            driver.get(target_url)
-            artifacts: list[dict[str, Any]] = []
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["open", target_url, *self._playwright_open_args()],
+                    artifact_dir,
+                )
+            )
+            command_log.extend(await self._resize_browser(session_name, artifact_dir))
+
+            artifacts: list[dict[str, str]] = []
+            result: Any = None
             if action in {"navigate", "open"}:
-                shot_path = artifact_dir / f"{_slug(str(payload.get('label') or 'navigate'))}.png"
-                driver.save_screenshot(str(shot_path))
-                artifacts.append({"type": "screenshot", "label": "navigate", "path": str(shot_path)})
-                return {
-                    "summary": f"Opened {target_url} in the browser.",
-                    "target_url": target_url,
-                    "title": driver.title.strip(),
-                    "current_url": driver.current_url,
-                    "artifacts": artifacts,
-                    "runtime_backend": f"{self._settings.browser_backend}:{self._settings.browser_default_name}",
-                }
-
-            if action == "screenshot":
-                label = _slug(str(payload.get("label") or "screenshot")) or "screenshot"
-                shot_path = artifact_dir / f"{label}.png"
-                driver.save_screenshot(str(shot_path))
-                artifacts.append({"type": "screenshot", "label": label, "path": str(shot_path)})
-                return {
-                    "summary": f"Captured browser screenshot for {target_url}.",
-                    "target_url": target_url,
-                    "title": driver.title.strip(),
-                    "current_url": driver.current_url,
-                    "artifacts": artifacts,
-                    "runtime_backend": f"{self._settings.browser_backend}:{self._settings.browser_default_name}",
-                }
-
-            if action in {"evaluate_js", "eval"}:
+                screenshot_path = artifact_dir / "navigate.png"
+                command_log.append(
+                    await self._run_playwright_cli(
+                        session_name,
+                        ["screenshot", f"--filename={screenshot_path.name}"],
+                        artifact_dir,
+                    )
+                )
+                artifacts.append({"type": "screenshot", "path": str(screenshot_path)})
+            elif action in {"screenshot", "capture"}:
+                label = self._slug(str(payload.get("label") or action))
+                screenshot_path = artifact_dir / f"{label}.png"
+                command_log.append(
+                    await self._run_playwright_cli(
+                        session_name,
+                        ["screenshot", f"--filename={screenshot_path.name}"],
+                        artifact_dir,
+                    )
+                )
+                artifacts.append({"type": "screenshot", "path": str(screenshot_path)})
+            elif action in {"evaluate_js", "eval", "javascript"}:
                 expression = str(payload.get("javascript") or payload.get("script") or "").strip()
                 if not expression:
-                    return {
-                        "status": "failed",
-                        "ok": False,
-                        "summary": "Browser Control evaluate_js requires a javascript expression.",
-                        "error": "missing_javascript",
-                        "artifacts": [],
-                    }
-                result = driver.execute_script(expression)
+                    return {"status": "failed", "error": "evaluate_js requires a javascript or script value."}
+                result_text = await self._eval_text(session_name, artifact_dir, expression, command_log)
+                result = self._parse_json_if_possible(result_text)
                 result_path = artifact_dir / "evaluate_js.json"
-                result_path.write_text(json.dumps({"result": result}, ensure_ascii=False, indent=2), encoding="utf-8")
-                artifacts.append({"type": "evaluation", "path": str(result_path)})
-                return {
-                    "summary": f"Executed JavaScript against {target_url}.",
-                    "target_url": target_url,
-                    "title": driver.title.strip(),
-                    "current_url": driver.current_url,
-                    "result": result,
-                    "artifacts": artifacts,
-                    "runtime_backend": f"{self._settings.browser_backend}:{self._settings.browser_default_name}",
-                }
+                result_path.write_text(
+                    json.dumps({"result": result, "raw": result_text}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                artifacts.append({"type": "json", "path": str(result_path)})
+            else:
+                return {"status": "failed", "error": f"Unsupported browser-control action '{action}'."}
 
+            transcript_path = self._write_transcript(artifact_dir, command_log)
+            artifacts.append({"type": "transcript", "path": str(transcript_path)})
             return {
-                "status": "failed",
-                "ok": False,
-                "summary": f"Unsupported browser control action '{action}'.",
-                "error": "unsupported_action",
-                "artifacts": [],
+                "status": "success",
+                "summary": f"browser-control action '{action}' completed with playwright-cli.",
+                "action": action,
+                "target_url": target_url,
+                "result": result,
+                "runtime_backend": self._runtime_backend(),
+                "artifacts": artifacts,
             }
         finally:
-            driver.quit()
+            await self._close_playwright_session(session_name, artifact_dir)
+
+    async def _run_browser_cli_command(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        raw_args = payload.get("args") or payload.get("command_args") or payload.get("command") or []
+        if isinstance(raw_args, str):
+            args = shlex.split(raw_args, posix=False)
+        elif isinstance(raw_args, list):
+            args = [str(item) for item in raw_args]
+        else:
+            args = []
+        if not args:
+            return {"status": "failed", "error": "browser-control action=command requires args or command."}
+
+        artifact_dir = self._prepare_artifact_dir(context, "browser-control-command")
+        session_name = self._playwright_session_name(context, "browser-control-command")
+        command_log: list[dict[str, Any]] = []
+        try:
+            result = await self._run_playwright_cli(
+                session_name=session_name,
+                args=args,
+                cwd=artifact_dir,
+                raw=bool(payload.get("raw", False)),
+            )
+            command_log.append(result)
+            transcript_path = self._write_transcript(artifact_dir, command_log)
+            return {
+                "status": "success",
+                "summary": f"Executed python playwright-cli command: {' '.join(args)}",
+                "command": args,
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+                "runtime_backend": self._runtime_backend(),
+                "artifacts": [*result.get("artifacts", []), {"type": "transcript", "path": str(transcript_path)}],
+            }
+        finally:
+            if args[0] in {"close", "delete-data"}:
+                await self._close_playwright_session(session_name, artifact_dir)
+
+    async def _execute_browser_action(
+        self,
+        session_name: str,
+        artifact_dir: Path,
+        action: dict[str, Any],
+        index: int,
+        command_log: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        action_type = str(action.get("type") or action.get("action") or "").strip().lower()
+        selector = str(action.get("selector") or action.get("target") or action.get("ref") or "").strip()
+        value = str(action.get("value") or action.get("text") or "").strip()
+
+        if action_type == "click" and selector:
+            command_log.append(await self._run_playwright_cli(session_name, ["click", selector], artifact_dir))
+            return {"index": index, "action": "click", "target": selector, "status": "success"}
+        if action_type in {"input", "fill"} and selector:
+            command_log.append(await self._run_playwright_cli(session_name, ["fill", selector, value], artifact_dir))
+            return {"index": index, "action": "fill", "target": selector, "value": value, "status": "success"}
+        if action_type == "type" and value:
+            command_log.append(await self._run_playwright_cli(session_name, ["type", value], artifact_dir))
+            return {"index": index, "action": "type", "value": value, "status": "success"}
+        if action_type == "press" and value:
+            command_log.append(await self._run_playwright_cli(session_name, ["press", value], artifact_dir))
+            return {"index": index, "action": "press", "key": value, "status": "success"}
+        if action_type == "wait":
+            seconds = self._coerce_float(action.get("seconds") or action.get("value"), default=1.0)
+            await asyncio.sleep(max(0.0, min(seconds, 30.0)))
+            return {"index": index, "action": "wait", "seconds": seconds, "status": "success"}
+        if action_type == "screenshot":
+            label = self._slug(str(action.get("label") or f"step-{index}"))
+            command_log.append(
+                await self._run_playwright_cli(
+                    session_name,
+                    ["screenshot", f"--filename={label}.png"],
+                    artifact_dir,
+                )
+            )
+            return {"index": index, "action": "screenshot", "path": str(artifact_dir / f"{label}.png"), "status": "success"}
+        if action_type == "scroll":
+            y = str(int(self._coerce_float(action.get("y") or action.get("delta_y"), default=600)))
+            command_log.append(await self._run_playwright_cli(session_name, ["mousewheel", "0", y], artifact_dir))
+            return {"index": index, "action": "scroll", "delta_y": y, "status": "success"}
+
+        return {"index": index, "action": action_type or "unknown", "status": "skipped", "reason": "Unsupported or incomplete action."}
+
+    async def _eval_json(
+        self,
+        session_name: str,
+        artifact_dir: Path,
+        expression: str,
+        command_log: list[dict[str, Any]],
+        default: Any,
+    ) -> Any:
+        text = await self._eval_text(session_name, artifact_dir, expression, command_log)
+        parsed = self._parse_json_if_possible(text)
+        return default if parsed is None else parsed
+
+    async def _eval_text(
+        self,
+        session_name: str,
+        artifact_dir: Path,
+        expression: str,
+        command_log: list[dict[str, Any]],
+    ) -> str:
+        result = await self._run_playwright_cli(session_name, ["eval", expression], artifact_dir, raw=True)
+        command_log.append(result)
+        return str(result.get("stdout") or "").strip()
+
+    async def _resize_browser(self, session_name: str, artifact_dir: Path) -> list[dict[str, Any]]:
+        width = int(self._settings.browser_window_width or 0)
+        height = int(self._settings.browser_window_height or 0)
+        if width <= 0 or height <= 0:
+            return []
+        return [await self._run_playwright_cli(session_name, ["resize", str(width), str(height)], artifact_dir)]
+
+    async def _close_playwright_session(self, session_name: str, artifact_dir: Path) -> None:
+        try:
+            await self._run_playwright_cli(session_name, ["close"], artifact_dir, timeout_seconds=15)
+        except Exception:
+            pass
+
+    async def _run_playwright_cli(
+        self,
+        session_name: str,
+        args: list[str],
+        cwd: Path,
+        raw: bool = False,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        result = await self._playwright_cli.run(
+            session_name=session_name,
+            args=args,
+            cwd=cwd,
+            raw=raw,
+            timeout_seconds=timeout_seconds,
+        )
+        if int(result["exit_code"]) != 0:
+            stderr = str(result.get("stderr") or "").strip()
+            stdout = str(result.get("stdout") or "").strip()
+            detail = stderr or stdout or "unknown error"
+            command = " ".join(str(item) for item in result.get("command", ["python-playwright-cli", *args]))
+            raise RuntimeError(f"python playwright-cli command failed: {command}\n{detail}")
+        return result
 
     def _write_artifact(self, payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         artifact_dir = self._prepare_artifact_dir(context, "file-artifact-manager")
-        file_name = _slug(str(payload.get("file_name") or "artifact")) or "artifact"
-        extension = str(payload.get("extension") or "txt").lstrip(".")
-        target_path = artifact_dir / f"{file_name}.{extension}"
+        if payload.get("filename"):
+            filename = self._slug(str(payload.get("filename")))
+            if "." not in filename:
+                filename += ".txt"
+            path = artifact_dir / filename
+        else:
+            file_name = self._slug(str(payload.get("file_name") or "artifact"))
+            extension = str(payload.get("extension") or "txt").lstrip(".")
+            path = artifact_dir / f"{file_name}.{extension}"
 
         if "json_data" in payload:
-            target_path.write_text(
-                json.dumps(payload["json_data"], ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            path.write_text(json.dumps(payload["json_data"], ensure_ascii=False, indent=2), encoding="utf-8")
         else:
-            target_path.write_text(str(payload.get("content") or ""), encoding="utf-8")
-
+            path.write_text(str(payload.get("content") or ""), encoding="utf-8")
         return {
-            "summary": f"Persisted artifact to {target_path.name}.",
-            "artifact_path": str(target_path),
-            "artifacts": [{"type": "file", "path": str(target_path)}],
+            "status": "success",
+            "summary": f"Wrote artifact {path.name}.",
+            "artifact_path": str(path),
+            "artifacts": [{"type": "file", "path": str(path)}],
         }
 
-    def _prepare_artifact_dir(self, context: dict[str, Any], tool_key: str) -> Path:
-        session_id = _slug(str(context.get("session_id") or "session"))
-        turn_id = _slug(str(context.get("turn_id") or datetime.utcnow().strftime("%Y%m%d%H%M%S")))
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        artifact_dir = self._artifact_root / session_id / turn_id / f"{tool_key}_{timestamp}"
+    def _prepare_artifact_dir(self, context: dict[str, Any], category: str) -> Path:
+        session_id = self._slug(str(context.get("session_id") or "session"))
+        turn_id = self._slug(str(context.get("turn_id") or "turn"))
+        artifact_dir = self._artifact_root / session_id / turn_id / category
         artifact_dir.mkdir(parents=True, exist_ok=True)
         return artifact_dir
 
-    def _create_driver(self):
-        errors: list[str] = []
-        browser_name = (self._settings.browser_default_name or "chrome").lower()
-        for candidate in [browser_name, "chrome", "edge"]:
-            try:
-                if candidate == "chrome":
-                    options = webdriver.ChromeOptions()
-                    if self._settings.browser_headless:
-                        options.add_argument("--headless=new")
-                    options.add_argument(f"--window-size={self._settings.browser_window_width},{self._settings.browser_window_height}")
-                    options.add_argument("--disable-gpu")
-                    options.add_argument("--no-sandbox")
-                    return webdriver.Chrome(options=options)
-                if candidate == "edge":
-                    options = webdriver.EdgeOptions()
-                    if self._settings.browser_headless:
-                        options.add_argument("--headless=new")
-                    options.add_argument(f"--window-size={self._settings.browser_window_width},{self._settings.browser_window_height}")
-                    return webdriver.Edge(options=options)
-            except WebDriverException as exc:
-                errors.append(f"{candidate}: {exc}")
-        raise RuntimeError("Unable to start a Selenium browser driver. " + " | ".join(errors))
+    def _write_transcript(self, artifact_dir: Path, command_log: list[dict[str, Any]]) -> Path:
+        transcript_path = artifact_dir / "playwright_cli_transcript.json"
+        transcript_path.write_text(json.dumps(command_log, ensure_ascii=False, indent=2), encoding="utf-8")
+        return transcript_path
 
+    def _resolve_target_url(self, payload: dict[str, Any], context: dict[str, Any]) -> str:
+        candidates = [
+            payload.get("target_url"),
+            payload.get("url"),
+            context.get("target_url"),
+        ]
+        context_bundle = context.get("context_bundle")
+        if isinstance(context_bundle, dict):
+            candidates.append(context_bundle.get("target_url"))
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        match = re.search(r"https?://[^\s]+", str(context.get("user_message") or ""))
+        return match.group(0) if match else ""
 
-def _resolve_target_url(payload: dict[str, Any], context: dict[str, Any]) -> str:
-    for candidate in [
-        payload.get("target_url"),
-        payload.get("url"),
-        context.get("context_bundle", {}).get("target_url"),
-    ]:
-        if isinstance(candidate, str) and candidate.strip():
-            return candidate.strip()
-    match = re.search(r"https?://[^\s]+", str(context.get("user_message") or ""))
-    return match.group(0) if match else ""
+    def _normalize_actions(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        actions = payload.get("actions") or []
+        if not isinstance(actions, list):
+            return []
+        return [action for action in actions if isinstance(action, dict)]
 
+    def _playwright_open_args(self) -> list[str]:
+        browser = str(self._settings.browser_default_name or "chromium").strip().lower()
+        browser_map = {"edge": "msedge", "chrome": "chrome", "msedge": "msedge", "firefox": "firefox", "webkit": "webkit"}
+        args = [f"--browser={browser_map[browser]}"] if browser in browser_map else []
+        if not bool(self._settings.browser_headless):
+            args.append("--headed")
+        return args
 
-def _slug(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_").lower()
+    def _runtime_backend(self) -> str:
+        return f"{self._settings.browser_backend}:{self._settings.browser_default_name}"
+
+    def _playwright_session_name(self, context: dict[str, Any], tool_key: str) -> str:
+        session_id = self._slug(str(context.get("session_id") or "session"))
+        turn_id = self._slug(str(context.get("turn_id") or "turn"))
+        return self._slug(f"{session_id}-{turn_id}-{tool_key}")[:80]
+
+    def _slug(self, value: str) -> str:
+        slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
+        return slug[:96] or "item"
+
+    def _parse_json_if_possible(self, text: str) -> Any:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped
+
+    def _coerce_float(self, value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default

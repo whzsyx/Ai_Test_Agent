@@ -240,7 +240,7 @@ class ToolRegistry:
                             "objective": {"type": "string", "description": "What the browser automation should validate."},
                             "actions": {
                                 "type": "array",
-                                "description": "Optional explicit Selenium action list for the browser executor.",
+                                "description": "Optional explicit Playwright CLI action list for the browser executor.",
                                 "items": {
                                     "type": "object",
                                     "properties": {
@@ -275,9 +275,15 @@ class ToolRegistry:
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "description": "One of navigate, inspect, screenshot, evaluate_js, or run_actions.",
+                                "description": "One of navigate, inspect, screenshot, evaluate_js, run_actions, or command.",
                             },
                             "target_url": {"type": "string", "description": "The target page URL."},
+                            "command": {"type": "string", "description": "A playwright-cli style command, used when action=command."},
+                            "args": {
+                                "type": "array",
+                                "description": "A playwright-cli style argument list, used when action=command.",
+                                "items": {"type": "string"},
+                            },
                             "javascript": {"type": "string", "description": "JavaScript expression for evaluate_js."},
                             "label": {"type": "string", "description": "Optional screenshot or artifact label."},
                             "actions": {
@@ -304,6 +310,28 @@ class ToolRegistry:
                     tags=["ui", "browser", "automation"],
                 ),
                 handler_key="browser-control",
+            ),
+            "ui-page-explorer": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="ui-page-explorer",
+                    name="UI Page Explorer",
+                    description="Explore a UI entry page with the Python playwright-cli runtime and generate a page model / app map.",
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "target_url": {"type": "string", "description": "The UI entry page URL to explore."},
+                            "max_pages": {"type": "integer", "description": "Maximum pages to inspect for the app map."},
+                            "same_origin_only": {"type": "boolean", "description": "Only follow links on the same origin."},
+                        },
+                        "required": ["target_url"],
+                    },
+                    supports_streaming=True,
+                    output_schema={"app_map": "object", "artifacts": "array"},
+                    tags=["ui", "exploration", "playwright", "app-map"],
+                ),
+                handler_key="ui-page-explorer",
             ),
             "dom-inspector": ToolModule(
                 descriptor=ToolDescriptor(

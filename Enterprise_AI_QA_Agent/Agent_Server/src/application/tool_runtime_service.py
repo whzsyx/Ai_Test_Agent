@@ -14,6 +14,7 @@ from src.application.memory_runtime_service import MemoryRuntimeService
 from src.application.mcp_runtime_service import MCPRuntimeService
 from src.application.tool_job_service import ToolJobService
 from src.application.transcript_hygiene_service import TranscriptHygieneService
+from src.application.ui_exploration_service import UIExplorationService
 from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.runtime.store import SessionStore
@@ -57,6 +58,11 @@ class ToolRuntimeService:
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
+        self._ui_exploration_service = (
+            UIExplorationService(settings, mcp_runtime_service)
+            if settings is not None and mcp_runtime_service is not None
+            else None
+        )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
             "subagent-dispatch": self._run_subagent_dispatch,
@@ -65,6 +71,7 @@ class ToolRuntimeService:
             "session-timeline": self._run_session_timeline,
             "observation-search": self._run_observation_search,
             "test-case-generator": self._run_test_case_generator,
+            "ui-page-explorer": self._run_ui_page_explorer,
             "dom-inspector": self._run_dom_inspector,
             "browser-automation": self._run_browser_automation,
             "browser-control": self._run_browser_control,
@@ -707,6 +714,15 @@ class ToolRuntimeService:
             arguments,
             asdict(context),
         )
+
+    async def _run_ui_page_explorer(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        if self._ui_exploration_service is None:
+            return {"status": "failed", "error": "UI exploration service is not configured."}
+        return await self._ui_exploration_service.explore(arguments, context)
 
     async def _run_browser_automation(
         self,

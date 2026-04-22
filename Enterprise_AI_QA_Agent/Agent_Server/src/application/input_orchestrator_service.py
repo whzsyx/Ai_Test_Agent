@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from uuid import uuid4
 
 from src.domain.models import SessionRecord
+from src.application.test_direction_service import TestDirectionService
+from src.application.test_router_service import TestRouterService
 from src.schemas.session import (
     ExecutionRequest,
     InputAttachment,
@@ -16,6 +18,10 @@ from src.schemas.session import (
 
 
 class InputOrchestratorService:
+    def __init__(self) -> None:
+        self._test_direction_service = TestDirectionService()
+        self._test_router_service = TestRouterService()
+
     def orchestrate(self, session: SessionRecord, payload: SendMessageRequest) -> ExecutionRequest:
         raw_content = payload.content or ""
         content = raw_content.strip()
@@ -62,6 +68,14 @@ class InputOrchestratorService:
 
         normalized_input = " ".join(content.split())
         skill_keys = list(dict.fromkeys(payload.skill_keys))
+        test_task_state = self._test_direction_service.classify(
+            message=normalized_input,
+            context=payload.context,
+        )
+        test_route = self._test_router_service.route(test_task_state)
+        for skill_key in test_task_state.recommended_skills:
+            if skill_key not in skill_keys:
+                skill_keys.append(skill_key)
         input_envelope = InputEnvelope(
             raw_content=raw_content,
             normalized_content=normalized_input,
@@ -88,6 +102,15 @@ class InputOrchestratorService:
             session=session,
             routing_decision=routing_decision,
         )
+        if test_task_state.is_test_task:
+            for item in [
+                "test_direction_service",
+                "test_router_service",
+                f"test_direction:{test_task_state.direction}",
+                f"test_harness:{test_route.get('harness', 'base_conversation')}",
+            ]:
+                if item not in harness_flags:
+                    harness_flags.append(item)
         input_summary = self._build_input_summary(
             envelope=input_envelope,
             routing_decision=routing_decision,
@@ -97,10 +120,25 @@ class InputOrchestratorService:
             **payload.context,
             "input_envelope": input_envelope.model_dump(mode="python"),
             "input_routing": routing_decision.model_dump(mode="python"),
+            "test_task_state": {
+                "is_test_task": test_task_state.is_test_task,
+                "direction": test_task_state.direction,
+                "confidence": test_task_state.confidence,
+                "needs_direction_selection": test_task_state.needs_direction_selection,
+                "reasons": test_task_state.reasons,
+                "recommended_skills": test_task_state.recommended_skills,
+            },
+            "test_route": test_route,
             "attachments": [attachment.model_dump(mode="python") for attachment in attachments],
             "hook_results": [result.model_dump(mode="python") for result in hook_results],
             "harness_flags": harness_flags,
         }
+        requested_agent_key = payload.agent_key or session.selected_agent
+        routed_test_agent_key = test_route.get("agent_key") if test_task_state.is_test_task else ""
+        if routed_test_agent_key and (not requested_agent_key or requested_agent_key in {"auto", "coordinator"}):
+            resolved_agent_key = routed_test_agent_key
+        else:
+            resolved_agent_key = requested_agent_key
         orchestration_meta = {
             "message_kind": message_kind.value,
             "submit_mode": payload.submit_mode,
@@ -113,6 +151,8 @@ class InputOrchestratorService:
             "queue_behavior": routing_decision.queue_behavior,
             "interrupt_policy": routing_decision.interrupt_policy,
             "source": payload.source,
+            "test_direction": test_task_state.direction,
+            "test_harness": test_route.get("harness", "base_conversation"),
         }
 
         return ExecutionRequest(
@@ -120,7 +160,7 @@ class InputOrchestratorService:
             session_id=session.id,
             user_message=content,
             normalized_input=normalized_input,
-            agent_key=payload.agent_key or session.selected_agent,
+            agent_key=resolved_agent_key,
             model_key=payload.model_key or session.preferred_model,
             skill_keys=skill_keys,
             attachments=attachments,

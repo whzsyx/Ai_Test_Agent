@@ -8,8 +8,8 @@ const appStore = useAppStore();
 const navItems = [
   { to: "/home", icon: "fa-house", title: "首页（会话界面）" },
   { to: "/taskpool", icon: "fa-list-check", title: "任务池" },
-  { to: "/knowledge", icon: "fa-database", title: "知识库（RAG）" },
-  { to: "/tools", icon: "fa-toolbox", title: "Skills 与工具" },
+  { to: "/knowledge", icon: "fa-database", title: "知识库" },
+  { to: "/tools", icon: "fa-toolbox", title: "工具库" },
   { to: "/reports", icon: "fa-file-contract", title: "综合评估报告" },
 ];
 

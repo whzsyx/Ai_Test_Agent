@@ -40,6 +40,7 @@ class PromptAssemblyService:
         session_mode = str(state.get("session_mode") or "normal")
         runtime_mode = str(state.get("runtime_mode") or "interactive")
         resolved_skills = list(state.get("resolved_skill_keys") or [])
+        context_bundle = dict(state.get("context_bundle") or {})
         sections = [
             PromptSection(
                 key="identity",
@@ -113,6 +114,23 @@ class PromptAssemblyService:
                     metadata={"available_agent_keys": list(available_agent_keys)},
                 )
             )
+        elif selected_agent_key == "ui-executor":
+            sections.append(
+                PromptSection(
+                    key="ui_executor_contract",
+                    title="UI Executor Contract",
+                    source="prompt_assembly.ui_executor",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=(
+                        "You are the UI Test Agent.\n"
+                        "- For UI Access Bootstrap, Page Exploration, Page Modeling, or App Map requests, call `ui-page-explorer` first.\n"
+                        "- Use `browser-control` only for explicit single playwright-cli style commands such as snapshot, screenshot, eval, or close.\n"
+                        "- Use `browser-automation` for ordered click/fill/type/press/wait flows.\n"
+                        "- Return artifact paths for screenshots, DOM snapshots, transcripts, and app_map.json when available."
+                    ),
+                )
+            )
 
         skill_blocks = list(state.get("skill_prompt_blocks") or [])
         if skill_blocks:
@@ -125,6 +143,34 @@ class PromptAssemblyService:
                     priority=60,
                     content="\n".join(skill_blocks),
                     metadata={"resolved_skill_keys": resolved_skills},
+                )
+            )
+
+        available_skills = [
+            item for item in context_bundle.get("available_skills", [])
+            if isinstance(item, dict)
+        ]
+        if available_skills:
+            skill_lines = []
+            for item in available_skills:
+                key = str(item.get("key") or "").strip()
+                name = str(item.get("name") or key).strip()
+                description = str(item.get("description") or item.get("summary") or "").strip()
+                tags = ", ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip())
+                skill_lines.append(f"- {key}: {name} - {description} (tags: {tags or 'general'})")
+            sections.append(
+                PromptSection(
+                    key="available_skills_catalog",
+                    title="Available Skills Catalog",
+                    source="skills.registry",
+                    cache_scope="dynamic",
+                    priority=65,
+                    content=(
+                        "These are the registered skills available to the system. "
+                        "If the user asks what skills are available, answer from this catalog.\n"
+                        + "\n".join(skill_lines)
+                    ),
+                    metadata={"skill_count": len(skill_lines)},
                 )
             )
 

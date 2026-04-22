@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     artifact_root_dir: str = "data/artifacts"
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90
-    browser_backend: str = "selenium"
-    browser_default_name: str = "chrome"
+    browser_backend: str = "playwright-cli"
+    browser_default_name: str = "chromium"
     browser_headless: bool = True
     browser_window_width: int = 1440
     browser_window_height: int = 960
