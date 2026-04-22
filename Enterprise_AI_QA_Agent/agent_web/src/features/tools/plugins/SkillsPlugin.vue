@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NModal } from "naive-ui";
+import { NModal, NDrawer } from "naive-ui";
 import { onMounted, ref } from "vue";
 import { api } from "../../../services/api";
 import type { SkillDescriptor } from "../../../types";
@@ -15,6 +15,7 @@ const editorKey = ref("");
 const editorContent = ref("");
 const deleteConfirmOpen = ref(false);
 const skillPendingDelete = ref<SkillDescriptor | null>(null);
+const editorOpen = ref(false);
 
 async function loadSkills() {
   loading.value = true;
@@ -33,6 +34,14 @@ async function selectSkill(skill: SkillDescriptor) {
   selectedSkill.value = await api.getSkill(skill.key);
   editorKey.value = selectedSkill.value.key;
   editorContent.value = selectedSkill.value.content || "";
+  editorOpen.value = true;
+}
+
+function openNewSkillEditor() {
+  selectedSkill.value = null;
+  editorKey.value = "";
+  editorContent.value = "";
+  editorOpen.value = true;
 }
 
 async function saveSkill() {
@@ -152,24 +161,40 @@ onMounted(loadSkills);
         </article>
       </div>
 
-      <aside class="editor-panel">
-        <div class="editor-head">
-          <h4>Skill 编辑器</h4>
-        </div>
-        <input v-model="editorKey" placeholder="skill-key">
-        <textarea
-          v-model="editorContent"
-          spellcheck="false"
-          placeholder="---
-name: my-skill
-description: What this skill does.
----
+      <NDrawer v-model:show="editorOpen" :width="500" placement="right">
+        <aside class="editor-panel">
+          <div class="editor-head">
+            <h4>Skill 编辑器</h4>
+            <button class="icon-btn" @click="editorOpen = false"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="editor-body">
+            <label class="editor-field">
+              安装名
+              <input v-model="editorKey" placeholder="例如 playwright-cli">
+            </label>
+            <label class="editor-field editor-field-grow">
+              描述与内容 (Markdown)
+              <textarea
+                v-model="editorContent"
+                spellcheck="false"
+                placeholder="---
+                name: my-skill
+                description: What this skill does.
+                ---
 
-# My Skill
-"
-        />
-        <button :disabled="saving" @click="saveSkill">{{ saving ? "保存中..." : "保存 / 创建" }}</button>
-      </aside>
+                # My Skill
+                "
+              />
+            </label>
+          </div>
+          <div class="editor-actions">
+            <button class="secondary-btn" @click="editorOpen = false" style="margin-right: 12px;">取消</button>
+            <button :disabled="saving" class="primary-btn" @click="saveSkill">
+              {{ saving ? "保存中..." : "保存 / 创建" }}
+            </button>
+          </div>
+        </aside>
+      </NDrawer>
     </div>
 
     <NModal
@@ -228,17 +253,110 @@ description: What this skill does.
 }
 
 .editor-panel {
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 16px;
-  padding: 14px;
-  background: #ffffff;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+.editor-head {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.icon-btn:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.editor-head h4 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.editor-body {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.editor-field-grow {
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-field input,
+.editor-field textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface);
+  font-weight: normal;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.editor-field input:focus,
+.editor-field textarea:focus {
+  border-color: var(--text);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--text);
+}
+
+.editor-field textarea {
+  flex: 1;
+  min-height: 0;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  line-height: 1.45;
+  font-size: 13px;
+  resize: none;
+}
+
+.editor-actions {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .skills-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.42fr);
-  gap: 18px;
+  display: block;
 }
 
 .skills-grid {
@@ -352,42 +470,7 @@ description: What this skill does.
   white-space: nowrap;
 }
 
-.editor-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
 
-.editor-head h4 {
-  margin: 0;
-  color: var(--text);
-}
-
-.editor-panel input,
-.editor-panel textarea {
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  color: var(--text);
-  background: var(--surface-soft);
-}
-
-.editor-panel input:focus,
-.editor-panel textarea:focus {
-  border-color: var(--text);
-  background: var(--surface);
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.editor-panel textarea {
-  min-height: 420px;
-  margin: 10px 0;
-  font-family: "JetBrains Mono", "Cascadia Code", monospace;
-  line-height: 1.45;
-}
 
 .notice {
   margin-bottom: 12px;
@@ -405,23 +488,7 @@ description: What this skill does.
   background: rgba(20, 83, 45, 0.35);
 }
 
-.editor-panel > button {
-  border: 0;
-  border-radius: 10px;
-  padding: 10px 14px;
-  color: var(--surface);
-  background: var(--text);
-  cursor: pointer;
-}
 
-.editor-panel > button:hover {
-  opacity: 0.88;
-}
-
-.editor-panel > button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
 
 :deep(.skill-confirm-modal) {
   width: min(420px, calc(100vw - 40px));

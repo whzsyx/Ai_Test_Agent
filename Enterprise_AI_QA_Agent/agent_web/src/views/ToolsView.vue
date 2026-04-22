@@ -216,7 +216,7 @@ function fileToBase64(file: File): Promise<string> {
 
         <div class="marketplace-source-tabs">
           <button :class="{ active: marketplaceSource === 'anthropic' }" @click="switchMarketplaceSource('anthropic')">
-            Anthropic Official
+            Anthropic
           </button>
           <button :class="{ active: marketplaceSource === 'skillsmp' }" @click="switchMarketplaceSource('skillsmp')">
             SkillsMP
@@ -257,29 +257,42 @@ function fileToBase64(file: File): Promise<string> {
 
           <aside class="marketplace-preview">
             <template v-if="selectedMarketplaceSkill">
-              <h4>{{ selectedMarketplaceSkill.name || selectedMarketplaceSkill.id }}</h4>
-              <p>{{ selectedMarketplaceSkill.description || "暂无描述" }}</p>
-              <div class="tag-row">
-                <span v-for="tag in selectedMarketplaceSkill.tags || []" :key="tag">{{ tag }}</span>
+              <div class="preview-header">
+                <h4>{{ selectedMarketplaceSkill.name || selectedMarketplaceSkill.id }}</h4>
+                <div class="tag-row" v-if="selectedMarketplaceSkill.tags?.length">
+                  <span v-for="tag in selectedMarketplaceSkill.tags" :key="tag">{{ tag }}</span>
+                </div>
               </div>
-              <label>
-                安装名
-                <input v-model="marketplaceInstallKey" :placeholder="selectedMarketplaceSkill.key || selectedMarketplaceSkill.id">
-              </label>
-              <label class="check-row">
-                <input v-model="marketplaceOverwrite" type="checkbox">
-                覆盖同名 skill
-              </label>
-              <button
-                class="primary-btn"
-                :disabled="marketplaceInstallingId === selectedMarketplaceSkill.id"
-                @click="installMarketplaceSkill(selectedMarketplaceSkill)"
-              >
-                {{ marketplaceInstallingId === selectedMarketplaceSkill.id ? "安装中..." : "安装 Skill" }}
-              </button>
-              <pre v-if="selectedMarketplaceSkill.content">{{ selectedMarketplaceSkill.content }}</pre>
+              
+              <div class="preview-scroll-area">
+                <p class="preview-desc">{{ selectedMarketplaceSkill.description || "暂无描述" }}</p>
+                <pre v-if="selectedMarketplaceSkill.content">{{ selectedMarketplaceSkill.content }}</pre>
+              </div>
+
+              <div class="preview-actions">
+                <label class="install-name-field">
+                  安装名
+                  <input v-model="marketplaceInstallKey" :placeholder="selectedMarketplaceSkill.key || selectedMarketplaceSkill.id">
+                </label>
+                <div class="preview-actions-row">
+                  <label class="check-row">
+                    <input v-model="marketplaceOverwrite" type="checkbox">
+                    覆盖同名 skill
+                  </label>
+                  <button
+                    class="primary-btn"
+                    :disabled="marketplaceInstallingId === selectedMarketplaceSkill.id"
+                    @click="installMarketplaceSkill(selectedMarketplaceSkill)"
+                  >
+                    {{ marketplaceInstallingId === selectedMarketplaceSkill.id ? "安装中..." : "安装 Skill" }}
+                  </button>
+                </div>
+              </div>
             </template>
-            <div v-else class="marketplace-empty">选择一个搜索结果查看详情。</div>
+            <div v-else class="marketplace-empty">
+              <i class="fa-solid fa-cube" style="font-size: 32px; margin-bottom: 12px; opacity: 0.5;"></i>
+              <div>选择一个搜索结果查看详情</div>
+            </div>
           </aside>
         </div>
       </section>
@@ -484,9 +497,9 @@ function fileToBase64(file: File): Promise<string> {
 
 .marketplace-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.45fr);
-  gap: 14px;
-  padding: 18px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 1fr);
+  gap: 20px;
+  padding: 20px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -498,67 +511,154 @@ function fileToBase64(file: File): Promise<string> {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-right: 4px;
+  gap: 12px;
+  padding-right: 8px;
 }
 
 .marketplace-result {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   text-align: left;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--surface);
   cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-.marketplace-result:hover,
+.marketplace-result:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
+}
+
 .marketplace-result.active {
   border-color: var(--text);
-  box-shadow: var(--shadow-soft);
+  box-shadow: 0 0 0 1px var(--text);
+}
+
+.marketplace-result span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.marketplace-result small {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 .marketplace-result span,
 .marketplace-result small,
-.marketplace-preview p,
 .marketplace-empty {
   color: var(--muted);
 }
 
+.marketplace-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+}
+
 .marketplace-preview {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   max-height: 100%;
-  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 16px;
   background: var(--surface-soft);
+  overflow: hidden;
 }
 
-.marketplace-preview h4 {
-  margin: 0 0 8px;
+.preview-header {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.marketplace-preview label,
+.preview-header h4 {
+  font-size: 18px;
+  margin: 0;
+  color: var(--text);
+}
+
+.preview-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.preview-desc {
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  color: var(--muted);
+}
+
+.preview-scroll-area pre {
+  margin: 16px 0 0;
+  padding: 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.preview-actions {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.install-name-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.install-name-field input {
+  flex: 1;
+}
+
 .upload-field {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 14px 0;
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text);
 }
 
-.marketplace-preview pre {
-  max-height: 220px;
-  overflow: auto;
-  margin: 14px 0 0;
-  padding: 12px;
-  border-radius: 10px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
+.preview-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .tag-row {
@@ -615,7 +715,16 @@ function fileToBase64(file: File): Promise<string> {
   display: none;
 }
 
-.upload-field,
+.upload-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 16px 18px;
+}
+
 .upload-modal .check-row,
 .modal-notice,
 .modal-actions {
@@ -659,3 +768,4 @@ function fileToBase64(file: File): Promise<string> {
   }
 }
 </style>
+
