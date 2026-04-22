@@ -79,6 +79,52 @@ export interface SkillInstallRequest {
   overwrite?: boolean;
 }
 
+export interface SkillUploadRequest {
+  filename: string;
+  content_base64: string;
+  key?: string | null;
+  overwrite?: boolean;
+}
+
+export type SkillMarketplaceSource = "anthropic" | "skillsmp";
+
+export interface SkillMarketplaceItem {
+  source: SkillMarketplaceSource | string;
+  id: string;
+  key?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  url?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SkillMarketplaceSearchResponse {
+  source: SkillMarketplaceSource | string;
+  query: string;
+  items: SkillMarketplaceItem[];
+  count: number;
+}
+
+export interface SkillMarketplaceInstallRequest {
+  source: SkillMarketplaceSource | string;
+  skill_id: string;
+  url?: string | null;
+  key?: string | null;
+  overwrite?: boolean;
+}
+
+export interface SkillBulkInstallResponse {
+  ok: boolean;
+  status: string;
+  summary: string;
+  installed_count: number;
+  failed_count: number;
+  items: SkillDescriptor[];
+  failed: Array<{ key: string; source: string; error: string }>;
+}
+
 export interface SkillUpsertRequest {
   content: string;
 }

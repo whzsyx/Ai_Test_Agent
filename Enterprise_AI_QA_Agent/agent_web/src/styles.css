@@ -1842,6 +1842,47 @@ textarea {
   font-size: 13px;
 }
 
+.conversation-entry-markdown hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-table-shell {
+  max-width: 100%;
+  margin: 0 0 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.assistant-table-shell table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.assistant-table-shell th,
+.assistant-table-shell td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.assistant-table-shell th {
+  color: var(--text);
+  background: var(--surface-muted);
+  font-weight: 700;
+}
+
+.assistant-table-shell tr:last-child td {
+  border-bottom: 0;
+}
+
 .assistant-code-block {
   margin: 0 0 14px;
   padding: 14px;

@@ -18,6 +18,21 @@ class SkillInstallRequest(BaseModel):
     overwrite: bool = False
 
 
+class SkillUploadRequest(BaseModel):
+    filename: str = Field(..., description="Original uploaded filename.")
+    content_base64: str = Field(..., description="Base64 encoded SKILL.md or zip bytes.")
+    key: str | None = Field(default=None, description="Optional installed skill folder name.")
+    overwrite: bool = False
+
+
+class SkillMarketplaceInstallRequest(BaseModel):
+    source: str = Field(..., description="Marketplace source: anthropic or skillsmp.")
+    skill_id: str = Field(..., description="Marketplace skill id/slug.")
+    url: str | None = Field(default=None, description="Optional downloadable URL for SkillsMP results.")
+    key: str | None = Field(default=None, description="Optional installed skill folder name.")
+    overwrite: bool = False
+
+
 @router.get("/framework")
 async def framework_summary(request: Request):
     return request.app.state.registry_service.framework_summary()
@@ -46,6 +61,51 @@ async def list_model_configs(request: Request):
 @router.get("/skills")
 async def list_skills(request: Request):
     return request.app.state.skill_management_service.list_skills()
+
+
+@router.get("/skills/marketplaces")
+async def list_skill_marketplaces(request: Request):
+    return request.app.state.skill_marketplace_service.list_marketplaces()
+
+
+@router.get("/skills/marketplaces/search")
+async def search_skill_marketplace(
+    source: str,
+    request: Request,
+    q: str = "",
+    limit: int = 20,
+):
+    try:
+        return request.app.state.skill_marketplace_service.search(source=source, query=q, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/skills/marketplaces/preview")
+async def preview_skill_marketplace(
+    source: str,
+    skill_id: str,
+    request: Request,
+    url: str | None = None,
+):
+    try:
+        return request.app.state.skill_marketplace_service.preview(source=source, skill_id=skill_id, url=url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/skills/marketplaces/install")
+async def install_skill_marketplace(payload: SkillMarketplaceInstallRequest, request: Request):
+    try:
+        return request.app.state.skill_marketplace_service.install(
+            source=payload.source,
+            skill_id=payload.skill_id,
+            url=payload.url,
+            key=payload.key,
+            overwrite=payload.overwrite,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/skills/{skill_key}")
@@ -88,6 +148,19 @@ async def install_skill(payload: SkillInstallRequest, request: Request):
                 overwrite=payload.overwrite,
             )
         raise ValueError("Either source_path or url is required.")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/skills/upload")
+async def upload_skill(payload: SkillUploadRequest, request: Request):
+    try:
+        return request.app.state.skill_management_service.install_from_upload(
+            filename=payload.filename,
+            content_base64=payload.content_base64,
+            key=payload.key,
+            overwrite=payload.overwrite,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

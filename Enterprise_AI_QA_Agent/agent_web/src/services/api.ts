@@ -20,7 +20,11 @@ import type {
   ToolJobDetail,
   ToolJobRecord,
   SkillDescriptor,
+  SkillBulkInstallResponse,
   SkillInstallRequest,
+  SkillMarketplaceInstallRequest,
+  SkillMarketplaceSearchResponse,
+  SkillUploadRequest,
   SkillUpsertRequest,
   SessionVerificationResponse,
 } from "../types";
@@ -66,6 +70,22 @@ export const api = {
   },
   installSkill(payload: SkillInstallRequest): Promise<SkillDescriptor> {
     return request("/api/v1/registry/skills/install", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  uploadSkill(payload: SkillUploadRequest): Promise<SkillDescriptor | SkillBulkInstallResponse> {
+    return request("/api/v1/registry/skills/upload", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  searchSkillMarketplace(source: string, q: string, limit = 20): Promise<SkillMarketplaceSearchResponse> {
+    const params = new URLSearchParams({ source, q, limit: String(limit) });
+    return request(`/api/v1/registry/skills/marketplaces/search?${params.toString()}`);
+  },
+  installMarketplaceSkill(payload: SkillMarketplaceInstallRequest): Promise<SkillDescriptor | SkillBulkInstallResponse> {
+    return request("/api/v1/registry/skills/marketplaces/install", {
       method: "POST",
       body: JSON.stringify(payload),
     });

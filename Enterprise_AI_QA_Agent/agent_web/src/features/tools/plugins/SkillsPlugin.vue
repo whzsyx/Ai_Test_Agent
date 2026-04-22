@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { NModal } from "naive-ui";
 import { onMounted, ref } from "vue";
 import { api } from "../../../services/api";
 import type { SkillDescriptor } from "../../../types";
@@ -12,6 +13,8 @@ const errorMessage = ref("");
 const successMessage = ref("");
 const editorKey = ref("");
 const editorContent = ref("");
+const deleteConfirmOpen = ref(false);
+const skillPendingDelete = ref<SkillDescriptor | null>(null);
 
 async function loadSkills() {
   loading.value = true;
@@ -52,13 +55,27 @@ async function saveSkill() {
   }
 }
 
-async function deleteSkill(skill: SkillDescriptor, event: MouseEvent) {
+function requestDeleteSkill(skill: SkillDescriptor, event: MouseEvent) {
   event.stopPropagation();
   if (!skill.installed) {
     errorMessage.value = "内置回退 Skill 不能删除";
     return;
   }
-  if (!window.confirm(`确认删除 skill：${skill.key}？`)) {
+  skillPendingDelete.value = skill;
+  deleteConfirmOpen.value = true;
+}
+
+function closeDeleteConfirm() {
+  if (deletingSkillKey.value) {
+    return;
+  }
+  deleteConfirmOpen.value = false;
+  skillPendingDelete.value = null;
+}
+
+async function confirmDeleteSkill() {
+  const skill = skillPendingDelete.value;
+  if (!skill) {
     return;
   }
   deletingSkillKey.value = skill.key;
@@ -73,6 +90,8 @@ async function deleteSkill(skill: SkillDescriptor, event: MouseEvent) {
       editorContent.value = "";
     }
     await loadSkills();
+    deleteConfirmOpen.value = false;
+    skillPendingDelete.value = null;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "删除 Skill 失败";
   } finally {
@@ -126,7 +145,7 @@ onMounted(loadSkills);
             :disabled="deletingSkillKey === skill.key"
             :aria-label="`删除 ${skill.key}`"
             :title="`删除 ${skill.key}`"
-            @click="deleteSkill(skill, $event)"
+            @click="requestDeleteSkill(skill, $event)"
           >
             <i class="fa-regular fa-trash-can"></i>
           </button>
@@ -152,6 +171,37 @@ description: What this skill does.
         <button :disabled="saving" @click="saveSkill">{{ saving ? "保存中..." : "保存 / 创建" }}</button>
       </aside>
     </div>
+
+    <NModal
+      v-model:show="deleteConfirmOpen"
+      display-directive="show"
+      class="skill-confirm-modal"
+      :mask-closable="!deletingSkillKey"
+      @esc="closeDeleteConfirm"
+    >
+      <div class="confirm-card">
+        <button class="confirm-close" :disabled="Boolean(deletingSkillKey)" @click="closeDeleteConfirm">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+        <div class="confirm-copy">
+          <h3>删除 Skill</h3>
+          <p class="confirm-text">
+            确认删除 <strong>{{ skillPendingDelete?.key }}</strong>？
+          </p>
+          <p class="confirm-hint">
+            将移除 Agent_Server/src/SKILLS 下的目录，并立即刷新动态注册列表。
+          </p>
+        </div>
+        <div class="confirm-actions">
+          <button class="confirm-secondary" :disabled="Boolean(deletingSkillKey)" @click="closeDeleteConfirm">
+            取消
+          </button>
+          <button class="confirm-primary" :disabled="Boolean(deletingSkillKey)" @click="confirmDeleteSkill">
+            {{ deletingSkillKey ? "删除中..." : "确认删除" }}
+          </button>
+        </div>
+      </div>
+    </NModal>
   </div>
 </template>
 
@@ -369,6 +419,99 @@ description: What this skill does.
 }
 
 .editor-panel > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+:deep(.skill-confirm-modal) {
+  width: min(420px, calc(100vw - 40px));
+}
+
+.confirm-card {
+  position: relative;
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-panel);
+  border: 1px solid var(--border);
+  padding: 22px;
+}
+
+.confirm-close {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.confirm-close:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.confirm-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.confirm-copy h3 {
+  margin: 14px 0 8px;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.confirm-text {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+.confirm-hint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.confirm-primary,
+.confirm-secondary {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.confirm-primary {
+  color: var(--surface);
+  background: var(--text);
+  border-color: var(--text);
+}
+
+.confirm-secondary {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.confirm-primary:disabled,
+.confirm-secondary:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }

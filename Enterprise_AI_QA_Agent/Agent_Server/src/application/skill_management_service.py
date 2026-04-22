@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import shutil
 import urllib.request
+import urllib.parse
 import zipfile
+import base64
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -101,15 +103,14 @@ class SkillManagementService:
         if source.is_file() and source.suffix.lower() == ".zip":
             with TemporaryDirectory() as temp_dir:
                 with zipfile.ZipFile(source) as archive:
-                    archive.extractall(temp_dir)
-                extracted = self._find_skill_source(Path(temp_dir))
-                install_key = self._safe_key(key or extracted.name)
-                return self._copy_skill_dir(extracted, install_key, overwrite)
+                    self._safe_extract(archive, Path(temp_dir))
+                return self._install_extracted_skills(Path(temp_dir), key=key, overwrite=overwrite)
         raise ValueError("Source path must be a skill directory, SKILL.md file, or .zip archive.")
 
     def install_from_url(self, url: str, key: str | None = None, overwrite: bool = False) -> dict[str, Any]:
         if not url.startswith(("http://", "https://")):
             raise ValueError("Only http:// and https:// URLs are supported.")
+        url = self._normalize_github_skill_url(url)
         with TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "skill-download"
             with urllib.request.urlopen(url, timeout=30) as response:
@@ -118,12 +119,30 @@ class SkillManagementService:
                 zip_path = target.with_suffix(".zip")
                 zip_path.write_bytes(data)
                 with zipfile.ZipFile(zip_path) as archive:
-                    archive.extractall(target)
-                source = self._find_skill_source(target)
-                install_key = self._safe_key(key or source.name)
-                return self._copy_skill_dir(source, install_key, overwrite)
+                    self._safe_extract(archive, target)
+                return self._install_extracted_skills(target, key=key, overwrite=overwrite)
             content = data.decode("utf-8")
             install_key = self._safe_key(key or self._name_from_content(content) or "downloaded-skill")
+            return self.upsert_skill(install_key, content)
+
+    def install_from_upload(
+        self,
+        filename: str,
+        content_base64: str,
+        key: str | None = None,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        safe_name = Path(filename or "uploaded-skill").name
+        data = base64.b64decode(content_base64)
+        with TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / safe_name
+            target.write_bytes(data)
+            if safe_name.lower().endswith(".zip"):
+                with zipfile.ZipFile(target) as archive:
+                    self._safe_extract(archive, Path(temp_dir) / "extracted")
+                return self._install_extracted_skills(Path(temp_dir) / "extracted", key=key, overwrite=overwrite)
+            content = data.decode("utf-8")
+            install_key = self._safe_key(key or self._name_from_content(content) or Path(safe_name).stem)
             return self.upsert_skill(install_key, content)
 
     def _copy_skill_dir(self, source: Path, key: str, overwrite: bool) -> dict[str, Any]:
@@ -140,10 +159,42 @@ class SkillManagementService:
         return self.get_skill(key)
 
     def _find_skill_source(self, root: Path) -> Path:
-        candidates = [path.parent for path in root.rglob("SKILL.md")]
+        candidates = self._find_skill_sources(root)
         if not candidates:
             raise ValueError("Downloaded archive does not contain SKILL.md.")
-        return sorted(candidates, key=lambda item: len(item.parts))[0]
+        return candidates[0]
+
+    def _find_skill_sources(self, root: Path) -> list[Path]:
+        candidates = [path.parent for path in root.rglob("SKILL.md")]
+        unique = list(dict.fromkeys(candidates))
+        return sorted(unique, key=lambda item: (len(item.parts), str(item).lower()))
+
+    def _install_extracted_skills(self, root: Path, key: str | None, overwrite: bool) -> dict[str, Any]:
+        sources = self._find_skill_sources(root)
+        if not sources:
+            raise ValueError("Downloaded archive does not contain SKILL.md.")
+        if key and len(sources) > 1:
+            raise ValueError("Cannot use a single custom key when installing multiple skills from one archive.")
+        installed: list[dict[str, Any]] = []
+        failed: list[dict[str, str]] = []
+        for source in sources:
+            install_key = self._safe_key(key or source.name)
+            try:
+                installed.append(self._copy_skill_dir(source, install_key, overwrite))
+            except Exception as exc:
+                failed.append({"key": install_key, "source": str(source), "error": str(exc)})
+        if len(sources) == 1 and installed and not failed:
+            return installed[0]
+        self._skill_registry.reload()
+        return {
+            "ok": not failed,
+            "status": "completed" if not failed else "partial",
+            "summary": f"Installed {len(installed)} skill(s) from archive; {len(failed)} failed.",
+            "installed_count": len(installed),
+            "failed_count": len(failed),
+            "items": installed,
+            "failed": failed,
+        }
 
     def _list_references(self, skill_dir: Path) -> list[str]:
         references_dir = skill_dir / "references"
@@ -169,3 +220,28 @@ class SkillManagementService:
         target = path.resolve()
         if root != target and root not in target.parents:
             raise ValueError("Refusing to write outside Agent_Server/src/SKILLS.")
+
+    def _normalize_github_skill_url(self, url: str) -> str:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.netloc.lower() != "github.com":
+            return url
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return url
+        owner, repo = parts[0], parts[1]
+        if len(parts) >= 5 and parts[2] == "blob":
+            branch = parts[3]
+            file_path = "/".join(parts[4:])
+            return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{file_path}"
+        if len(parts) >= 4 and parts[2] == "tree":
+            branch = parts[3]
+            return f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
+        return f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+
+    def _safe_extract(self, archive: zipfile.ZipFile, target: Path) -> None:
+        root = target.resolve()
+        for member in archive.infolist():
+            destination = (target / member.filename).resolve()
+            if root != destination and root not in destination.parents:
+                raise ValueError("Refusing to extract archive entry outside target directory.")
+        archive.extractall(target)

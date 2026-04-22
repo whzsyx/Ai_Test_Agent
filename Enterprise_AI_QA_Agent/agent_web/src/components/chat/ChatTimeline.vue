@@ -266,6 +266,7 @@ function renderAssistantMarkdown(content: string) {
   let paragraph: string[] = [];
   let listItems: string[] = [];
   let listKind: "ul" | "ol" | null = null;
+  let tableRows: string[] = [];
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -280,18 +281,42 @@ function renderAssistantMarkdown(content: string) {
     listKind = null;
   };
 
+  const flushTable = () => {
+    if (!tableRows.length) return;
+    blocks.push(renderMarkdownTable(tableRows));
+    tableRows = [];
+  };
+
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) {
       flushParagraph();
       flushList();
+      flushTable();
       continue;
     }
 
     if (line.startsWith("__CODE_BLOCK_") && line.endsWith("__")) {
       flushParagraph();
       flushList();
+      flushTable();
       blocks.push(line);
+      continue;
+    }
+
+    if (isMarkdownTableRow(line)) {
+      flushParagraph();
+      flushList();
+      tableRows.push(line);
+      continue;
+    }
+
+    const horizontalRule = line.match(/^(-{3,}|\*{3,}|_{3,})$/);
+    if (horizontalRule) {
+      flushParagraph();
+      flushList();
+      flushTable();
+      blocks.push("<hr>");
       continue;
     }
 
@@ -299,6 +324,7 @@ function renderAssistantMarkdown(content: string) {
     if (heading) {
       flushParagraph();
       flushList();
+      flushTable();
       const level = heading[1].length;
       blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
       continue;
@@ -307,6 +333,7 @@ function renderAssistantMarkdown(content: string) {
     const ordered = line.match(/^\d+\.\s+(.*)$/);
     if (ordered) {
       flushParagraph();
+      flushTable();
       if (listKind && listKind !== "ol") flushList();
       listKind = "ol";
       listItems.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
@@ -316,6 +343,7 @@ function renderAssistantMarkdown(content: string) {
     const bullet = line.match(/^[-*]\s+(.*)$/);
     if (bullet) {
       flushParagraph();
+      flushTable();
       if (listKind && listKind !== "ul") flushList();
       listKind = "ul";
       listItems.push(`<li>${renderInlineMarkdown(bullet[1])}</li>`);
@@ -323,21 +351,58 @@ function renderAssistantMarkdown(content: string) {
     }
 
     if (listKind) flushList();
+    if (tableRows.length) flushTable();
     paragraph.push(line);
   }
 
   flushParagraph();
   flushList();
+  flushTable();
 
   return blocks
     .join("")
     .replace(/__CODE_BLOCK_(\d+)__/g, (_, index) => codeBlocks[Number(index)] || "");
 }
 
+function isMarkdownTableRow(line: string) {
+  return line.startsWith("|") && line.endsWith("|") && line.split("|").length >= 4;
+}
+
+function isMarkdownTableSeparator(line: string) {
+  const cells = splitMarkdownTableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+}
+
+function splitMarkdownTableCells(line: string) {
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderMarkdownTable(rows: string[]) {
+  if (rows.length < 2 || !isMarkdownTableSeparator(rows[1])) {
+    return `<p>${rows.map((row) => renderInlineMarkdown(row)).join("<br>")}</p>`;
+  }
+
+  const headers = splitMarkdownTableCells(rows[0]);
+  const bodyRows = rows.slice(2).filter((row) => !isMarkdownTableSeparator(row));
+  const headHtml = headers.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("");
+  const bodyHtml = bodyRows
+    .map((row) => {
+      const cells = splitMarkdownTableCells(row);
+      return `<tr>${cells.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`;
+    })
+    .join("");
+
+  return `<div class="assistant-table-shell"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
+}
+
 function renderInlineMarkdown(content: string) {
   const inlineCodes: string[] = [];
   let html = escapeHtml(content).replace(/`([^`]+)`/g, (_, code) => {
-    const token = `__INLINE_CODE_${inlineCodes.length}__`;
+    const token = `@@IC${inlineCodes.length}@@`;
     inlineCodes.push(`<code>${escapeHtml(String(code))}</code>`);
     return token;
   });
@@ -348,7 +413,7 @@ function renderInlineMarkdown(content: string) {
   html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
   html = html.replace(/_(.+?)_/g, "<em>$1</em>");
 
-  return html.replace(/__INLINE_CODE_(\d+)__/g, (_, index) => inlineCodes[Number(index)] || "");
+  return html.replace(/@@IC(\d+)@@/g, (_, index) => inlineCodes[Number(index)] || "");
 }
 
 function escapeHtml(content: string) {

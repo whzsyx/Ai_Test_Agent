@@ -1,13 +1,165 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { toolsPlugins, type ToolsPluginDefinition, type ToolsPluginKey } from "../features/tools/plugins";
+import { api } from "../services/api";
+import { toolsPlugins, type ToolsPluginKey } from "../features/tools/plugins";
+import type { SkillMarketplaceItem, SkillMarketplaceSource } from "../types";
 
 const defaultPlugin = toolsPlugins[0];
 const activeTab = ref<ToolsPluginKey>(defaultPlugin.key);
+const skillsRefreshKey = ref(0);
+
+const marketplaceOpen = ref(false);
+const marketplaceSource = ref<SkillMarketplaceSource>("anthropic");
+const marketplaceQuery = ref("");
+const marketplaceResults = ref<SkillMarketplaceItem[]>([]);
+const selectedMarketplaceSkill = ref<SkillMarketplaceItem | null>(null);
+const marketplaceLoading = ref(false);
+const marketplaceInstallingId = ref("");
+const marketplaceMessage = ref("");
+const marketplaceError = ref("");
+const marketplaceInstallKey = ref("");
+const marketplaceOverwrite = ref(false);
+
+const uploadOpen = ref(false);
+const uploadFile = ref<File | null>(null);
+const uploadKey = ref("");
+const uploadOverwrite = ref(false);
+const uploadLoading = ref(false);
+const uploadMessage = ref("");
+const uploadError = ref("");
 
 const activePlugin = computed(
   () => toolsPlugins.find((item) => item.key === activeTab.value) ?? defaultPlugin,
 );
+
+function installedSkillMessage(result: unknown) {
+  const item = result as { key?: string; installed_count?: number; failed_count?: number; summary?: string };
+  if (typeof item.installed_count === "number") {
+    return item.summary || `已安装 ${item.installed_count} 个 skill`;
+  }
+  return `已安装 ${item.key || "skill"}`;
+}
+
+function openMarketplace() {
+  marketplaceOpen.value = true;
+  marketplaceSource.value = "anthropic";
+  marketplaceQuery.value = "";
+  marketplaceResults.value = [];
+  selectedMarketplaceSkill.value = null;
+  marketplaceMessage.value = "";
+  marketplaceError.value = "";
+  marketplaceInstallKey.value = "";
+  marketplaceOverwrite.value = false;
+}
+
+function closeMarketplace() {
+  marketplaceOpen.value = false;
+}
+
+async function searchMarketplace() {
+  marketplaceLoading.value = true;
+  marketplaceError.value = "";
+  marketplaceMessage.value = "";
+  try {
+    const response = await api.searchSkillMarketplace(
+      marketplaceSource.value,
+      marketplaceQuery.value.trim(),
+      30,
+    );
+    marketplaceResults.value = response.items || [];
+    selectedMarketplaceSkill.value = marketplaceResults.value[0] ?? null;
+  } catch (error) {
+    marketplaceError.value = error instanceof Error ? error.message : "搜索技能失败";
+  } finally {
+    marketplaceLoading.value = false;
+  }
+}
+
+function switchMarketplaceSource(source: SkillMarketplaceSource) {
+  marketplaceSource.value = source;
+  marketplaceResults.value = [];
+  selectedMarketplaceSkill.value = null;
+  marketplaceError.value = "";
+  marketplaceMessage.value = "";
+}
+
+async function installMarketplaceSkill(skill: SkillMarketplaceItem) {
+  marketplaceInstallingId.value = skill.id;
+  marketplaceError.value = "";
+  marketplaceMessage.value = "";
+  try {
+    const installed = await api.installMarketplaceSkill({
+      source: marketplaceSource.value,
+      skill_id: skill.id,
+      url: skill.url || null,
+      key: marketplaceInstallKey.value.trim() || null,
+      overwrite: marketplaceOverwrite.value,
+    });
+    marketplaceMessage.value = installedSkillMessage(installed);
+    skillsRefreshKey.value += 1;
+  } catch (error) {
+    marketplaceError.value = error instanceof Error ? error.message : "安装技能失败";
+  } finally {
+    marketplaceInstallingId.value = "";
+  }
+}
+
+function openUpload() {
+  uploadOpen.value = true;
+  uploadFile.value = null;
+  uploadKey.value = "";
+  uploadOverwrite.value = false;
+  uploadMessage.value = "";
+  uploadError.value = "";
+}
+
+function closeUpload() {
+  uploadOpen.value = false;
+}
+
+function handleUploadFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  uploadFile.value = input.files?.[0] ?? null;
+  uploadError.value = "";
+  uploadMessage.value = "";
+}
+
+async function uploadSkillPackage() {
+  if (!uploadFile.value) {
+    uploadError.value = "请选择 SKILL.md 或 zip 技能包";
+    return;
+  }
+  uploadLoading.value = true;
+  uploadError.value = "";
+  uploadMessage.value = "";
+  try {
+    const contentBase64 = await fileToBase64(uploadFile.value);
+    const installed = await api.uploadSkill({
+      filename: uploadFile.value.name,
+      content_base64: contentBase64,
+      key: uploadKey.value.trim() || null,
+      overwrite: uploadOverwrite.value,
+    });
+    uploadMessage.value = installedSkillMessage(installed);
+    skillsRefreshKey.value += 1;
+  } catch (error) {
+    uploadError.value = error instanceof Error ? error.message : "上传技能包失败";
+  } finally {
+    uploadLoading.value = false;
+  }
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
 </script>
 
 <template>
@@ -19,8 +171,12 @@ const activePlugin = computed(
       </div>
       <div class="page-head-actions">
         <template v-if="activeTab === 'skills'">
-          <button class="secondary-btn"><i class="fa-brands fa-github"></i> Github 导入</button>
-          <button class="primary-btn"><i class="fa-solid fa-upload"></i> 上传技能包</button>
+          <button class="secondary-btn" @click="openMarketplace">
+            <i class="fa-brands fa-github"></i> Github 导入
+          </button>
+          <button class="primary-btn" @click="openUpload">
+            <i class="fa-solid fa-upload"></i> 上传技能包
+          </button>
         </template>
         <template v-else-if="activeTab === 'apidocs'">
           <button class="primary-btn"><i class="fa-solid fa-plus"></i> 添加文档源</button>
@@ -28,12 +184,11 @@ const activePlugin = computed(
       </div>
     </div>
 
-    <!-- 二级导航栏 -->
     <nav class="tools-secondary-nav">
-      <button 
-        v-for="plugin in toolsPlugins" 
+      <button
+        v-for="plugin in toolsPlugins"
         :key="plugin.key"
-        class="tools-tab-btn" 
+        class="tools-tab-btn"
         :class="{ active: activeTab === plugin.key }"
         @click="activeTab = plugin.key"
       >
@@ -42,9 +197,130 @@ const activePlugin = computed(
       </button>
     </nav>
 
-    <!-- Tab 内容区域 -->
     <div class="tools-content-area">
-      <component :is="activePlugin.component" />
+      <component
+        :is="activePlugin.component"
+        :key="activePlugin.key === 'skills' ? `skills-${skillsRefreshKey}` : activePlugin.key"
+      />
+    </div>
+
+    <div v-if="marketplaceOpen" class="tools-modal-backdrop" @click.self="closeMarketplace">
+      <section class="tools-modal marketplace-modal">
+        <header class="tools-modal-head">
+          <div>
+            <h3>导入 Skills</h3>
+            <p>从 Anthropic 官方仓库或 SkillsMP 搜索、下载并动态注册到 src/SKILLS。</p>
+          </div>
+          <button class="icon-btn" @click="closeMarketplace"><i class="fa-solid fa-xmark"></i></button>
+        </header>
+
+        <div class="marketplace-source-tabs">
+          <button :class="{ active: marketplaceSource === 'anthropic' }" @click="switchMarketplaceSource('anthropic')">
+            Anthropic Official
+          </button>
+          <button :class="{ active: marketplaceSource === 'skillsmp' }" @click="switchMarketplaceSource('skillsmp')">
+            SkillsMP
+          </button>
+        </div>
+
+        <div class="marketplace-search">
+          <input
+            v-model="marketplaceQuery"
+            placeholder="搜索 skill，例如 playwright、browser、pdf..."
+            @keydown.enter="searchMarketplace"
+          >
+          <button class="primary-btn" :disabled="marketplaceLoading" @click="searchMarketplace">
+            {{ marketplaceLoading ? "搜索中..." : "搜索" }}
+          </button>
+        </div>
+
+        <div v-if="marketplaceError" class="modal-notice error">{{ marketplaceError }}</div>
+        <div v-if="marketplaceMessage" class="modal-notice success">{{ marketplaceMessage }}</div>
+
+        <div class="marketplace-body">
+          <div class="marketplace-results">
+            <button
+              v-for="skill in marketplaceResults"
+              :key="`${skill.source}-${skill.id}`"
+              class="marketplace-result"
+              :class="{ active: selectedMarketplaceSkill?.id === skill.id }"
+              @click="selectedMarketplaceSkill = skill"
+            >
+              <strong>{{ skill.name || skill.id }}</strong>
+              <span>{{ skill.description || "暂无描述" }}</span>
+              <small>{{ skill.source }} / {{ skill.id }}</small>
+            </button>
+            <div v-if="!marketplaceLoading && !marketplaceResults.length" class="marketplace-empty">
+              输入关键词后搜索可安装的 Skills。
+            </div>
+          </div>
+
+          <aside class="marketplace-preview">
+            <template v-if="selectedMarketplaceSkill">
+              <h4>{{ selectedMarketplaceSkill.name || selectedMarketplaceSkill.id }}</h4>
+              <p>{{ selectedMarketplaceSkill.description || "暂无描述" }}</p>
+              <div class="tag-row">
+                <span v-for="tag in selectedMarketplaceSkill.tags || []" :key="tag">{{ tag }}</span>
+              </div>
+              <label>
+                安装名
+                <input v-model="marketplaceInstallKey" :placeholder="selectedMarketplaceSkill.key || selectedMarketplaceSkill.id">
+              </label>
+              <label class="check-row">
+                <input v-model="marketplaceOverwrite" type="checkbox">
+                覆盖同名 skill
+              </label>
+              <button
+                class="primary-btn"
+                :disabled="marketplaceInstallingId === selectedMarketplaceSkill.id"
+                @click="installMarketplaceSkill(selectedMarketplaceSkill)"
+              >
+                {{ marketplaceInstallingId === selectedMarketplaceSkill.id ? "安装中..." : "安装 Skill" }}
+              </button>
+              <pre v-if="selectedMarketplaceSkill.content">{{ selectedMarketplaceSkill.content }}</pre>
+            </template>
+            <div v-else class="marketplace-empty">选择一个搜索结果查看详情。</div>
+          </aside>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="uploadOpen" class="tools-modal-backdrop" @click.self="closeUpload">
+      <section class="tools-modal upload-modal">
+        <header class="tools-modal-head">
+          <div>
+            <h3>上传技能包</h3>
+            <p>支持单个 SKILL.md 或包含 SKILL.md 的 zip，安装后会立即动态注册。</p>
+          </div>
+          <button class="icon-btn" @click="closeUpload"><i class="fa-solid fa-xmark"></i></button>
+        </header>
+
+        <label class="upload-drop">
+          <i class="fa-solid fa-file-arrow-up"></i>
+          <strong>{{ uploadFile?.name || "选择 SKILL.md / zip 文件" }}</strong>
+          <span>文件会上传到后端并安装到 Agent_Server/src/SKILLS</span>
+          <input type="file" accept=".md,.zip" @change="handleUploadFile">
+        </label>
+
+        <label class="upload-field">
+          可选安装名
+          <input v-model="uploadKey" placeholder="例如 playwright-cli">
+        </label>
+        <label class="check-row">
+          <input v-model="uploadOverwrite" type="checkbox">
+          覆盖同名 skill
+        </label>
+
+        <div v-if="uploadError" class="modal-notice error">{{ uploadError }}</div>
+        <div v-if="uploadMessage" class="modal-notice success">{{ uploadMessage }}</div>
+
+        <div class="modal-actions">
+          <button class="secondary-btn" @click="closeUpload">取消</button>
+          <button class="primary-btn" :disabled="uploadLoading" @click="uploadSkillPackage">
+            {{ uploadLoading ? "上传中..." : "上传并安装" }}
+          </button>
+        </div>
+      </section>
     </div>
   </section>
 </template>
@@ -104,8 +380,8 @@ const activePlugin = computed(
 }
 
 .tools-tab-btn.active {
-  color: var(--blue);
-  border-bottom-color: var(--blue);
+  color: var(--text);
+  border-bottom-color: var(--text);
 }
 
 .tools-content-area {
@@ -113,161 +389,273 @@ const activePlugin = computed(
   overflow-y: auto;
 }
 
-.tools-tab-pane {
-  animation: fadeIn 0.3s ease;
+.tools-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(15, 23, 42, 0.24);
+  backdrop-filter: blur(3px);
 }
 
-.pane-header {
-  margin-bottom: 24px;
+.tools-modal {
+  width: min(1040px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
 }
 
-.pane-header .section-title {
-  margin: 0 0 8px;
+.marketplace-modal {
+  height: min(760px, 88vh);
+}
+
+.upload-modal {
+  width: min(560px, 94vw);
+  padding-bottom: 18px;
+}
+
+.tools-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tools-modal-head h3 {
+  margin: 0 0 6px;
   font-size: 18px;
 }
 
-.pane-header .head-desc {
+.tools-modal-head p {
   margin: 0;
-}
-
-.flex-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.api-docs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.api-doc-card {
-  display: flex;
-  gap: 16px;
-  padding: 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  transition: all 0.2s ease;
-}
-
-.api-doc-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-soft);
-}
-
-.api-doc-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex-shrink: 0;
-}
-
-.api-doc-icon.postman {
-  background: rgba(249, 115, 22, 0.1);
-  color: #f97316;
-}
-
-.api-doc-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.api-doc-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.api-doc-head h4 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.api-doc-content p {
-  margin: 0 0 12px 0;
-  font-size: 14px;
   color: var(--muted);
-  line-height: 1.5;
-}
-
-.api-doc-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.muted-divider {
-  color: var(--border-strong);
-  font-size: 12px;
-}
-
-.badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-}
-
-.badge-blue {
-  background: rgba(59, 130, 246, 0.1);
-  color: #2563eb;
-}
-
-.badge-orange {
-  background: rgba(249, 115, 22, 0.1);
-  color: #ea580c;
-}
-
-.api-doc-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  justify-content: center;
-}
-
-.small-btn {
-  padding: 6px 12px;
   font-size: 13px;
 }
 
-.registry-empty {
+.marketplace-source-tabs,
+.marketplace-search {
+  display: flex;
+  gap: 10px;
+  padding: 14px 18px 0;
+}
+
+.marketplace-source-tabs button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.marketplace-source-tabs button.active {
+  border-color: var(--text);
+  color: var(--surface);
+  background: var(--text);
+}
+
+.marketplace-search input,
+.marketplace-preview input,
+.upload-field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.marketplace-search input:focus,
+.marketplace-preview input:focus,
+.upload-field input:focus {
+  border-color: var(--text);
+  outline: none;
+}
+
+.marketplace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.45fr);
+  gap: 14px;
+  padding: 18px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.marketplace-results {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.marketplace-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.marketplace-result:hover,
+.marketplace-result.active {
+  border-color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+
+.marketplace-result span,
+.marketplace-result small,
+.marketplace-preview p,
+.marketplace-empty {
+  color: var(--muted);
+}
+
+.marketplace-preview {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  background: var(--surface-soft);
+}
+
+.marketplace-preview h4 {
+  margin: 0 0 8px;
+}
+
+.marketplace-preview label,
+.upload-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0;
+  font-weight: 600;
+}
+
+.marketplace-preview pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 14px 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-row span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  font-size: 12px;
+}
+
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.check-row input {
+  width: auto;
+}
+
+.upload-drop {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 64px 0;
+  gap: 8px;
+  margin: 18px;
+  min-height: 170px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 16px;
   color: var(--muted);
-  background: var(--surface-muted);
-  border-radius: 12px;
-  border: 1px dashed var(--border);
+  background: var(--surface-soft);
+  cursor: pointer;
 }
 
-.registry-empty i {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.5;
+.upload-drop i {
+  font-size: 28px;
+  color: var(--text);
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+.upload-drop strong {
+  color: var(--text);
+}
+
+.upload-drop input {
+  display: none;
+}
+
+.upload-field,
+.upload-modal .check-row,
+.modal-notice,
+.modal-actions {
+  margin-left: 18px;
+  margin-right: 18px;
+}
+
+.modal-notice {
+  margin-top: 12px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.modal-notice.error {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.modal-notice.success {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+@media (max-width: 900px) {
+  .marketplace-body {
+    grid-template-columns: 1fr;
   }
 }
 </style>
