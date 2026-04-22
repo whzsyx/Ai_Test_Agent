@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     arango_host: str = "127.0.0.1"
     arango_port: int = 8529
     arango_username: str = "root"
-    arango_password: str = "qwer4321"
+    arango_password: str = ""
     arango_database: str = "QA_Agent"
     arango_timezone: str = "Asia/Shanghai"
     arango_session_collection: str = "agent_sessions"
@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     llm_model_table: str = "llm_model_config"
     email_config_table: str = "system_email_config"
     artifact_root_dir: str = "data/artifacts"
+    artifact_storage_backend: str = "minio"
+    artifact_keep_local_copy: bool = False
+    minio_endpoint: str = "127.0.0.1:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "qa-agent"
+    minio_secure: bool = False
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90
     browser_backend: str = "playwright-cli"

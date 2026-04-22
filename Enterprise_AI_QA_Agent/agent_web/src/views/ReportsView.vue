@@ -2,7 +2,7 @@
   <section class="view-page report-page">
     <header class="page-head">
       <div class="head-content">
-        <h2>Execution Reports</h2>
+        <h2>执行报告</h2>
         <p class="head-desc">综合评估报告与多报告聚合分析，包含质量评级与改进建议。</p>
       </div>
       <div class="head-actions">
@@ -14,7 +14,6 @@
       <!-- Sidebar: Batches -->
       <aside class="report-sidebar">
         <div class="sidebar-header">
-          <h3>Recent Batches</h3>
         </div>
         <div class="batch-list">
           <article class="batch-item active">

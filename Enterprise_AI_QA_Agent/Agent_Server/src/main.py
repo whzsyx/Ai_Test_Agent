@@ -19,6 +19,7 @@ from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
 from src.application.model_adapters import build_default_adapter_registry
+from src.application.artifact_storage_service import ArtifactStorageService
 from src.application.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.input_orchestrator_service import InputOrchestratorService
 from src.application.memory_runtime_service import MemoryRuntimeService
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI):
     mcp_registry = MCPRegistry()
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
     mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
+    artifact_storage_service = ArtifactStorageService(settings=settings)
     memory_store = ArangoDocumentMemoryStore(settings=settings)
     memory_runtime_service = MemoryRuntimeService(
         memory_store=memory_store,
@@ -104,6 +106,7 @@ async def lifespan(app: FastAPI):
         tool_job_service=tool_job_service,
         session_store=store,
         transcript_hygiene_service=transcript_hygiene_service,
+        artifact_storage_service=artifact_storage_service,
     )
     graph = build_agent_graph(
         agent_registry=agent_registry,
@@ -142,6 +145,7 @@ async def lifespan(app: FastAPI):
     app.state.mcp_registry = mcp_registry
     app.state.skill_runtime_service = skill_runtime_service
     app.state.mcp_runtime_service = mcp_runtime_service
+    app.state.artifact_storage_service = artifact_storage_service
     app.state.memory_store = memory_store
     app.state.memory_runtime_service = memory_runtime_service
     app.state.tool_job_store = tool_job_store

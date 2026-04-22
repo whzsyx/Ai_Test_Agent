@@ -12,6 +12,7 @@ from typing import Any
 
 from src.application.memory_runtime_service import MemoryRuntimeService
 from src.application.mcp_runtime_service import MCPRuntimeService
+from src.application.artifact_storage_service import ArtifactStorageService
 from src.application.tool_job_service import ToolJobService
 from src.application.transcript_hygiene_service import TranscriptHygieneService
 from src.application.ui_exploration_service import UIExplorationService
@@ -45,6 +46,7 @@ class ToolRuntimeService:
         tool_job_service: ToolJobService | None = None,
         session_store: SessionStore | None = None,
         transcript_hygiene_service: TranscriptHygieneService | None = None,
+        artifact_storage_service: ArtifactStorageService | None = None,
         coordinator_runtime_service=None,
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
@@ -54,6 +56,7 @@ class ToolRuntimeService:
         self._mcp_runtime_service = mcp_runtime_service
         self._memory_runtime_service = memory_runtime_service
         self._tool_job_service = tool_job_service
+        self._artifact_storage_service = artifact_storage_service
         self._session_store = session_store
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
@@ -151,6 +154,13 @@ class ToolRuntimeService:
 
             raw_result = await handler(call.arguments, job_context)
             result = self._normalize_result(tool, raw_result, context=job_context)
+            if self._artifact_storage_service is not None:
+                result = await self._artifact_storage_service.store_output_artifacts(
+                    result,
+                    session_id=job_context.session_id,
+                    turn_id=job_context.turn_id,
+                    tool_key=tool.key,
+                )
             resolved_status = self._resolve_result_status(result)
             summary = str(result.get("summary", f"Tool '{tool.key}' completed."))
             if job is not None and self._tool_job_service is not None:
