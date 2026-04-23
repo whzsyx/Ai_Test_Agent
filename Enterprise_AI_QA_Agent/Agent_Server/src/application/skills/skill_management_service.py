@@ -18,7 +18,7 @@ class SkillManagementService:
 
     def __init__(self, skill_registry: SkillRegistry) -> None:
         self._skill_registry = skill_registry
-        self._skills_root = Path(__file__).resolve().parents[1] / "SKILLS"
+        self._skills_root = Path(__file__).resolve().parents[2] / "SKILLS"
         self._skills_root.mkdir(parents=True, exist_ok=True)
 
     def list_skills(self) -> list[dict[str, Any]]:

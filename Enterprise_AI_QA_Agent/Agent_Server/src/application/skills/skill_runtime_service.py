@@ -8,7 +8,7 @@ from src.registry.skills import SkillRegistry
 class SkillRuntimeService:
     def __init__(self, skill_registry: SkillRegistry) -> None:
         self._skill_registry = skill_registry
-        self._skills_root = Path(__file__).resolve().parents[1] / "SKILLS"
+        self._skills_root = Path(__file__).resolve().parents[2] / "SKILLS"
 
     def build_prompt_blocks(self, skill_keys: list[str]) -> list[str]:
         blocks: list[str] = []
