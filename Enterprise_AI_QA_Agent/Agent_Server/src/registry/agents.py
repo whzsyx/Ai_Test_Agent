@@ -91,10 +91,10 @@ class AgentRegistry:
             "ui-executor": AgentModule(
                 descriptor=AgentDescriptor(
                     key="ui-executor",
-                    name="UI Executor",
+                    name="UI Explorer",
                     role="worker",
-                    summary="Execute browser flows, inspect pages, and collect UI evidence.",
-                    description="Runs browser automation, DOM inspection, and evidence capture for UI testing.",
+                    summary="Understand page structure and build semantic UI graphs from ARIA snapshots.",
+                    description="Runs UI exploration only: captures accessibility-tree structure, extracts business context, and writes page/entity/element graph knowledge without tests, assertions, or validation verdicts.",
                     supported_tools=[
                         "ui-page-explorer",
                         "browser-automation",
@@ -107,7 +107,7 @@ class AgentRegistry:
                     supported_skills=["ui-exploration", "playwright-cli", "artifact-collection"],
                     supported_models=["claude-sonnet-4", "qwen-max"],
                     default_model="claude-sonnet-4",
-                    tags=["ui", "execution"],
+                    tags=["ui", "exploration", "aria", "graph"],
                 )
             ),
             "api-verifier": AgentModule(
@@ -181,7 +181,7 @@ class AgentRegistry:
             return self.get("ops-executor")
         if any(token in lowered for token in ["api", "interface", "payload", "response"]):
             return self.get("api-verifier")
-        if any(token in lowered for token in ["page", "browser", "ui", "selenium", "playwright"]):
+        if any(token in lowered for token in ["page", "browser", "ui", "selenium", "playwright", "页面", "浏览器", "探索", "图谱"]):
             return self.get("ui-executor")
         if any(
             token in lowered

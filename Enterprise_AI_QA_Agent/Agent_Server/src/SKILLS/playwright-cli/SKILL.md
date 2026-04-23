@@ -11,7 +11,7 @@ allowed-tools: ui-page-explorer browser-control browser-automation
 In this Agent_Server, `playwright-cli` is implemented by the internal Python Playwright runtime, not by Node.js or Selenium.
 Do not request Bash execution for browser work. Convert the CLI-style intent into registered tools:
 
-- Use `ui-page-explorer` for UI access bootstrap, page exploration, and app-map generation.
+- Use `ui-page-explorer` for UI access bootstrap, ARIA semantic exploration, and UI graph generation.
 - Use `browser-control` for explicit CLI-shaped commands such as `open`, `goto`, `snapshot`, `screenshot`, `eval`, and single browser actions.
 - Use `browser-automation` for ordered action sequences such as click/fill/type/press/wait/screenshot.
 

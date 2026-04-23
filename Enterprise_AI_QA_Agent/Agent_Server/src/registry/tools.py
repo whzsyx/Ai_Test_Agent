@@ -314,8 +314,8 @@ class ToolRegistry:
             "ui-page-explorer": ToolModule(
                 descriptor=ToolDescriptor(
                     key="ui-page-explorer",
-                    name="UI Page Explorer",
-                    description="Explore a UI entry page with the Python playwright-cli runtime and generate a page model / app map.",
+                    name="UI Explorer Agent",
+                    description="Explore UI structure with Playwright ARIA snapshots, build semantic context trees, and persist a project-scoped UI graph without creating tests or assertions.",
                     category="execution",
                     permission_level="ask",
                     input_schema={
@@ -324,12 +324,23 @@ class ToolRegistry:
                             "target_url": {"type": "string", "description": "The UI entry page URL to explore."},
                             "max_pages": {"type": "integer", "description": "Maximum pages to inspect for the app map."},
                             "same_origin_only": {"type": "boolean", "description": "Only follow links on the same origin."},
+                            "include_hidden": {"type": "boolean", "description": "Include ARIA nodes that Playwright reports as not visible."},
+                            "max_interactions": {"type": "integer", "description": "Maximum non-navigation interactions to open per page, such as dialogs, drawers, tabs, and expandable regions."},
+                            "login_credentials": {
+                                "type": "object",
+                                "description": "Optional credentials used only after a login form is detected.",
+                                "properties": {
+                                    "username": {"type": "string"},
+                                    "password": {"type": "string"},
+                                },
+                            },
+                            "project_scope": {"type": "string", "description": "Optional project scope key for ArangoDB graph storage."},
                         },
                         "required": ["target_url"],
                     },
                     supports_streaming=True,
-                    output_schema={"app_map": "object", "artifacts": "array"},
-                    tags=["ui", "exploration", "playwright", "app-map"],
+                    output_schema={"semantic_graph": "object", "app_map": "object", "artifacts": "array"},
+                    tags=["ui", "exploration", "playwright", "aria", "graph"],
                 ),
                 handler_key="ui-page-explorer",
             ),

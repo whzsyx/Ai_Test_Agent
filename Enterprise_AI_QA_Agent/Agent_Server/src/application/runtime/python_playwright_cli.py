@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import shutil
@@ -8,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 from src.core.config import Settings
 
@@ -45,6 +46,26 @@ class _BrowserSession:
     ref_map: dict[str, str] = field(default_factory=dict)
     console_messages: list[dict[str, Any]] = field(default_factory=list)
     network_events: list[dict[str, Any]] = field(default_factory=list)
+    pending_request_count: int = 0
+
+
+@dataclass
+class _AriaNode:
+    role: str
+    name: str = ""
+    raw: str = ""
+    parent: "_AriaNode | None" = None
+    children: list["_AriaNode"] = field(default_factory=list)
+    ref: str = ""
+    locator: str = ""
+    visible: bool | None = None
+    index: int = 0
+
+    def walk(self) -> list["_AriaNode"]:
+        nodes = [self]
+        for child in self.children:
+            nodes.extend(child.walk())
+        return nodes
 
 
 class PythonPlaywrightCliRuntime:
@@ -70,7 +91,7 @@ class PythonPlaywrightCliRuntime:
         timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         timeout = timeout_seconds or int(self._settings.browser_action_timeout_seconds or 30)
-        timeout = max(1, min(timeout, 300))
+        timeout = max(1, min(timeout, 1800))
         try:
             return await asyncio.wait_for(
                 self._run_locked(session_name=session_name, args=args, cwd=cwd, raw=raw),
@@ -197,6 +218,7 @@ class PythonPlaywrightCliRuntime:
             )
 
         def on_request(request: Any) -> None:
+            session.pending_request_count += 1
             session.network_events.append(
                 {
                     "method": request.method,
@@ -206,8 +228,13 @@ class PythonPlaywrightCliRuntime:
                 }
             )
 
+        def on_request_done(request: Any) -> None:
+            session.pending_request_count = max(0, session.pending_request_count - 1)
+
         session.page.on("console", on_console)
         session.page.on("request", on_request)
+        session.page.on("requestfinished", on_request_done)
+        session.page.on("requestfailed", on_request_done)
 
     async def _execute(
         self,
@@ -222,10 +249,12 @@ class PythonPlaywrightCliRuntime:
             url = self._first_positional(args)
             if url:
                 await page.goto(self._normalize_url(url), wait_until="domcontentloaded")
+                await self._wait_for_view_stable(session)
             return await self._page_output(session, raw)
         if verb == "goto":
             self._require_args(args, 1, "goto <url>")
             await page.goto(self._normalize_url(args[0]), wait_until="domcontentloaded")
+            await self._wait_for_view_stable(session)
             return await self._page_output(session, raw)
         if verb == "close":
             await self._close_session(session.name)
@@ -251,6 +280,22 @@ class PythonPlaywrightCliRuntime:
                 path.write_text(text, encoding="utf-8")
                 artifacts.append({"type": "snapshot", "path": str(path)})
             return (text if raw else self._with_page_header(session, f"### Snapshot\n{text}", artifacts), artifacts)
+        if verb == "semantic-snapshot":
+            filename = self._option_value(args, "--filename")
+            visible_only = "--include-hidden" not in args and self._option_value(args, "--visible-only") != "false"
+            payload = await self._semantic_snapshot(session, visible_only=visible_only)
+            text = json.dumps(payload, ensure_ascii=False, indent=None if raw else 2) + "\n"
+            artifacts = []
+            if filename:
+                path = cwd / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                artifacts.append({"type": "semantic-snapshot", "path": str(path)})
+            return (text if raw else self._with_page_header(session, f"### Semantic Snapshot\n{text}", artifacts), artifacts)
+        if verb == "explore":
+            payload, artifacts = await self._explore(session, args, cwd)
+            text = json.dumps(payload, ensure_ascii=False, indent=None if raw else 2) + "\n"
+            return (text if raw else self._with_page_header(session, f"### UI Exploration Graph\n{text}", artifacts), artifacts)
         if verb == "screenshot":
             target, filename = self._parse_target_filename(args, default_name="screenshot.png")
             path = cwd / filename
@@ -357,6 +402,7 @@ class PythonPlaywrightCliRuntime:
             self._wire_session_events(session)
             if args:
                 await new_page.goto(self._normalize_url(args[0]), wait_until="domcontentloaded")
+                await self._wait_for_view_stable(session)
             return await self._page_output(session, raw)
         if verb == "tab-select":
             self._require_args(args, 1, "tab-select <index>")
@@ -459,12 +505,1177 @@ class PythonPlaywrightCliRuntime:
             lines.append(f"- {node['ref']}: <{node.get('tag')}>{suffix} {label}".rstrip())
         return "\n".join(lines) + "\n"
 
+    async def _semantic_snapshot(self, session: _BrowserSession, visible_only: bool = True) -> dict[str, Any]:
+        page = session.page
+        title = await page.title()
+        setattr(page, "_last_known_title", title)
+        aria_text = await self._aria_snapshot_text(page)
+        roots = self._parse_aria_snapshot(aria_text)
+        nodes = [node for root in roots for node in root.walk()]
+        semantic_nodes: list[dict[str, Any]] = []
+        ref_map: dict[str, str] = {}
+        role_name_counts: dict[tuple[str, str], int] = {}
+        ref_index = 1
+
+        for node in nodes:
+            if not self._is_semantic_element(node):
+                continue
+            key = (node.role, node.name)
+            node.index = role_name_counts.get(key, 0)
+            role_name_counts[key] = node.index + 1
+            node.locator = self._locator_expression(node)
+            if node.locator:
+                node.visible = await self._is_locator_visible(session, node.locator)
+            elif node.role == "text" and node.name:
+                node.visible = await self._is_text_visible(session, node.name, node.index)
+            else:
+                node.visible = None
+            if visible_only and node.visible is False:
+                continue
+
+            context_node = self._find_context_node(node)
+            entity = self._extract_entity(context_node, exclude=node.name) if context_node else ""
+            visual_context = await self._visual_context_for_locator(session, node) if node.locator else {}
+            if not entity:
+                entity = str(visual_context.get("entity") or "")
+            context_payload = {
+                "entity": entity,
+                "container_role": context_node.role if context_node else visual_context.get("container_role"),
+                "container_name": context_node.name if context_node else visual_context.get("container_name", ""),
+                "path": self._semantic_path(node) or visual_context.get("path", []),
+            }
+            if visual_context:
+                context_payload["visual"] = visual_context
+            ref = f"e{ref_index}"
+            ref_index += 1
+            node.ref = ref
+            if node.locator:
+                ref_map[ref] = node.locator
+            semantic_nodes.append(
+                {
+                    "id": self._stable_id(page.url, ref, node.role, node.name, entity),
+                    "ref": ref,
+                    "role": node.role,
+                    "name": node.name,
+                    "visible": node.visible,
+                    "locator": node.locator,
+                    "context": context_payload,
+                    "action": await self._action_metadata(session, node) if node.locator else {},
+                }
+            )
+
+        session.ref_map = {**session.ref_map, **ref_map}
+        graph = self._build_semantic_graph(page.url, title, semantic_nodes)
+        return {
+            "status": "success",
+            "source": "aria_snapshot",
+            "page": {"url": page.url, "title": title},
+            "metrics": {
+                "aria_node_count": len(nodes),
+                "semantic_node_count": len(semantic_nodes),
+                "visible_only": visible_only,
+            },
+            "aria_snapshot": aria_text,
+            "semantic_nodes": semantic_nodes,
+            "graph": graph,
+        }
+
+    async def _explore(
+        self,
+        session: _BrowserSession,
+        args: list[str],
+        cwd: Path,
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        target_url = self._first_positional(args) or session.page.url
+        if not target_url or target_url == "about:blank":
+            raise ValueError("Usage: playwright-cli explore <url> [--max-pages=N] [--filename=file]")
+        max_pages = int(self._option_value(args, "--max-pages") or 1)
+        max_pages = max(1, min(max_pages, 12))
+        max_interactions = int(self._option_value(args, "--max-interactions") or 0)
+        max_interactions = max(0, min(max_interactions, 32))
+        same_origin_only = self._option_value(args, "--same-origin-only") != "false"
+        visible_only = "--include-hidden" not in args and self._option_value(args, "--visible-only") != "false"
+        filename = self._option_value(args, "--filename") or "ui_explorer_graph.json"
+        login_credentials = self._login_credentials_from_args(args)
+
+        queue = [self._normalize_url(target_url)]
+        visited: set[str] = set()
+        login_events: list[dict[str, Any]] = []
+        pages: list[dict[str, Any]] = []
+        graph = {
+            "pages": [],
+            "elements": [],
+            "entities": [],
+            "edges": [],
+        }
+
+        while queue and len(visited) < max_pages:
+            url = queue.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
+            await session.page.goto(url, wait_until="domcontentloaded")
+            stability = await self._wait_for_view_stable(session, max_seconds=12.0)
+            login_probe = await self._wait_for_login_or_stable(session, max_seconds=8.0)
+            if login_probe.get("required"):
+                login_event: dict[str, Any] = {
+                    "url": session.page.url,
+                    "detected": True,
+                    "reason": login_probe.get("reason"),
+                    "performed": False,
+                }
+                if login_credentials:
+                    login_event.update(await self._perform_detected_login(session, login_credentials))
+                    login_event["post_login_stability"] = await self._wait_for_view_stable(session, max_seconds=12.0)
+                login_events.append(login_event)
+                stability = await self._wait_for_view_stable(session, max_seconds=8.0)
+            snapshot = await self._semantic_snapshot(session, visible_only=visible_only)
+            snapshot_url = str(snapshot.get("page", {}).get("url") or "")
+            if snapshot_url:
+                visited.add(snapshot_url)
+            page_record = {
+                "url": snapshot["page"]["url"],
+                "title": snapshot["page"]["title"],
+                "status": "explored",
+                "semantic_nodes": snapshot["semantic_nodes"],
+                "metrics": snapshot["metrics"],
+                "stability": stability,
+                "scroll_states": [],
+                "interactions": [],
+            }
+            pages.append(page_record)
+            self._merge_graph(graph, snapshot["graph"])
+            scroll_states = await self._explore_scroll_states(
+                session=session,
+                baseline_snapshot=snapshot,
+                visible_only=visible_only,
+            )
+            page_record["scroll_states"] = scroll_states
+            for scroll_state in scroll_states:
+                scroll_graph = scroll_state.get("graph") if isinstance(scroll_state.get("graph"), dict) else {}
+                self._merge_graph(graph, scroll_graph)
+            if max_interactions > 0:
+                interactions = await self._explore_interactions(
+                    session=session,
+                    baseline_snapshot=snapshot,
+                    visible_only=visible_only,
+                    max_interactions=max_interactions,
+                )
+                page_record["interactions"] = interactions
+                for interaction in interactions:
+                    interaction_graph = interaction.get("graph") if isinstance(interaction.get("graph"), dict) else {}
+                    self._merge_graph(graph, interaction_graph)
+                    interaction_target_url = str(interaction.get("target_url") or "").strip()
+                    if interaction_target_url:
+                        if same_origin_only and not self._same_origin(target_url, interaction_target_url):
+                            continue
+                        if (
+                            interaction_target_url not in visited
+                            and interaction_target_url not in queue
+                            and len(visited) + len(queue) < max_pages
+                        ):
+                            queue.append(interaction_target_url)
+
+            for node in snapshot["semantic_nodes"]:
+                action = node.get("action") if isinstance(node.get("action"), dict) else {}
+                href = str(action.get("href") or "").strip()
+                if not href:
+                    continue
+                next_url = urljoin(snapshot["page"]["url"], href)
+                if same_origin_only and not self._same_origin(target_url, next_url):
+                    continue
+                if next_url not in visited and next_url not in queue and len(visited) + len(queue) < max_pages:
+                    queue.append(next_url)
+
+        app_map = {
+            "status": "success",
+            "source": "ui-explorer-agent",
+            "entry_url": self._normalize_url(target_url),
+            "page_count": len(pages),
+            "same_origin_only": same_origin_only,
+            "exploration_policy": {
+                "uses_aria_snapshot": True,
+                "does_not_assert": True,
+                "does_not_validate": True,
+                "follows_links_only": True,
+                "login_is_detection_driven": True,
+                "max_interactions_per_page": max_interactions,
+            },
+            "login_events": login_events,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "pages": pages,
+            "graph": graph,
+        }
+        path = cwd / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(app_map, ensure_ascii=False, indent=2), encoding="utf-8")
+        return app_map, [{"type": "ui-explorer-graph", "path": str(path)}]
+
+    async def _aria_snapshot_text(self, page: Any) -> str:
+        locator = page.locator("body")
+        try:
+            return await locator.aria_snapshot()
+        except Exception:
+            locator = page.locator(":root")
+            return await locator.aria_snapshot()
+
+    async def _wait_for_view_stable(
+        self,
+        session: _BrowserSession,
+        max_seconds: float = 10.0,
+        quiet_ms: int = 800,
+        sample_ms: int = 200,
+    ) -> dict[str, Any]:
+        started = asyncio.get_running_loop().time()
+        last_signature = ""
+        last_change = started
+        last_probe: dict[str, Any] = {}
+        timed_out = False
+
+        while True:
+            now = asyncio.get_running_loop().time()
+            try:
+                probe = await session.page.evaluate(
+                    """
+                    () => {
+                      const visible = (el) => {
+                        const style = getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.visibility !== 'hidden'
+                          && style.display !== 'none'
+                          && rect.width > 0
+                          && rect.height > 0;
+                      };
+                      const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ').trim();
+                      const controls = [...document.querySelectorAll('input, button, a[href], select, textarea, [role], summary')]
+                        .filter(visible)
+                        .map((el) => [
+                          el.tagName,
+                          el.getAttribute('role') || '',
+                          el.getAttribute('type') || '',
+                          el.getAttribute('placeholder') || '',
+                          (el.innerText || el.getAttribute('aria-label') || el.getAttribute('href') || '').trim().slice(0, 80)
+                        ].join('|'));
+                      const passwordVisible = [...document.querySelectorAll('input[type="password"]')].some(visible);
+                      return {
+                        href: location.href,
+                        title: document.title || '',
+                        readyState: document.readyState,
+                        textLength: text.length,
+                        textHead: text.slice(0, 160),
+                        textTail: text.slice(-160),
+                        visibleControlCount: controls.length,
+                        controlsHead: controls.slice(0, 30),
+                        passwordVisible
+                      };
+                    }
+                    """
+                )
+            except Exception as exc:
+                return {
+                    "status": "failed",
+                    "error": str(exc),
+                    "elapsed_ms": int((now - started) * 1000),
+                }
+
+            probe = probe if isinstance(probe, dict) else {}
+            probe["pending_request_count"] = session.pending_request_count
+            signature = json.dumps(
+                {
+                    "href": probe.get("href"),
+                    "title": probe.get("title"),
+                    "textLength": probe.get("textLength"),
+                    "textHead": probe.get("textHead"),
+                    "textTail": probe.get("textTail"),
+                    "visibleControlCount": probe.get("visibleControlCount"),
+                    "controlsHead": probe.get("controlsHead"),
+                    "passwordVisible": probe.get("passwordVisible"),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            content_ready = (
+                bool(probe.get("passwordVisible"))
+                or int(probe.get("visibleControlCount") or 0) > 0
+                or int(probe.get("textLength") or 0) >= 20
+            )
+            if signature != last_signature:
+                last_signature = signature
+                last_change = now
+            quiet_for_ms = int((now - last_change) * 1000)
+            last_probe = probe
+            if content_ready and quiet_for_ms >= quiet_ms:
+                break
+            if now - started >= max_seconds:
+                timed_out = True
+                break
+            await session.page.wait_for_timeout(sample_ms)
+
+        return {
+            "status": "timeout" if timed_out else "stable",
+            "elapsed_ms": int((asyncio.get_running_loop().time() - started) * 1000),
+            "quiet_for_ms": int((asyncio.get_running_loop().time() - last_change) * 1000),
+            "text_length": int(last_probe.get("textLength") or 0),
+            "visible_control_count": int(last_probe.get("visibleControlCount") or 0),
+            "password_visible": bool(last_probe.get("passwordVisible")),
+            "pending_request_count": int(last_probe.get("pending_request_count") or 0),
+        }
+
+    async def _wait_for_login_or_stable(
+        self,
+        session: _BrowserSession,
+        max_seconds: float = 8.0,
+    ) -> dict[str, Any]:
+        started = asyncio.get_running_loop().time()
+        while True:
+            probe = await self._detect_login_required(session)
+            if probe.get("required"):
+                probe["wait_elapsed_ms"] = int((asyncio.get_running_loop().time() - started) * 1000)
+                return probe
+            if asyncio.get_running_loop().time() - started >= max_seconds:
+                probe["wait_elapsed_ms"] = int((asyncio.get_running_loop().time() - started) * 1000)
+                return probe
+            stability = await self._wait_for_view_stable(session, max_seconds=1.2, quiet_ms=500, sample_ms=150)
+            probe = await self._detect_login_required(session)
+            if probe.get("required"):
+                probe["wait_elapsed_ms"] = int((asyncio.get_running_loop().time() - started) * 1000)
+                probe["stability_before_detection"] = stability
+                return probe
+            if stability.get("status") == "stable" and not stability.get("password_visible"):
+                probe["wait_elapsed_ms"] = int((asyncio.get_running_loop().time() - started) * 1000)
+                probe["stability"] = stability
+                return probe
+
+    async def _detect_login_required(self, session: _BrowserSession) -> dict[str, Any]:
+        script = """
+        () => {
+          const visible = (el) => {
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+          };
+          const password = [...document.querySelectorAll('input[type="password"]')].find(visible);
+          if (!password) return {required: false};
+          const form = password.closest('form') || document.body;
+          const textInputs = [...form.querySelectorAll('input:not([type]), input[type="text"], input[type="email"], input[type="tel"], input[name], input[autocomplete]')].filter(visible);
+          const submit = [...form.querySelectorAll('button, input[type="submit"], [role="button"]')].find(visible);
+          return {
+            required: true,
+            reason: 'visible_password_input',
+            has_username_input: textInputs.length > 0,
+            has_submit: !!submit,
+            title: document.title || '',
+            url: location.href
+          };
+        }
+        """
+        try:
+            result = await session.page.evaluate(script)
+            return result if isinstance(result, dict) else {"required": False}
+        except Exception as exc:
+            return {"required": False, "error": str(exc)}
+
+    async def _perform_detected_login(self, session: _BrowserSession, credentials: dict[str, str]) -> dict[str, Any]:
+        username = str(credentials.get("username") or credentials.get("email") or credentials.get("account") or "")
+        password = str(credentials.get("password") or "")
+        if not username or not password:
+            return {"performed": False, "reason": "missing_credentials"}
+        page = session.page
+        password_locator = page.locator("input[type='password']").first
+        username_locator = page.locator(
+            "input[type='email'], input[autocomplete='username'], input[name*='user' i], "
+            "input[name*='email' i], input[name*='account' i], input[type='text'], input:not([type])"
+        ).first
+        try:
+            await username_locator.fill(username, timeout=1500)
+            await password_locator.fill(password, timeout=1500)
+            submit = page.locator("button[type='submit'], input[type='submit'], button").first
+            if await submit.count() > 0:
+                await submit.click(timeout=3000)
+            else:
+                await password_locator.press("Enter", timeout=3000)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=3000)
+            except Exception:
+                await page.wait_for_timeout(500)
+            stability = await self._wait_for_view_stable(session, max_seconds=10.0)
+            return {
+                "performed": True,
+                "username_field_detected": True,
+                "password_field_detected": True,
+                "stability": stability,
+            }
+        except Exception as exc:
+            return {"performed": False, "reason": str(exc)}
+
+    async def _explore_scroll_states(
+        self,
+        session: _BrowserSession,
+        baseline_snapshot: dict[str, Any],
+        visible_only: bool,
+    ) -> list[dict[str, Any]]:
+        baseline_nodes = baseline_snapshot.get("semantic_nodes") if isinstance(baseline_snapshot.get("semantic_nodes"), list) else []
+        known_keys = {self._node_semantic_key(node) for node in baseline_nodes if isinstance(node, dict)}
+        states: list[dict[str, Any]] = []
+        try:
+            scroll_info = await session.page.evaluate(
+                """
+                () => ({
+                  scrollHeight: document.documentElement.scrollHeight || document.body.scrollHeight || 0,
+                  clientHeight: document.documentElement.clientHeight || window.innerHeight || 0
+                })
+                """
+            )
+        except Exception:
+            return states
+        if not isinstance(scroll_info, dict):
+            return states
+        scroll_height = int(scroll_info.get("scrollHeight") or 0)
+        client_height = int(scroll_info.get("clientHeight") or 0)
+        if scroll_height <= client_height + 80:
+            return states
+
+        for position in [0.35, 0.7, 1.0]:
+            try:
+                await session.page.evaluate(
+                    "(ratio) => window.scrollTo(0, Math.max(0, (document.documentElement.scrollHeight - window.innerHeight) * ratio))",
+                    position,
+                )
+                await self._wait_for_view_stable(session, max_seconds=3.0, quiet_ms=450, sample_ms=150)
+                snapshot = await self._semantic_snapshot(session, visible_only=visible_only)
+                nodes = snapshot.get("semantic_nodes") if isinstance(snapshot.get("semantic_nodes"), list) else []
+                new_nodes = [
+                    node for node in nodes
+                    if isinstance(node, dict) and self._node_semantic_key(node) not in known_keys
+                ]
+                for node in new_nodes:
+                    known_keys.add(self._node_semantic_key(node))
+                if new_nodes:
+                    graph = self._build_semantic_graph(snapshot["page"]["url"], snapshot["page"]["title"], new_nodes)
+                    states.append(
+                        {
+                            "position": position,
+                            "new_node_count": len(new_nodes),
+                            "new_nodes": new_nodes,
+                            "graph": graph,
+                        }
+                    )
+            except Exception as exc:
+                states.append({"position": position, "error": str(exc), "new_node_count": 0, "graph": {}})
+        try:
+            await session.page.evaluate("() => window.scrollTo(0, 0)")
+            await self._wait_for_view_stable(session, max_seconds=2.0, quiet_ms=350, sample_ms=150)
+        except Exception:
+            pass
+        return states
+
+    async def _explore_interactions(
+        self,
+        session: _BrowserSession,
+        baseline_snapshot: dict[str, Any],
+        visible_only: bool,
+        max_interactions: int,
+    ) -> list[dict[str, Any]]:
+        interactions: list[dict[str, Any]] = []
+        baseline_nodes = baseline_snapshot.get("semantic_nodes") if isinstance(baseline_snapshot.get("semantic_nodes"), list) else []
+        baseline_keys = {self._node_semantic_key(node) for node in baseline_nodes if isinstance(node, dict)}
+        baseline_url = str(baseline_snapshot.get("page", {}).get("url") or session.page.url)
+        candidates = await self._interaction_candidates(session, baseline_nodes, baseline_url)
+        no_progress_streak = 0
+
+        for candidate in candidates[:max_interactions]:
+            locator_expression = str(candidate.get("locator") or "")
+            if not locator_expression:
+                continue
+            try:
+                await self._locator(session, locator_expression).click(timeout=1500)
+                await self._wait_for_view_stable(session, max_seconds=4.0, quiet_ms=500, sample_ms=150)
+                if session.page.url != baseline_url:
+                    navigated_url = session.page.url
+                    navigated_title = await session.page.title()
+                    page_id = self._stable_id("page", navigated_url)
+                    trigger_id = str(candidate.get("id") or "")
+                    graph = {
+                        "pages": [{"id": page_id, "url": navigated_url, "title": navigated_title}],
+                        "elements": [],
+                        "entities": [],
+                        "edges": [
+                            {
+                                "type": "element_triggers_navigation",
+                                "from": trigger_id,
+                                "to": page_id,
+                                "href": navigated_url,
+                            }
+                        ] if trigger_id else [],
+                    }
+                    interactions.append(
+                        {
+                            "trigger": {
+                                "id": candidate.get("id"),
+                                "ref": candidate.get("ref"),
+                                "role": candidate.get("role"),
+                                "name": candidate.get("name"),
+                                "context": candidate.get("context"),
+                                "source": candidate.get("source"),
+                            },
+                            "effect": "navigation",
+                            "target_url": navigated_url,
+                            "target_title": navigated_title,
+                            "revealed_count": 0,
+                            "revealed_nodes": [],
+                            "graph": graph,
+                        }
+                    )
+                    await session.page.goto(baseline_url, wait_until="domcontentloaded")
+                    await self._wait_for_view_stable(session, max_seconds=6.0)
+                    continue
+                after_snapshot = await self._semantic_snapshot(session, visible_only=visible_only)
+                after_nodes = after_snapshot.get("semantic_nodes") if isinstance(after_snapshot.get("semantic_nodes"), list) else []
+                revealed_nodes = [
+                    node for node in after_nodes
+                    if isinstance(node, dict) and self._node_semantic_key(node) not in baseline_keys
+                ]
+                graph = self._build_interaction_graph(candidate, revealed_nodes)
+                interactions.append(
+                    {
+                        "trigger": {
+                            "id": candidate.get("id"),
+                            "ref": candidate.get("ref"),
+                            "role": candidate.get("role"),
+                            "name": candidate.get("name"),
+                            "context": candidate.get("context"),
+                            "source": candidate.get("source"),
+                        },
+                        "effect": self._classify_interaction_effect(after_nodes, revealed_nodes),
+                        "revealed_count": len(revealed_nodes),
+                        "revealed_nodes": revealed_nodes,
+                        "graph": graph,
+                    }
+                )
+            except Exception as exc:
+                interactions.append(
+                    {
+                        "trigger": {
+                            "id": candidate.get("id"),
+                            "role": candidate.get("role"),
+                            "name": candidate.get("name"),
+                            "source": candidate.get("source"),
+                        },
+                        "effect": "failed",
+                        "error": str(exc),
+                        "revealed_count": 0,
+                        "revealed_nodes": [],
+                        "graph": {"pages": [], "elements": [], "entities": [], "edges": []},
+                    }
+                )
+            finally:
+                try:
+                    await session.page.keyboard.press("Escape")
+                    await session.page.goto(baseline_url, wait_until="domcontentloaded")
+                    await self._wait_for_view_stable(session, max_seconds=6.0)
+                except Exception:
+                    pass
+            if interactions:
+                last = interactions[-1]
+                progressed = (
+                    bool(last.get("target_url"))
+                    or int(last.get("revealed_count") or 0) > 0
+                    or str(last.get("effect") or "") in {"navigation", "dialog", "drawer", "tab-panel"}
+                )
+                no_progress_streak = 0 if progressed else no_progress_streak + 1
+                if no_progress_streak >= 6 and len(interactions) >= 12:
+                    break
+        return interactions
+
+    async def _interaction_candidates(self, session: _BrowserSession, nodes: list[Any], page_url: str) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            role = str(node.get("role") or "")
+            name = str(node.get("name") or "")
+            action = node.get("action") if isinstance(node.get("action"), dict) else {}
+            if role not in {"button", "tab", "switch", "menuitem", "combobox", "textbox", "option"}:
+                continue
+            if action.get("href"):
+                continue
+            if self._is_unsafe_interaction_name(name) or self._is_static_metadata_name(name):
+                continue
+            key = (role, name, str((node.get("context") or {}).get("entity") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(node)
+            item.setdefault("source", "aria")
+            item["priority"] = self._candidate_priority(item)
+            candidates.append(item)
+        for node in await self._dom_interaction_candidates(session, page_url):
+            key = (str(node.get("role") or ""), str(node.get("name") or ""), str((node.get("context") or {}).get("entity") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            node["priority"] = self._candidate_priority(node)
+            candidates.append(node)
+        candidates.sort(
+            key=lambda item: (
+                -int(item.get("priority") or 0),
+                str(item.get("source") or ""),
+                len(str(item.get("name") or "")),
+            )
+        )
+        return candidates
+
+    def _candidate_priority(self, candidate: dict[str, Any]) -> int:
+        role = str(candidate.get("role") or "").lower()
+        name = str(candidate.get("name") or "")
+        source = str(candidate.get("source") or "")
+        context = candidate.get("context") if isinstance(candidate.get("context"), dict) else {}
+        container = str(context.get("container_name") or "").lower()
+        text = f"{name} {container}".lower()
+        priority = 0
+        if role in {"tab", "menuitem", "link"}:
+            priority += 90
+        if role in {"button", "switch"}:
+            priority += 70
+        if role in {"combobox", "textbox", "option"}:
+            priority += 55
+        if source == "dom-clickable":
+            priority += 10
+        if re.search(r"nav|menu|tab|side|route|breadcrumb|module|section", text):
+            priority += 50
+        if re.search(r"course|chapter|lesson|order|product|cart|user|profile|setting|report|task|project", text):
+            priority += 35
+        if re.search(r"课程|章节|作业|错题|实验|能力|订单|商品|购物车|用户|设置|报表|任务|项目|详情|列表", name):
+            priority += 35
+        if re.search(r"进入|查看|详情|展开|更多|切换|选择|搜索|筛选|下一页|分页", name):
+            priority += 25
+        if 1 <= len(name) <= 24:
+            priority += 15
+        if len(name) > 80:
+            priority -= 35
+        if len(name) > 140:
+            priority -= 80
+        return priority
+
+    async def _dom_interaction_candidates(self, session: _BrowserSession, page_url: str) -> list[dict[str, Any]]:
+        try:
+            rows = await session.page.evaluate(
+                """
+                () => {
+                  const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                  const visible = (el) => {
+                    const style = getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.visibility !== 'hidden'
+                      && style.display !== 'none'
+                      && rect.width > 4
+                      && rect.height > 4
+                      && rect.bottom >= 0
+                      && rect.right >= 0
+                      && rect.top <= window.innerHeight
+                      && rect.left <= window.innerWidth;
+                  };
+                  const cssPath = (el) => {
+                    if (el.id) return `#${CSS.escape(el.id)}`;
+                    const dataAttrs = ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label', 'title'];
+                    for (const attr of dataAttrs) {
+                      const value = el.getAttribute(attr);
+                      if (value) return `${el.tagName.toLowerCase()}[${attr}="${CSS.escape(value)}"]`;
+                    }
+                    const parts = [];
+                    let current = el;
+                    for (let depth = 0; current && current.nodeType === 1 && depth < 5; depth += 1, current = current.parentElement) {
+                      let part = current.tagName.toLowerCase();
+                      const className = normalize(current.className).split(' ').filter(Boolean)[0];
+                      if (className) part += `.${CSS.escape(className)}`;
+                      const parent = current.parentElement;
+                      if (parent) {
+                        const siblings = [...parent.children].filter((item) => item.tagName === current.tagName);
+                        if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+                      }
+                      parts.unshift(part);
+                    }
+                    return parts.join(' > ');
+                  };
+                  const contextFor = (el, name) => {
+                    const skip = new Set([name, '点击进入', '查看课程简介', '收起课程简介', '展开全部', '收起全部', '退出登录', '切换']);
+                    let current = el.parentElement;
+                    for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
+                      const text = normalize(current.innerText || current.textContent || '');
+                      const className = normalize(current.className);
+                      const rect = current.getBoundingClientRect();
+                      if (!text || text.length <= name.length + 2 || rect.width <= 0 || rect.height <= 0) continue;
+                      if (/card|item|course|list|row|panel|menu|nav|tab|chapter|section|box/i.test(className) || text.length < 500) {
+                        let cleaned = text;
+                        for (const value of skip) cleaned = cleaned.split(value).join(' ');
+                        const entity = cleaned.split(/\\n|\\r| {2,}/).map(normalize).find((line) => line && line.length <= 120) || '';
+                        return { entity, container_role: 'visual-container', container_name: className || current.tagName.toLowerCase(), path: ['dom-clickable'] };
+                      }
+                    }
+                    return { entity: '', container_role: 'dom-clickable', container_name: '', path: ['dom-clickable'] };
+                  };
+                  const all = [...document.querySelectorAll('a[href],button,input,select,textarea,[role],[onclick],[tabindex],summary,li,div,span')];
+                  const rows = [];
+                  const seen = new Set();
+                  const scoreFor = (el, role, name) => {
+                    const tag = el.tagName.toLowerCase();
+                    const className = normalize(el.className).toLowerCase();
+                    const text = `${name} ${className} ${role}`.toLowerCase();
+                    let score = 0;
+                    if (['tab', 'menuitem', 'link'].includes(role)) score += 90;
+                    if (['button', 'switch'].includes(role)) score += 70;
+                    if (['combobox', 'textbox', 'option'].includes(role)) score += 55;
+                    if (tag === 'a' || tag === 'button') score += 20;
+                    if (/nav|menu|tab|side|route|breadcrumb|module|section/.test(text)) score += 50;
+                    if (/course|chapter|lesson|order|product|cart|user|profile|setting|report|task|project/.test(text)) score += 35;
+                    if (/课程|章节|作业|错题|实验|能力|订单|商品|购物车|用户|设置|报表|任务|项目|详情|列表/.test(name)) score += 35;
+                    if (/进入|查看|详情|展开|更多|切换|选择|搜索|筛选|下一页|分页/.test(name)) score += 25;
+                    if (name.length > 80) score -= 30;
+                    return score;
+                  };
+                  for (const el of all) {
+                    if (!visible(el)) continue;
+                    const style = getComputedStyle(el);
+                    const tag = el.tagName.toLowerCase();
+                    const roleAttr = normalize(el.getAttribute('role'));
+                    const className = normalize(el.className);
+                    const classSignal = /click|btn|button|tab|menu|nav|link|item|card|course|chapter|module|route|panel/i.test(className);
+                    let clickableAncestor = false;
+                    for (let parent = el.parentElement, depth = 0; parent && depth < 4; parent = parent.parentElement, depth += 1) {
+                      const parentRole = normalize(parent.getAttribute('role'));
+                      const parentClass = normalize(parent.className);
+                      if (parent.onclick
+                        || Number(parent.getAttribute('tabindex')) >= 0
+                        || ['button', 'tab', 'menuitem', 'option', 'switch', 'combobox', 'link'].includes(parentRole)
+                        || /click|btn|button|tab|menu|nav|link|item|card|course|chapter|module|route|panel/i.test(parentClass)) {
+                        clickableAncestor = true;
+                        break;
+                      }
+                    }
+                    const directSignal = !!roleAttr || !!el.onclick || Number(el.getAttribute('tabindex')) >= 0;
+                    const hasClickableSignal = tag === 'a'
+                      || tag === 'button'
+                      || ['input', 'select', 'textarea', 'summary'].includes(tag)
+                      || ['button', 'tab', 'menuitem', 'option', 'switch', 'combobox', 'link'].includes(roleAttr)
+                      || el.onclick
+                      || Number(el.getAttribute('tabindex')) >= 0
+                      || style.cursor === 'pointer'
+                      || classSignal;
+                    if (!hasClickableSignal) continue;
+                    const name = normalize(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || el.getAttribute('href'));
+                    if (!name || name.length > 140) continue;
+                    if (['div', 'span', 'li'].includes(tag) && !directSignal && !classSignal) continue;
+                    if (['div', 'span', 'li'].includes(tag)
+                      && clickableAncestor
+                      && !directSignal
+                      && !/tab|menu|nav|module|route|link|btn|button/i.test(className)
+                      && !/详情|更多|进入|查看|展开|切换|选择|搜索|筛选|下一页|分页/.test(name)) continue;
+                    if (name.length <= 2 && !/详情|更多|进入|设置|AI|ai/.test(name)) continue;
+                    const nestedControls = el.querySelectorAll('button,a,input,select,textarea,[role],[onclick],[tabindex]').length;
+                    const nativeControl = tag === 'a' || tag === 'button' || ['input', 'select', 'textarea', 'summary'].includes(tag);
+                    if (!nativeControl && nestedControls > 3 && name.length > 80) continue;
+                    const locator = cssPath(el);
+                    if (!locator || seen.has(locator)) continue;
+                    seen.add(locator);
+                    const role = roleAttr || (tag === 'a' ? 'link' : tag === 'input' || tag === 'textarea' ? 'textbox' : tag === 'select' ? 'combobox' : tag === 'li' ? 'menuitem' : 'button');
+                    rows.push({ role, name, locator, tag, score: scoreFor(el, role, name), context: contextFor(el, name) });
+                    if (rows.length >= 60) break;
+                  }
+                  rows.sort((a, b) => b.score - a.score || a.name.length - b.name.length);
+                  return rows;
+                }
+                """
+            )
+        except Exception:
+            return []
+        candidates: list[dict[str, Any]] = []
+        for index, row in enumerate(rows if isinstance(rows, list) else []):
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            locator = str(row.get("locator") or "").strip()
+            if not name or not locator or self._is_unsafe_interaction_name(name) or self._is_static_metadata_name(name):
+                continue
+            role = str(row.get("role") or "button").strip() or "button"
+            context = row.get("context") if isinstance(row.get("context"), dict) else {}
+            candidates.append(
+                {
+                    "id": self._stable_id(page_url, "dom", index, role, name, context.get("entity") or ""),
+                    "ref": "",
+                    "role": role,
+                    "name": name,
+                    "visible": True,
+                    "locator": locator,
+                    "context": context,
+                    "action": {},
+                    "source": "dom-clickable",
+                    "dom_score": row.get("score"),
+                }
+            )
+        return candidates
+
+    def _is_unsafe_interaction_name(self, name: str) -> bool:
+        lowered = name.lower()
+        skip_tokens = [
+            "logout",
+            "log out",
+            "sign out",
+            "delete",
+            "remove",
+            "drop",
+            "destroy",
+            "pay",
+            "submit",
+            "\u9000\u51fa",
+            "\u767b\u51fa",
+            "\u6ce8\u9500",
+            "\u5220\u9664",
+            "\u79fb\u9664",
+            "\u652f\u4ed8",
+            "\u63d0\u4ea4",
+        ]
+        return any(token in lowered for token in skip_tokens)
+
+    def _is_static_metadata_name(self, name: str) -> bool:
+        compact = re.sub(r"\s+", "", name)
+        if not compact:
+            return True
+        action_pattern = r"进入|查看|详情|展开|更多|切换|选择|搜索|筛选|下一页|分页|编辑|添加|新建|打开"
+        if re.search(action_pattern, compact):
+            return False
+        if len(compact) <= 2 and not re.search(r"AI|ai", compact):
+            return True
+        metadata_pattern = (
+            r"教师|人数|学期|日期|时间|编号|价格|库存|状态|进度|已学|总章节|"
+            r"手机号|邮箱|地址|评分|浏览量|创建人|创建时间|更新时间|授课|选课"
+        )
+        if re.search(metadata_pattern, compact) and (len(compact) <= 40 or "：" in compact or ":" in compact):
+            return True
+        if re.fullmatch(r"[\d.:%/年月日-]+", compact):
+            return True
+        return False
+
+    def _build_interaction_graph(self, trigger: dict[str, Any], revealed_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+        elements: list[dict[str, Any]] = []
+        entities: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, Any]] = []
+        trigger_id = str(trigger.get("id") or "")
+        for node in revealed_nodes:
+            element_id = str(node.get("id") or "")
+            if not element_id:
+                continue
+            elements.append(
+                {
+                    "id": element_id,
+                    "role": node.get("role"),
+                    "name": node.get("name"),
+                    "ref": node.get("ref"),
+                    "locator": node.get("locator"),
+                    "context": node.get("context") or {},
+                    "visible": node.get("visible"),
+                    "discovered_by": "interaction",
+                    "trigger_id": trigger_id,
+                }
+            )
+            if trigger_id:
+                edges.append({"type": "element_reveals_element", "from": trigger_id, "to": element_id})
+            context = node.get("context") if isinstance(node.get("context"), dict) else {}
+            entity_name = str(context.get("entity") or "").strip()
+            if entity_name:
+                entity_id = self._stable_id("entity", "interaction", entity_name)
+                entities[entity_id] = {"id": entity_id, "name": entity_name}
+                edges.append({"type": "element_belongs_to_entity", "from": element_id, "to": entity_id})
+        return {"pages": [], "elements": elements, "entities": list(entities.values()), "edges": edges}
+
+    def _classify_interaction_effect(self, nodes: list[Any], revealed_nodes: list[dict[str, Any]]) -> str:
+        roles = {str(node.get("role") or "") for node in revealed_nodes if isinstance(node, dict)}
+        names = " ".join(str(node.get("name") or "") for node in revealed_nodes if isinstance(node, dict))
+        if "dialog" in roles or "弹窗" in names:
+            return "dialog"
+        if "抽屉" in names or "drawer" in names.lower():
+            return "drawer"
+        if "tab" in roles:
+            return "tab-panel"
+        if revealed_nodes:
+            return "expanded-content"
+        return "no-new-semantic-node"
+
+    def _node_semantic_key(self, node: dict[str, Any]) -> tuple[str, str, str, str]:
+        context = node.get("context") if isinstance(node.get("context"), dict) else {}
+        return (
+            str(node.get("role") or ""),
+            str(node.get("name") or ""),
+            str(context.get("entity") or ""),
+            "/".join(str(item) for item in context.get("path") or []),
+        )
+
+    def _parse_aria_snapshot(self, text: str) -> list[_AriaNode]:
+        roots: list[_AriaNode] = []
+        stack: list[tuple[int, _AriaNode]] = []
+        for raw_line in text.splitlines():
+            if not raw_line.strip():
+                continue
+            stripped = raw_line.lstrip(" ")
+            if not stripped.startswith("- "):
+                continue
+            indent = len(raw_line) - len(stripped)
+            role, name = self._parse_aria_line(stripped[2:].strip())
+            if not role:
+                continue
+            node = _AriaNode(role=role, name=name, raw=stripped[2:].strip())
+            while stack and stack[-1][0] >= indent:
+                stack.pop()
+            if stack:
+                parent = stack[-1][1]
+                node.parent = parent
+                parent.children.append(node)
+            else:
+                roots.append(node)
+            stack.append((indent, node))
+        return roots
+
+    def _parse_aria_line(self, value: str) -> tuple[str, str]:
+        value = value.rstrip(":").strip()
+        if not value or value.startswith("/"):
+            return "", ""
+        colon_match = re.match(r"^([a-zA-Z][\w-]*):\s*(.*)$", value)
+        if colon_match:
+            return colon_match.group(1).lower(), colon_match.group(2).strip().strip("\"'")
+        match = re.match(r"^([a-zA-Z][\w-]*)(?:\s+(['\"])(.*?)\2)?", value)
+        if not match:
+            return "", ""
+        return match.group(1).lower(), (match.group(3) or "").strip()
+
+    def _is_semantic_element(self, node: _AriaNode) -> bool:
+        if node.role in self._interactive_roles():
+            return True
+        return node.role in {"heading", "text", "listitem", "row", "group", "region", "article", "form", "dialog"}
+
+    def _interactive_roles(self) -> set[str]:
+        return {
+            "button",
+            "link",
+            "textbox",
+            "checkbox",
+            "radio",
+            "combobox",
+            "listbox",
+            "menuitem",
+            "tab",
+            "switch",
+            "option",
+            "slider",
+            "spinbutton",
+        }
+
+    def _find_context_node(self, node: _AriaNode) -> _AriaNode | None:
+        parent = node.parent
+        context_roles = {"listitem", "row", "group", "region", "article", "form", "dialog"}
+        while parent:
+            if parent.role in context_roles:
+                return parent
+            parent = parent.parent
+        return node.parent
+
+    def _extract_entity(self, container: _AriaNode | None, exclude: str = "") -> str:
+        if container is None:
+            return ""
+        if container.name and container.name != exclude and container.role not in {"row", "listitem"}:
+            return container.name
+        for child in container.walk():
+            if child is container:
+                continue
+            if child.name and child.name != exclude and child.role in {"heading", "text", "link"}:
+                return child.name
+        for child in container.walk():
+            if child is not container and child.name and child.name != exclude:
+                return child.name
+        return ""
+
+    def _semantic_path(self, node: _AriaNode) -> list[str]:
+        path: list[str] = []
+        parent = node.parent
+        while parent:
+            label = parent.role if not parent.name else f"{parent.role}:{parent.name}"
+            path.append(label)
+            parent = parent.parent
+        path.reverse()
+        return path
+
+    def _locator_expression(self, node: _AriaNode) -> str:
+        if node.role not in self._interactive_roles():
+            return ""
+        role = json.dumps(node.role, ensure_ascii=False)
+        if node.name:
+            name = json.dumps(node.name, ensure_ascii=False)
+            return f"getByRole({role}, {{name: {name}}}).nth({node.index})"
+        return f"getByRole({role}).nth({node.index})"
+
+    async def _is_locator_visible(self, session: _BrowserSession, locator_expression: str) -> bool | None:
+        try:
+            return bool(await self._locator(session, locator_expression).is_visible(timeout=250))
+        except Exception:
+            return None
+
+    async def _is_text_visible(self, session: _BrowserSession, name: str, index: int) -> bool | None:
+        try:
+            return bool(await session.page.get_by_text(name).nth(index).is_visible(timeout=250))
+        except Exception:
+            return None
+
+    async def _action_metadata(self, session: _BrowserSession, node: _AriaNode) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        try:
+            locator = self._locator(session, node.locator)
+            box = await locator.bounding_box(timeout=250)
+            if box:
+                metadata["bounding_box"] = box
+            if node.role == "link":
+                href = await locator.get_attribute("href", timeout=250)
+                if href:
+                    metadata["href"] = href
+        except Exception:
+            pass
+        return metadata
+
+    async def _visual_context_for_locator(self, session: _BrowserSession, node: _AriaNode) -> dict[str, Any]:
+        try:
+            return await self._locator(session, node.locator).evaluate(
+                """
+                (el, payload) => {
+                  const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                  const buttonName = normalize(payload.name);
+                  const controlLabels = [
+                    buttonName,
+                    '点击进入',
+                    '查看课程简介',
+                    '收起课程简介',
+                    '展开全部',
+                    '收起全部',
+                    '退出登录',
+                    '切换'
+                  ].filter(Boolean);
+                  const skip = new Set(controlLabels);
+                  const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+                  const candidates = [];
+                  let current = el.parentElement;
+                  for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
+                    const rect = current.getBoundingClientRect();
+                    const text = normalize(current.innerText || current.textContent || '');
+                    if (!text || text.length <= buttonName.length + 2 || rect.width <= 0 || rect.height <= 0) {
+                      continue;
+                    }
+                    const className = normalize(current.className);
+                    const role = normalize(current.getAttribute('role'));
+                    const controlCount = current.querySelectorAll('button,a,input,select,textarea,[role="button"]').length;
+                    let score = 0;
+                    if (/card|item|course|list|row|panel|content|box/i.test(className)) score += 5;
+                    if (text.length <= 600) score += 3;
+                    if (controlCount > 0 && controlCount <= 4) score += 2;
+                    if (rect.width * rect.height < viewportArea * 0.75) score += 2;
+                    score -= depth * 0.2;
+                    candidates.push({ depth, score, tag: current.tagName.toLowerCase(), role, className, text });
+                  }
+                  candidates.sort((a, b) => b.score - a.score || a.depth - b.depth);
+                  const picked = candidates[0];
+                  if (!picked) return {};
+                  let cleanedText = String(picked.text || '');
+                  for (const label of controlLabels) {
+                    cleanedText = cleanedText.split(label).join(' ');
+                  }
+                  const lines = cleanedText
+                    .split(/\\n|\\r| {2,}/)
+                    .map((line) => normalize(line))
+                    .filter(Boolean)
+                    .filter((line) => !skip.has(line))
+                    .filter((line) => !/^\\d+%$/.test(line));
+                  const entity = (lines.find((line) => line.length <= 120) || lines[0] || '').slice(0, 120);
+                  return {
+                    entity,
+                    container_role: picked.role || 'visual-container',
+                    container_name: picked.className || picked.tag,
+                    path: ['visual-container'],
+                    text: picked.text.slice(0, 500),
+                    confidence: entity ? 'fallback' : 'none'
+                  };
+                }
+                """,
+                {"name": node.name},
+                timeout=500,
+            )
+        except Exception:
+            return {}
+
+    def _build_semantic_graph(self, url: str, title: str, semantic_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+        page_id = self._stable_id("page", url)
+        page_vertex = {"id": page_id, "url": url, "title": title}
+        elements: list[dict[str, Any]] = []
+        entities_by_key: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, Any]] = []
+        for node in semantic_nodes:
+            element_id = str(node.get("id") or self._stable_id(url, node.get("role"), node.get("name")))
+            elements.append(
+                {
+                    "id": element_id,
+                    "page_id": page_id,
+                    "role": node.get("role"),
+                    "name": node.get("name"),
+                    "ref": node.get("ref"),
+                    "locator": node.get("locator"),
+                    "context": node.get("context") or {},
+                    "visible": node.get("visible"),
+                }
+            )
+            edges.append({"type": "page_contains_element", "from": page_id, "to": element_id})
+            context = node.get("context") if isinstance(node.get("context"), dict) else {}
+            entity_name = str(context.get("entity") or "").strip()
+            if entity_name:
+                entity_id = self._stable_id("entity", url, entity_name)
+                entities_by_key[entity_id] = {"id": entity_id, "name": entity_name, "source_page_id": page_id}
+                edges.append({"type": "element_belongs_to_entity", "from": element_id, "to": entity_id})
+            action = node.get("action") if isinstance(node.get("action"), dict) else {}
+            href = str(action.get("href") or "").strip()
+            if href:
+                target_page_id = self._stable_id("page", urljoin(url, href))
+                edges.append({"type": "element_triggers_navigation", "from": element_id, "to": target_page_id, "href": href})
+        return {
+            "pages": [page_vertex],
+            "elements": elements,
+            "entities": list(entities_by_key.values()),
+            "edges": edges,
+        }
+
+    def _merge_graph(self, target: dict[str, Any], source: dict[str, Any]) -> None:
+        for key in ["pages", "elements", "entities", "edges"]:
+            existing = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in target[key]}
+            for item in source.get(key, []):
+                marker = json.dumps(item, sort_keys=True, ensure_ascii=False)
+                if marker not in existing:
+                    target[key].append(item)
+                    existing.add(marker)
+
+    def _stable_id(self, *parts: Any) -> str:
+        digest = hashlib.sha1(":".join(str(part) for part in parts).encode("utf-8")).hexdigest()
+        return f"ui_{digest[:20]}"
+
+    def _same_origin(self, base_url: str, link: str) -> bool:
+        base = urlparse(self._normalize_url(base_url))
+        other = urlparse(self._normalize_url(link))
+        return (base.scheme, base.netloc) == (other.scheme, other.netloc)
+
     def _locator(self, session: _BrowserSession, target: str) -> Any:
         selector = session.ref_map.get(target, target)
         page = session.page
-        role_match = re.fullmatch(r"getByRole\(['\"]([^'\"]+)['\"]\s*,\s*\{\s*name:\s*['\"]([^'\"]+)['\"]\s*\}\)", selector)
+        role_match = re.fullmatch(
+            r"getByRole\((['\"])(.*?)\1(?:\s*,\s*\{\s*name:\s*(['\"])(.*?)\3\s*\})?\)(?:\.nth\((\d+)\))?",
+            selector,
+        )
         if role_match:
-            return page.get_by_role(role_match.group(1), name=role_match.group(2))
+            locator = page.get_by_role(role_match.group(2), name=role_match.group(4) or None)
+            if role_match.group(5) is not None:
+                locator = locator.nth(int(role_match.group(5)))
+            return locator
         test_id_match = re.fullmatch(r"getByTestId\(['\"]([^'\"]+)['\"]\)", selector)
         if test_id_match:
             return page.get_by_test_id(test_id_match.group(1))
@@ -585,6 +1796,7 @@ class PythonPlaywrightCliRuntime:
             "python-playwright-cli commands:\n"
             "  open [url], goto <url>, close, delete-data, list, close-all\n"
             "  snapshot [ref] [--filename=file] [--depth=N], screenshot [ref] [--filename=file]\n"
+            "  semantic-snapshot [--filename=file] [--include-hidden], explore <url> [--max-pages=N]\n"
             "  click <ref>, dblclick <ref>, fill <ref> <text> [--submit], type <text>, press <key>\n"
             "  eval <expression> [ref], resize <w> <h>, mousewheel <dx> <dy>\n"
             "  tab-list, tab-new [url], tab-select <index>, tab-close [index]\n"
@@ -630,6 +1842,13 @@ class PythonPlaywrightCliRuntime:
                 return args[index + 1]
         return None
 
+    def _login_credentials_from_args(self, args: list[str]) -> dict[str, str]:
+        username = self._option_value(args, "--login-username") or self._option_value(args, "--username") or ""
+        password = self._option_value(args, "--login-password") or self._option_value(args, "--password") or ""
+        if not username and not password:
+            return {}
+        return {"username": username, "password": password}
+
     def _first_positional(self, args: list[str]) -> str:
         for arg in args:
             if not arg.startswith("--"):
@@ -663,3 +1882,4 @@ class PythonPlaywrightCliRuntime:
     def _slug(self, value: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
         return slug[:96] or "default"
+

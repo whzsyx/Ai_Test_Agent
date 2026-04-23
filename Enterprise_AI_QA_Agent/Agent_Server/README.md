@@ -1,5 +1,30 @@
 # Enterprise AI QA Agent Server
 
+## UI Explorer Agent
+
+UI 方向现在采用单一目标：构建“UI 探索 Agent”，把页面结构与上下文语义采集成图谱。
+
+```text
+Playwright CLI Runtime
+  -> ARIA Snapshot
+  -> Context Tree Builder
+  -> Semantic Extractor
+  -> ArangoDB UI Graph
+```
+
+实现落点：
+- `application/runtime/python_playwright_cli.py` 提供 `semantic-snapshot` 与 `explore` 命令。
+- `application/testing/ui_exploration_service.py` 通过 `ui-page-explorer` 调用语义探索闭环。
+- `application/exploration/ui_graph_store.py` 写入 ArangoDB 图谱集合。
+- 该链路只探索和建模，不进入 Verification/Evaluation，不生成测试或断言。
+
+登录与交互策略：
+- 登录由运行时检测触发：只有页面出现可见 password input / 登录表单时，才使用工具参数中的 `login_credentials`。
+- 交互探索由 `max_interactions` 控制，面向弹窗、抽屉、Tab、展开区等非导航 UI 状态。
+- 交互态通过 `element_reveals_element` 边写入图谱，保留“触发控件 -> 新出现元素”的关系。
+
+大模型在 UI Explorer 中负责策略与解释，不直接充当事实源。事实采集以 Playwright ARIA snapshot、工具输出和 ArangoDB 图谱为准。
+
 一个面向企业级 Agent 测试平台的后端运行时，目标是用 `FastAPI + LangGraph` 复刻类似 Claude Code 的核心组织方式，并沉淀可观测、可审批、可恢复、可扩展的 QA Agent Harness。
 
 ## 当前包含

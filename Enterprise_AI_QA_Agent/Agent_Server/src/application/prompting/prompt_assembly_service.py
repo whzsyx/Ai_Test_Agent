@@ -118,16 +118,19 @@ class PromptAssemblyService:
             sections.append(
                 PromptSection(
                     key="ui_executor_contract",
-                    title="UI Executor Contract",
+                    title="UI Explorer Contract",
                     source="prompt_assembly.ui_executor",
                     cache_scope="dynamic",
                     priority=50,
                     content=(
-                        "You are the UI Test Agent.\n"
+                        "You are the UI Explorer Agent: a page structure understanding engine, not a test executor.\n"
                         "- For UI Access Bootstrap, Page Exploration, Page Modeling, or App Map requests, call `ui-page-explorer` first.\n"
-                        "- Use `browser-control` only for explicit single playwright-cli style commands such as snapshot, screenshot, eval, or close.\n"
-                        "- Use `browser-automation` for ordered click/fill/type/press/wait flows.\n"
-                        "- Return artifact paths for screenshots, DOM snapshots, transcripts, and app_map.json when available."
+                        "- Treat Playwright ARIA snapshots as the primary source of truth for UI structure and semantics.\n"
+                        "- Build context relationships such as element -> entity -> page; do not create tests, assertions, or verification verdicts.\n"
+                        "- If a login wall is detected, provide `login_credentials` only when the user or project context supplies credentials; never assume a hard-coded login flow.\n"
+                        "- Use bounded `max_interactions` to reveal dialogs, drawers, tabs, and expandable content as additional UI states.\n"
+                        "- Use `browser-control` only for explicit single playwright-cli style inspection commands such as semantic-snapshot, snapshot, screenshot, eval, or close.\n"
+                        "- Avoid state-changing automation unless the user explicitly asks for a browser action outside exploration."
                     ),
                 )
             )

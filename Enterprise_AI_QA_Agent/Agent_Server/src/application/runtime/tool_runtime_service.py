@@ -13,6 +13,7 @@ from typing import Any
 from src.application.context.memory_runtime_service import MemoryRuntimeService
 from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.exploration.ui_graph_store import UIGraphStore
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.application.testing.ui_exploration_service import UIExplorationService
@@ -61,9 +62,15 @@ class ToolRuntimeService:
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
+        self._ui_graph_store = UIGraphStore(settings) if settings is not None else None
         self._ui_exploration_service = (
-            UIExplorationService(settings, mcp_runtime_service)
-            if settings is not None and mcp_runtime_service is not None
+            UIExplorationService(
+                settings=settings,
+                mcp_runtime_service=mcp_runtime_service,
+                memory_runtime_service=memory_runtime_service,
+                ui_graph_store=self._ui_graph_store,
+            )
+            if settings is not None
             else None
         )
         self._handlers = {
@@ -669,7 +676,7 @@ class ToolRuntimeService:
         query = str(arguments.get("query") or context.user_message).lower()
         route = "coordinator"
         rationale = "Defaulted to coordinator for orchestration."
-        if any(token in query for token in ["browser", "page", "ui", "selenium", "playwright"]):
+        if any(token in query for token in ["browser", "page", "ui", "selenium", "playwright", "页面", "浏览器", "探索", "图谱"]):
             route = "ui-executor"
             rationale = "Detected browser or UI execution intent."
         elif any(

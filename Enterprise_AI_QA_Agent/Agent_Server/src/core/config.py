@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     arango_tool_job_collection: str = "agent_tool_jobs"
     arango_tool_artifact_collection: str = "agent_tool_artifacts"
     arango_memory_collection: str = "agent_memory"
+    arango_ui_page_collection: str = "ui_graph_pages"
+    arango_ui_element_collection: str = "ui_graph_elements"
+    arango_ui_entity_collection: str = "ui_graph_entities"
+    arango_ui_page_contains_edge_collection: str = "ui_graph_page_contains_element"
+    arango_ui_belongs_edge_collection: str = "ui_graph_element_belongs_to_entity"
+    arango_ui_navigation_edge_collection: str = "ui_graph_element_triggers_navigation"
+    arango_ui_reveals_edge_collection: str = "ui_graph_element_reveals_element"
     mysql_host: str = "127.0.0.1"
     mysql_port: int = 3307
     mysql_user: str = "root"

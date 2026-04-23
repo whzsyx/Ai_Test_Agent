@@ -65,7 +65,7 @@ class ObservationRuntimeService:
         return observations
 
     def _category_for_tool(self, tool_key: str) -> ObservationCategory:
-        if tool_key in {"browser-automation", "browser-control", "dom-inspector"}:
+        if tool_key in {"ui-page-explorer", "browser-automation", "browser-control", "dom-inspector"}:
             return "page_state"
         if tool_key == "api-tester":
             return "api_assertion"
@@ -80,14 +80,16 @@ class ObservationRuntimeService:
         return "tool_execution"
 
     def _scope_for_tool(self, tool_key: str) -> ObservationScope:
-        if tool_key in {"browser-automation", "browser-control", "dom-inspector"}:
+        if tool_key in {"ui-page-explorer", "browser-automation", "browser-control", "dom-inspector"}:
             return "page"
         if tool_key in {"api-tester", "report-writer", "file-artifact-manager"}:
             return "artifact"
         return "session"
 
     def _resolve_source(self, tool_key: str, output: dict[str, Any]) -> str | None:
-        if tool_key in {"browser-automation", "browser-control", "dom-inspector"}:
+        if tool_key == "ui-page-explorer":
+            return str(output.get("entry_url") or "").strip() or None
+        if tool_key in {"ui-page-explorer", "browser-automation", "browser-control", "dom-inspector"}:
             return str(output.get("current_url") or output.get("url") or "").strip() or None
         if tool_key == "api-tester":
             endpoint = str(output.get("endpoint") or output.get("url") or "").strip()

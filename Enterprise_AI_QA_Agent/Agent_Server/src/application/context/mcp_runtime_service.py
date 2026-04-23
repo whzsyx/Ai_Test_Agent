@@ -333,6 +333,18 @@ class MCPRuntimeService:
                     )
                 )
                 artifacts.append({"type": "screenshot", "path": str(screenshot_path)})
+            elif action in {"semantic-snapshot", "semantic_snapshot", "aria-snapshot", "aria_snapshot"}:
+                snapshot_path = artifact_dir / "semantic_snapshot.json"
+                command_log.append(
+                    await self._run_playwright_cli(
+                        session_name,
+                        ["semantic-snapshot", f"--filename={snapshot_path.name}"],
+                        artifact_dir,
+                        raw=True,
+                    )
+                )
+                result = self._parse_json_if_possible(str(command_log[-1].get("stdout") or ""))
+                artifacts.append({"type": "semantic-snapshot", "path": str(snapshot_path)})
             elif action in {"screenshot", "capture"}:
                 label = self._slug(str(payload.get("label") or action))
                 screenshot_path = artifact_dir / f"{label}.png"
