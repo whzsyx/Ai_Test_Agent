@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
@@ -6,12 +6,12 @@ from datetime import datetime
 from typing import Awaitable, Callable
 from uuid import uuid4
 
-from src.application.memory_runtime_service import MemoryRuntimeService
-from src.application.observation_runtime_service import ObservationRuntimeService
-from src.application.input_orchestrator_service import InputOrchestratorService
-from src.application.runtime_service import RuntimeService
-from src.application.transcript_hygiene_service import TranscriptHygieneService
-from src.application.verification_service import VerificationService
+from src.application.context.memory_runtime_service import MemoryRuntimeService
+from src.application.context.observation_runtime_service import ObservationRuntimeService
+from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
+from src.application.runtime.runtime_service import RuntimeService
+from src.application.context.transcript_hygiene_service import TranscriptHygieneService
+from src.application.testing.verification_service import VerificationService
 from src.domain.models import SessionRecord
 from src.runtime.execution_logging import truncate_text
 from src.runtime.store import SessionStore

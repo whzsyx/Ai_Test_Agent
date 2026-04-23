@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -8,7 +8,7 @@ from time import perf_counter
 import httpx
 
 from src.application.model_adapters import AdapterRegistry, build_default_adapter_registry
-from src.application.model_compatibility import ModelCompatibilityLayer
+from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore

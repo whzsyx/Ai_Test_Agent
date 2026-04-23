@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from src.application.permission_service import PermissionPolicyContext, PermissionService
+from src.application.permissions.permission_service import PermissionPolicyContext, PermissionService
 from src.graph.state import AgentGraphState
 from src.registry.tools import ToolRegistry
 from src.runtime.execution_logging import append_graph_event

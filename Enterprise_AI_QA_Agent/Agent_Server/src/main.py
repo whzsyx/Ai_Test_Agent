@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
@@ -19,26 +19,26 @@ from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
 from src.application.model_adapters import build_default_adapter_registry
-from src.application.artifact_storage_service import ArtifactStorageService
-from src.application.coordinator_runtime_service import CoordinatorRuntimeService
-from src.application.input_orchestrator_service import InputOrchestratorService
-from src.application.memory_runtime_service import MemoryRuntimeService
-from src.application.mcp_runtime_service import MCPRuntimeService
-from src.application.model_runtime_service import ModelRuntimeService
-from src.application.observation_runtime_service import ObservationRuntimeService
-from src.application.permission_service import PermissionService
-from src.application.prompt_assembly_service import PromptAssemblyService
-from src.application.prompt_service import PromptSubmissionService
-from src.application.registry_service import RegistryService
-from src.application.runtime_service import RuntimeService
-from src.application.session_service import SessionService
-from src.application.skill_management_service import SkillManagementService
-from src.application.skill_marketplace_service import SkillMarketplaceService
-from src.application.skill_runtime_service import SkillRuntimeService
-from src.application.settings_service import SettingsService
-from src.application.tool_job_service import ToolJobService
-from src.application.tool_runtime_service import ToolRuntimeService
-from src.application.transcript_hygiene_service import TranscriptHygieneService
+from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
+from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
+from src.application.context.memory_runtime_service import MemoryRuntimeService
+from src.application.context.mcp_runtime_service import MCPRuntimeService
+from src.application.models.model_runtime_service import ModelRuntimeService
+from src.application.context.observation_runtime_service import ObservationRuntimeService
+from src.application.permissions.permission_service import PermissionService
+from src.application.prompting.prompt_assembly_service import PromptAssemblyService
+from src.application.prompting.prompt_service import PromptSubmissionService
+from src.application.registries.registry_service import RegistryService
+from src.application.runtime.runtime_service import RuntimeService
+from src.application.sessions.session_service import SessionService
+from src.application.skills.skill_management_service import SkillManagementService
+from src.application.skills.skill_marketplace_service import SkillMarketplaceService
+from src.application.skills.skill_runtime_service import SkillRuntimeService
+from src.application.settings.settings_service import SettingsService
+from src.application.runtime.tool_job_service import ToolJobService
+from src.application.runtime.tool_runtime_service import ToolRuntimeService
+from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.core.config import get_settings
 from src.graph.builder import build_agent_graph
 from src.infrastructure.arango_memory_store import ArangoDocumentMemoryStore

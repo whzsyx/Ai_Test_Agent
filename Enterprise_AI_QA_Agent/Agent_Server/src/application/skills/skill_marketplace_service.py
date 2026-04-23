@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from src.application.skill_management_service import SkillManagementService
+from src.application.skills.skill_management_service import SkillManagementService
 
 
 class SkillMarketplaceService:

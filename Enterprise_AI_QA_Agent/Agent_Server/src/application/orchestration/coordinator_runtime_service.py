@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 from xml.sax.saxutils import escape
 
-from src.application.session_service import SessionService
+from src.application.sessions.session_service import SessionService
 from src.core.config import Settings
 from src.registry.agents import AgentRegistry
 from src.runtime.store import SessionStore

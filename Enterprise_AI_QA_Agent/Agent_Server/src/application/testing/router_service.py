@@ -1,12 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from src.application.test_direction_service import TestTaskState
+from src.application.testing.direction_service import QATaskState
 
 
-class TestRouterService:
+class QATaskRouterService:
     """Map test task directions to agent/tool harnesses."""
 
-    def route(self, state: TestTaskState) -> dict[str, str]:
+    def route(self, state: QATaskState) -> dict[str, str]:
         if not state.is_test_task:
             return {"agent_key": "", "harness": "base_conversation"}
         if state.direction == "ui":

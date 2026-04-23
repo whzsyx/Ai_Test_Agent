@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -6,9 +6,9 @@ import json
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from src.application.model_runtime_service import ModelRuntimeService
-from src.application.transcript_hygiene_service import TranscriptHygieneService
-from src.application.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
+from src.application.models.model_runtime_service import ModelRuntimeService
+from src.application.context.transcript_hygiene_service import TranscriptHygieneService
+from src.application.runtime.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
 from src.domain.models import SessionRecord
 from src.registry.tools import ToolRegistry
 from src.runtime.control import RuntimeControlRegistry

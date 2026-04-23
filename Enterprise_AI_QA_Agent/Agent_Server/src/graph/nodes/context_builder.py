@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 
-from src.application.memory_runtime_service import MemoryRuntimeService
+from src.application.context.memory_runtime_service import MemoryRuntimeService
 from src.graph.state import AgentGraphState
 from src.runtime.execution_logging import append_graph_event, truncate_text
 

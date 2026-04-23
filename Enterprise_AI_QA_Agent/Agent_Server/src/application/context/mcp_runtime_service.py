@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import Settings
-from src.application.python_playwright_cli import PythonPlaywrightCliRuntime
+from src.application.runtime.python_playwright_cli import PythonPlaywrightCliRuntime
 from src.registry.mcp import MCPRegistry
 
 

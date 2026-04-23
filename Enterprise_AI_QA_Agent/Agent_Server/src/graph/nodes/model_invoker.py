@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from src.application.model_runtime_service import ModelRuntimeService
+from src.application.models.model_runtime_service import ModelRuntimeService
 from src.graph.state import AgentGraphState
 from src.registry.tools import ToolRegistry
 from src.runtime.execution_logging import append_graph_event, summarize_messages, truncate_text

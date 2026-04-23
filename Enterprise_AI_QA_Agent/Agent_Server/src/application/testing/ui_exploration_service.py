@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from datetime import datetime
@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from src.application.mcp_runtime_service import MCPRuntimeService
+from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.core.config import Settings
 
 if TYPE_CHECKING:
-    from src.application.tool_runtime_service import ToolExecutionContext
+    from src.application.runtime.tool_runtime_service import ToolExecutionContext
 
 
 class UIExplorationService:

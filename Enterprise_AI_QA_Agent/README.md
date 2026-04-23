@@ -64,12 +64,12 @@ Enterprise_AI_QA_Agent/
 
 ```bash
 cd Agent_Server
-uvicorn src.main:app --reload --port 8001
+uvicorn src.main:app --reload --port 8000
 ```
 
 说明：
 
-- 默认前端通过代理访问 `http://127.0.0.1:8001`
+- 默认前端通过代理访问 `http://127.0.0.1:8000`
 - 如需环境变量，可参考 `Agent_Server/.env.example`
 
 ### 2. 启动前端
@@ -83,7 +83,7 @@ npm run dev
 默认开发地址：
 
 - 前端：`http://localhost:5175`
-- 后端代理目标：`http://127.0.0.1:8001`
+- 后端代理目标：`http://127.0.0.1:8000`
 
 ## 设计映射
 
@@ -97,6 +97,29 @@ npm run dev
 
 3. `ui + api`
    前端不是单纯聊天页，而是工作台；后端不是单一 `/chat` 接口，而是 session shell、event stream、approval、dispatch 的统一运行接口。
+
+## 后端 application 分层
+
+`Agent_Server/src/application` 已按职责拆分为子包，避免所有服务文件堆在同一层：
+
+```text
+application/
+├─ artifacts/       # Artifact 存储与对象存储适配
+├─ context/         # Memory、MCP、Observation、Transcript Hygiene
+├─ model_adapters/  # OpenAI/Anthropic/Gemini 等模型 provider adapter
+├─ models/          # 模型运行时与模型兼容性
+├─ orchestration/   # 输入编排、Coordinator/Worker 调度
+├─ permissions/     # 工具权限策略与审批请求
+├─ prompting/       # Prompt submit 与结构化 prompt 组装
+├─ registries/      # Registry 聚合查询服务
+├─ runtime/         # LangGraph turn runtime、工具运行时、工具任务
+├─ sessions/        # 会话用例服务
+├─ settings/        # 模型/邮件等系统配置服务
+├─ skills/          # Skill 运行、管理与 marketplace
+└─ testing/         # QA 方向识别、测试路由、验证与 UI 探索
+```
+
+原 `test_direction_service.py` 与 `test_router_service.py` 并不是测试用例文件，它们实际参与输入编排；现已改为 `testing/direction_service.py` 与 `testing/router_service.py`，并使用 `QATaskDirectionService` / `QATaskRouterService` 命名。
 
 ## 适合继续扩展的方向
 

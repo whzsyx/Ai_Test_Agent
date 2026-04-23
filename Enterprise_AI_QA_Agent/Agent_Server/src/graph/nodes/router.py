@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from src.application.memory_runtime_service import MemoryRuntimeService
-from src.application.mcp_runtime_service import MCPRuntimeService
-from src.application.skill_runtime_service import SkillRuntimeService
+from src.application.context.memory_runtime_service import MemoryRuntimeService
+from src.application.context.mcp_runtime_service import MCPRuntimeService
+from src.application.skills.skill_runtime_service import SkillRuntimeService
 from src.graph.state import AgentGraphState
 from src.registry.agents import AgentRegistry
 from src.registry.models import ModelRegistry

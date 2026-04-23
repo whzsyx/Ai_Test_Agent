@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from src.application.prompt_assembly_service import PromptAssemblyService
+from src.application.prompting.prompt_assembly_service import PromptAssemblyService
 from src.graph.state import AgentGraphState
 from src.registry.agents import AgentRegistry
 from src.runtime.execution_logging import append_graph_event, truncate_text

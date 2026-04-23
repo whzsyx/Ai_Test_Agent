@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from typing import Any
 
-from src.application.permission_service import PermissionService
-from src.application.tool_job_service import ToolJobService
-from src.application.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
+from src.application.permissions.permission_service import PermissionService
+from src.application.runtime.tool_job_service import ToolJobService
+from src.application.runtime.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
 from src.graph.state import AgentGraphState
 from src.registry.tools import ToolRegistry
 from src.runtime.execution_logging import append_graph_event

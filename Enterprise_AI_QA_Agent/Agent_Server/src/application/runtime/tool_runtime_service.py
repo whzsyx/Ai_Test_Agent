@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -10,12 +10,12 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
-from src.application.memory_runtime_service import MemoryRuntimeService
-from src.application.mcp_runtime_service import MCPRuntimeService
-from src.application.artifact_storage_service import ArtifactStorageService
-from src.application.tool_job_service import ToolJobService
-from src.application.transcript_hygiene_service import TranscriptHygieneService
-from src.application.ui_exploration_service import UIExplorationService
+from src.application.context.memory_runtime_service import MemoryRuntimeService
+from src.application.context.mcp_runtime_service import MCPRuntimeService
+from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.runtime.tool_job_service import ToolJobService
+from src.application.context.transcript_hygiene_service import TranscriptHygieneService
+from src.application.testing.ui_exploration_service import UIExplorationService
 from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.runtime.store import SessionStore

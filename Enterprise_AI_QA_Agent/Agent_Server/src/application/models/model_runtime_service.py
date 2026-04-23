@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import contextvars
 import os
@@ -9,7 +9,7 @@ import httpx
 
 from src.application.model_adapters import AdapterRegistry, build_default_adapter_registry
 from src.application.model_adapters.base import ProviderAdapter
-from src.application.model_compatibility import ModelCompatibilityLayer
+from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.core.config import Settings
 from src.registry.models import ModelRegistry
 from src.runtime.execution_logging import summarize_messages, truncate_text

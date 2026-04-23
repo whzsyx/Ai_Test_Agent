@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterable
 from uuid import uuid4
 
 from src.domain.models import SessionRecord
-from src.application.test_direction_service import TestDirectionService
-from src.application.test_router_service import TestRouterService
+from src.application.testing.direction_service import QATaskDirectionService
+from src.application.testing.router_service import QATaskRouterService
 from src.schemas.session import (
     ExecutionRequest,
     InputAttachment,
@@ -19,8 +19,8 @@ from src.schemas.session import (
 
 class InputOrchestratorService:
     def __init__(self) -> None:
-        self._test_direction_service = TestDirectionService()
-        self._test_router_service = TestRouterService()
+        self._qa_task_direction_service = QATaskDirectionService()
+        self._qa_task_router_service = QATaskRouterService()
 
     def orchestrate(self, session: SessionRecord, payload: SendMessageRequest) -> ExecutionRequest:
         raw_content = payload.content or ""
@@ -68,11 +68,11 @@ class InputOrchestratorService:
 
         normalized_input = " ".join(content.split())
         skill_keys = list(dict.fromkeys(payload.skill_keys))
-        test_task_state = self._test_direction_service.classify(
+        test_task_state = self._qa_task_direction_service.classify(
             message=normalized_input,
             context=payload.context,
         )
-        test_route = self._test_router_service.route(test_task_state)
+        test_route = self._qa_task_router_service.route(test_task_state)
         for skill_key in test_task_state.recommended_skills:
             if skill_key not in skill_keys:
                 skill_keys.append(skill_key)
@@ -104,8 +104,8 @@ class InputOrchestratorService:
         )
         if test_task_state.is_test_task:
             for item in [
-                "test_direction_service",
-                "test_router_service",
+                "qa_task_direction_service",
+                "qa_task_router_service",
                 f"test_direction:{test_task_state.direction}",
                 f"test_harness:{test_route.get('harness', 'base_conversation')}",
             ]:
