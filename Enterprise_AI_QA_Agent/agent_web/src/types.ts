@@ -528,3 +528,52 @@ export interface SessionVerificationResponse {
   verification_results: VerificationResult[];
   metadata: Record<string, unknown>;
 }
+
+export interface KnowledgeProjectSummary {
+  project_scope: string;
+  page_count: number;
+  element_count: number;
+  entity_count: number;
+  edge_count: number;
+  latest_updated_at?: string | null;
+}
+
+export interface KnowledgeGraphSummary {
+  project_scope: string;
+  page_count: number;
+  element_count: number;
+  entity_count: number;
+  edge_count: number;
+  relation_counts: Record<string, number>;
+  latest_updated_at?: string | null;
+}
+
+export interface KnowledgeGraphNode {
+  id: string;
+  label: string;
+  kind: string;
+  summary: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface KnowledgeGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  label: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface KnowledgeGraphResponse {
+  summary: KnowledgeGraphSummary;
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+}
+
+export interface KnowledgeProjectDeleteResponse {
+  ok: boolean;
+  project_scope: string;
+  deleted_counts: Record<string, number>;
+  message: string;
+}

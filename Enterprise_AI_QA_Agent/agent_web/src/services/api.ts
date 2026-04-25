@@ -19,6 +19,9 @@ import type {
   ToolDescriptor,
   ToolJobDetail,
   ToolJobRecord,
+  KnowledgeGraphResponse,
+  KnowledgeProjectDeleteResponse,
+  KnowledgeProjectSummary,
   SkillDescriptor,
   SkillBulkInstallResponse,
   SkillInstallRequest,
@@ -49,6 +52,19 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   getHealth(): Promise<HealthResponse> {
     return request("/api/v1/health");
+  },
+  listKnowledgeProjects(): Promise<KnowledgeProjectSummary[]> {
+    return request("/api/v1/knowledge/projects");
+  },
+  getKnowledgeGraph(projectScope: string): Promise<KnowledgeGraphResponse> {
+    const params = new URLSearchParams({ project_scope: projectScope });
+    return request(`/api/v1/knowledge/graph?${params.toString()}`);
+  },
+  deleteKnowledgeProject(projectScope: string): Promise<KnowledgeProjectDeleteResponse> {
+    const params = new URLSearchParams({ project_scope: projectScope });
+    return request(`/api/v1/knowledge/project?${params.toString()}`, {
+      method: "DELETE",
+    });
   },
   listAgents(): Promise<AgentDescriptor[]> {
     return request("/api/v1/registry/agents");

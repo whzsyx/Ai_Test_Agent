@@ -73,12 +73,14 @@ class UIExplorationService:
         if arguments.get("include_hidden"):
             args.append("--include-hidden")
         try:
+            base_timeout = int(self._settings.browser_action_timeout_seconds or 15)
+            per_page_budget = max(base_timeout, 8 + max_interactions * 4)
             command_result = await self._playwright_runtime.run(
                 session_name=f"ui-explorer-{context.session_id}",
                 args=args,
                 cwd=output_dir,
                 raw=True,
-                timeout_seconds=max(30, max_pages * int(self._settings.browser_action_timeout_seconds or 15)),
+                timeout_seconds=max(45, max_pages * per_page_budget),
             )
         finally:
             await self._playwright_runtime.close_all()

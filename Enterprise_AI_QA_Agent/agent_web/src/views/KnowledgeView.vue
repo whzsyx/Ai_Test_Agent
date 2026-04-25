@@ -1,595 +1,1330 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-const showDetails = ref(false);
-const activeNode = ref<any>(null);
-const zoomLevel = ref(1);
-const activeEntityFilter = ref("Page");
+import { api } from "../services/api";
+import type {
+  KnowledgeGraphEdge,
+  KnowledgeGraphNode,
+  KnowledgeGraphResponse,
+  KnowledgeProjectSummary,
+} from "../types";
 
-const mockNodes = [
-  {
-    id: "node-1",
-    name: "登录页面 (Login Page)",
-    type: "Page",
-    typeClass: "page",
-    properties: {
-      url: "/login",
-      status: "Active",
-      elements: 24,
-      lastUpdated: "2024-05-20"
-    },
-    relations: [
-      { type: "CALLS", target: "/api/auth/login" },
-      { type: "COVERED_BY", target: "TC-1001" },
-      { type: "CONTAINS", target: "LoginForm 组件" }
-    ]
-  },
-  {
-    id: "node-2",
-    name: "/api/auth/login",
-    type: "API",
-    typeClass: "api",
-    properties: {
-      method: "POST",
-      auth: "None",
-      timeout: "2000ms",
-      lastUpdated: "2024-05-21"
-    },
-    relations: [
-      { type: "CALLED_BY", target: "登录页面 (Login Page)" },
-      { type: "COVERED_BY", target: "TC-1001" }
-    ]
-  },
-  {
-    id: "node-3",
-    name: "TC-1001: 正常登录",
-    type: "TestCase",
-    typeClass: "testcase",
-    properties: {
-      priority: "P0",
-      status: "Passed",
-      author: "QA-1",
-      lastUpdated: "2024-05-22"
-    },
-    relations: [
-      { type: "COVERS", target: "登录页面 (Login Page)" },
-      { type: "COVERS", target: "/api/auth/login" }
-    ]
+type NodeKindFilter = "all" | "page" | "entity" | "element";
+
+const CANVAS_WIDTH = 840;
+const CANVAS_HEIGHT = 500;
+
+const loadingProjects = ref(false);
+const loadingGraph = ref(false);
+const errorMessage = ref("");
+const projects = ref<KnowledgeProjectSummary[]>([]);
+const selectedProjectScope = ref("");
+const graph = ref<KnowledgeGraphResponse | null>(null);
+const searchTerm = ref("");
+const activeKind = ref<NodeKindFilter>("all");
+const activeNodeId = ref("");
+const detailDrawerOpen = ref(false);
+const deletingProject = ref(false);
+
+const canvasViewportRef = ref<SVGSVGElement | null>(null);
+const canvasCardRef = ref<HTMLElement | null>(null);
+const canvasZoom = ref(1);
+const canvasOffset = ref({ x: 0, y: 0 });
+const isDraggingCanvas = ref(false);
+const isFullscreenCanvas = ref(false);
+const dragPointerId = ref<number | null>(null);
+const dragStartPoint = ref({ x: 0, y: 0 });
+const dragStartOffset = ref({ x: 0, y: 0 });
+
+const selectedProject = computed(() =>
+  projects.value.find((item) => item.project_scope === selectedProjectScope.value) ?? null,
+);
+
+const nodesById = computed(() => {
+  const map = new Map<string, KnowledgeGraphNode>();
+  for (const node of graph.value?.nodes ?? []) {
+    map.set(node.id, node);
   }
-];
+  return map;
+});
 
-function handleNodeClick(nodeData: any) {
-  activeNode.value = nodeData;
-  showDetails.value = true;
+const filteredNodes = computed(() => {
+  const keyword = searchTerm.value.trim().toLowerCase();
+  return (graph.value?.nodes ?? []).filter((node) => {
+    if (activeKind.value !== "all" && node.kind !== activeKind.value) {
+      return false;
+    }
+    if (!keyword) {
+      return true;
+    }
+    const haystack = `${node.label} ${node.summary} ${JSON.stringify(node.metadata)}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
+});
+
+const selectedNode = computed(() => {
+  if (activeNodeId.value === '__GLOBAL_PAGES__') {
+    return null;
+  }
+  const firstNode = filteredNodes.value[0] ?? graph.value?.nodes?.[0] ?? null;
+  if (!activeNodeId.value && firstNode) {
+    activeNodeId.value = firstNode.id;
+  }
+  return nodesById.value.get(activeNodeId.value) ?? firstNode;
+});
+
+const selectedNodeEdges = computed(() => {
+  const nodeId = selectedNode.value?.id;
+  if (!nodeId) {
+    return [] as KnowledgeGraphEdge[];
+  }
+  return (graph.value?.edges ?? []).filter((edge) => edge.source === nodeId || edge.target === nodeId);
+});
+
+const neighborNodes = computed(() => {
+  const nodeId = selectedNode.value?.id;
+  if (!nodeId) {
+    return [] as KnowledgeGraphNode[];
+  }
+  const ids = new Set<string>();
+  for (const edge of selectedNodeEdges.value) {
+    ids.add(edge.source === nodeId ? edge.target : edge.source);
+  }
+  return Array.from(ids)
+    .map((id) => nodesById.value.get(id))
+    .filter((node): node is KnowledgeGraphNode => Boolean(node))
+    .slice(0, 8);
+});
+
+const relationChips = computed(() =>
+  Object.entries(graph.value?.summary.relation_counts ?? {}).sort((left, right) => right[1] - left[1]),
+);
+
+const adjacencyByNodeId = computed(() => {
+  const map = new Map<string, KnowledgeGraphEdge[]>();
+  for (const edge of graph.value?.edges ?? []) {
+    const sourceEdges = map.get(edge.source) ?? [];
+    sourceEdges.push(edge);
+    map.set(edge.source, sourceEdges);
+
+    if (edge.target !== edge.source) {
+      const targetEdges = map.get(edge.target) ?? [];
+      targetEdges.push(edge);
+      map.set(edge.target, targetEdges);
+    }
+  }
+  return map;
+});
+
+const canvasNodes = computed(() => {
+  if (activeNodeId.value === '__GLOBAL_PAGES__') {
+    const pages = (graph.value?.nodes ?? []).filter(n => n.kind === 'page');
+    const items = [
+      {
+        id: '__GLOBAL_PAGES__',
+        label: selectedProjectScope.value || '项目全局',
+        kind: 'project',
+        x: 420,
+        y: 250,
+        center: true,
+        level: 0,
+      },
+    ];
+
+    const visited = new Set<string>();
+    const firstRingRadius = Math.max(180, pages.length * 22);
+    
+    pages.forEach((node, index) => {
+      visited.add(node.id);
+      const angle = (-Math.PI / 2) + (Math.PI * 2 * index) / Math.max(pages.length, 1);
+      items.push({
+        id: node.id,
+        label: node.label,
+        kind: node.kind,
+        x: 420 + Math.cos(angle) * firstRingRadius,
+        y: 250 + Math.sin(angle) * firstRingRadius,
+        center: false,
+        level: 1,
+      });
+
+      const children = (adjacencyByNodeId.value.get(node.id) ?? [])
+        .map(edge => edge.source === node.id ? edge.target : edge.source)
+        .filter(id => !visited.has(id))
+        .map(id => nodesById.value.get(id))
+        .filter((n): n is KnowledgeGraphNode => Boolean(n));
+      
+      const displayChildren = children.slice(0, 6);
+      const secondRingRadius = firstRingRadius + 160;
+      const spread = displayChildren.length === 1 ? [0] : Array.from({length: displayChildren.length}, (_, i) => -0.4 + (0.8 * i / (displayChildren.length - 1)));
+      
+      displayChildren.forEach((child, cIdx) => {
+        visited.add(child.id);
+        const childAngle = angle + spread[cIdx];
+        items.push({
+          id: child.id,
+          label: child.label,
+          kind: child.kind,
+          x: 420 + Math.cos(childAngle) * secondRingRadius,
+          y: 250 + Math.sin(childAngle) * secondRingRadius,
+          center: false,
+          level: 2,
+        });
+
+        const grandChildren = (adjacencyByNodeId.value.get(child.id) ?? [])
+          .map(edge => edge.source === child.id ? edge.target : edge.source)
+          .filter(id => !visited.has(id))
+          .map(id => nodesById.value.get(id))
+          .filter((n): n is KnowledgeGraphNode => Boolean(n));
+        
+        const displayGrand = grandChildren.slice(0, 4);
+        const thirdRingRadius = secondRingRadius + 140;
+        const grandSpread = displayGrand.length === 1 ? [0] : Array.from({length: displayGrand.length}, (_, i) => -0.25 + (0.5 * i / (displayGrand.length - 1)));
+        
+        displayGrand.forEach((grand, gIdx) => {
+          visited.add(grand.id);
+          const grandAngle = childAngle + grandSpread[gIdx];
+          items.push({
+            id: grand.id,
+            label: grand.label,
+            kind: grand.kind,
+            x: 420 + Math.cos(grandAngle) * thirdRingRadius,
+            y: 250 + Math.sin(grandAngle) * thirdRingRadius,
+            center: false,
+            level: 3,
+          });
+        });
+      });
+    });
+    return items;
+  }
+
+  const center = selectedNode.value;
+  if (!center) {
+    return [] as Array<{
+      id: string;
+      label: string;
+      kind: string;
+      x: number;
+      y: number;
+      center: boolean;
+      level: number;
+    }>;
+  }
+
+  const items = [
+    {
+      id: center.id,
+      label: center.label,
+      kind: center.kind,
+      x: 420,
+      y: 250,
+      center: true,
+      level: 0,
+    },
+  ];
+
+  const visited = new Set<string>([center.id]);
+  const firstRingRadius = 170;
+  const secondRingRadius = 300;
+
+  neighborNodes.value.forEach((node, index) => {
+    visited.add(node.id);
+    const angle = (-Math.PI / 2) + (Math.PI * 2 * index) / Math.max(neighborNodes.value.length, 1);
+    const x = 420 + Math.cos(angle) * firstRingRadius;
+    const y = 250 + Math.sin(angle) * firstRingRadius;
+
+    items.push({
+      id: node.id,
+      label: node.label,
+      kind: node.kind,
+      x,
+      y,
+      center: false,
+      level: 1,
+    });
+
+    const secondRingCandidates = (adjacencyByNodeId.value.get(node.id) ?? [])
+      .map((edge) => (edge.source === node.id ? edge.target : edge.source))
+      .filter((neighborId) => neighborId !== center.id && !visited.has(neighborId))
+      .map((neighborId) => nodesById.value.get(neighborId))
+      .filter((candidate): candidate is KnowledgeGraphNode => Boolean(candidate))
+      .slice(0, 2);
+
+    const spread = secondRingCandidates.length === 1 ? [0] : [-0.26, 0.26];
+    secondRingCandidates.forEach((candidate, candidateIndex) => {
+      visited.add(candidate.id);
+      const childAngle = angle + spread[candidateIndex];
+      items.push({
+        id: candidate.id,
+        label: candidate.label,
+        kind: candidate.kind,
+        x: 420 + Math.cos(childAngle) * secondRingRadius,
+        y: 250 + Math.sin(childAngle) * secondRingRadius,
+        center: false,
+        level: 2,
+      });
+    });
+  });
+
+  return items;
+});
+
+const canvasNodeMap = computed(() => {
+  const map = new Map<string, (typeof canvasNodes.value)[number]>();
+  for (const node of canvasNodes.value) {
+    map.set(node.id, node);
+  }
+  return map;
+});
+
+const canvasEdges = computed(() => {
+  let baseEdges = graph.value?.edges ?? [];
+  if (activeNodeId.value === '__GLOBAL_PAGES__') {
+    const pages = (graph.value?.nodes ?? []).filter(n => n.kind === 'page');
+    const virtualEdges = pages.map(p => ({
+      id: `root_to_${p.id}`,
+      source: '__GLOBAL_PAGES__',
+      target: p.id,
+      label: '包含页面',
+      metadata: {}
+    } as KnowledgeGraphEdge));
+    baseEdges = [...baseEdges, ...virtualEdges];
+  }
+
+  return baseEdges
+    .map((edge) => {
+      const source = canvasNodeMap.value.get(edge.source);
+      const target = canvasNodeMap.value.get(edge.target);
+      if (!source || !target) {
+        return null;
+      }
+      return { ...edge, sourceNode: source, targetNode: target };
+    })
+    .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge));
+});
+
+const canvasTransform = computed(
+  () => `translate(${canvasOffset.value.x} ${canvasOffset.value.y}) scale(${canvasZoom.value})`,
+);
+
+watch([filteredNodes, activeKind], ([nodes]) => {
+  if (activeNodeId.value === '__GLOBAL_PAGES__') {
+    return;
+  }
+  if (!nodes.length) {
+    activeNodeId.value = "";
+    detailDrawerOpen.value = false;
+    return;
+  }
+  if (!nodes.some((node) => node.id === activeNodeId.value)) {
+    activeNodeId.value = nodes[0].id;
+  }
+});
+
+watch(selectedProjectScope, async (scope) => {
+  if (!scope) {
+    graph.value = null;
+    return;
+  }
+  await loadGraph(scope);
+});
+
+onMounted(async () => {
+  document.addEventListener("fullscreenchange", syncFullscreenState);
+  await loadProjects();
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("fullscreenchange", syncFullscreenState);
+});
+
+async function loadProjects() {
+  loadingProjects.value = true;
+  errorMessage.value = "";
+  try {
+    const response = await api.listKnowledgeProjects();
+    projects.value = response;
+    if (!selectedProjectScope.value && response.length > 0) {
+      selectedProjectScope.value = response[0].project_scope;
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Failed to load knowledge projects";
+  } finally {
+    loadingProjects.value = false;
+  }
 }
 
-function closeDetails() {
-  showDetails.value = false;
-  activeNode.value = null;
+async function loadGraph(projectScope: string) {
+  loadingGraph.value = true;
+  errorMessage.value = "";
+  try {
+    const response = await api.getKnowledgeGraph(projectScope);
+    graph.value = response;
+    activeNodeId.value = '__GLOBAL_PAGES__';
+    detailDrawerOpen.value = false;
+    resetCanvasView();
+  } catch (error) {
+    graph.value = null;
+    activeNodeId.value = "";
+    detailDrawerOpen.value = false;
+    errorMessage.value = error instanceof Error ? error.message : "Failed to load project graph";
+  } finally {
+    loadingGraph.value = false;
+  }
 }
 
-function zoomIn() {
-  zoomLevel.value = Math.min(zoomLevel.value + 0.2, 3);
+async function deleteSelectedProject() {
+  const scope = selectedProjectScope.value.trim();
+  if (!scope || deletingProject.value) {
+    return;
+  }
+  const confirmed = window.confirm(`确认删除项目图谱 "${scope}" 吗？这个操作会从 ArangoDB 删除该项目下的页面、元素、实体和关系。`);
+  if (!confirmed) {
+    return;
+  }
+
+  deletingProject.value = true;
+  errorMessage.value = "";
+  try {
+    await api.deleteKnowledgeProject(scope);
+    const nextScope =
+      projects.value.find((item) => item.project_scope !== scope)?.project_scope ?? "";
+    graph.value = null;
+    activeNodeId.value = "";
+    detailDrawerOpen.value = false;
+    selectedProjectScope.value = "";
+    await loadProjects();
+    if (nextScope) {
+      selectedProjectScope.value = nextScope;
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Failed to delete project graph";
+  } finally {
+    deletingProject.value = false;
+  }
 }
 
-function zoomOut() {
-  zoomLevel.value = Math.max(zoomLevel.value - 0.2, 0.5);
+function kindLabel(kind: string) {
+  if (kind === "page") return "Page";
+  if (kind === "entity") return "Entity";
+  if (kind === "element") return "Element";
+  return kind;
 }
 
-function zoomFit() {
-  zoomLevel.value = 1;
+function formatTime(value?: string | null) {
+  if (!value) {
+    return "--";
+  }
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
-function setEntityFilter(type: string) {
-  activeEntityFilter.value = type;
+function truncateText(value: unknown, max = 72) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "--";
+  }
+  if (text.length <= max) {
+    return text;
+  }
+  return `${text.slice(0, max)}...`;
+}
+
+function selectNode(nodeId: string) {
+  activeNodeId.value = nodeId;
+  if (nodeId === '__GLOBAL_PAGES__') {
+    detailDrawerOpen.value = false;
+  } else {
+    detailDrawerOpen.value = true;
+  }
+}
+
+function closeDetailDrawer() {
+  detailDrawerOpen.value = false;
+}
+
+function clampZoom(value: number) {
+  return Math.min(2.4, Math.max(0.45, value));
+}
+
+function zoomCanvas(delta: number) {
+  canvasZoom.value = clampZoom(canvasZoom.value + delta);
+}
+
+function resetCanvasView() {
+  canvasZoom.value = 1;
+  canvasOffset.value = { x: 0, y: 0 };
+}
+
+function startCanvasDrag(event: PointerEvent) {
+  if (event.button !== 0) {
+    return;
+  }
+  const target = event.target;
+  if (target instanceof Element && target.closest(".graph-node")) {
+    return;
+  }
+  isDraggingCanvas.value = true;
+  dragPointerId.value = event.pointerId;
+  dragStartPoint.value = { x: event.clientX, y: event.clientY };
+  dragStartOffset.value = { ...canvasOffset.value };
+  canvasViewportRef.value?.setPointerCapture(event.pointerId);
+}
+
+function moveCanvasDrag(event: PointerEvent) {
+  if (!isDraggingCanvas.value || dragPointerId.value !== event.pointerId || !canvasViewportRef.value) {
+    return;
+  }
+  const bounds = canvasViewportRef.value.getBoundingClientRect();
+  if (!bounds.width || !bounds.height) {
+    return;
+  }
+  const dx = ((event.clientX - dragStartPoint.value.x) / bounds.width) * CANVAS_WIDTH;
+  const dy = ((event.clientY - dragStartPoint.value.y) / bounds.height) * CANVAS_HEIGHT;
+  canvasOffset.value = {
+    x: dragStartOffset.value.x + dx / canvasZoom.value,
+    y: dragStartOffset.value.y + dy / canvasZoom.value,
+  };
+}
+
+function endCanvasDrag(event?: PointerEvent) {
+  if (event && dragPointerId.value === event.pointerId) {
+    canvasViewportRef.value?.releasePointerCapture(event.pointerId);
+  }
+  isDraggingCanvas.value = false;
+  dragPointerId.value = null;
+}
+
+function handleCanvasWheel(event: WheelEvent) {
+  event.preventDefault();
+  zoomCanvas(event.deltaY < 0 ? 0.12 : -0.12);
+}
+
+async function toggleCanvasFullscreen() {
+  if (!canvasCardRef.value) {
+    return;
+  }
+  if (document.fullscreenElement === canvasCardRef.value) {
+    await document.exitFullscreen();
+    return;
+  }
+  await canvasCardRef.value.requestFullscreen();
+}
+
+function syncFullscreenState() {
+  isFullscreenCanvas.value = document.fullscreenElement === canvasCardRef.value;
 }
 </script>
 
 <template>
-  <section class="view-page kg-page">
-    <div class="page-head">
+  <section class="view-page knowledge-page">
+    <div class="page-head knowledge-head">
       <div>
-        <h2>知识图谱 (Knowledge Graph)</h2>
-        <p class="head-desc">基于图数据库的系统业务实体化与关系网络拓扑展示</p>
-      </div>
-      <div class="page-head-actions">
-        <div class="search-box">
-          <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted);"></i>
-          <input type="text" placeholder="搜索实体、关系、属性..." style="padding-left: 36px;" />
-        </div>
-        <button class="secondary-btn"><i class="fa-solid fa-filter"></i> 筛选</button>
+        <h2>知识图谱</h2>
+        <p class="head-desc">从 ArangoDB 读取项目级页面、实体、元素与关系网络，按项目切换查看。</p>
       </div>
     </div>
 
-    <div class="kg-container">
-      <!-- 左侧面板：图谱导航/实体分类 -->
-      <aside class="kg-sidebar-left">
-        <div class="kg-sidebar-header">
-          <h3>实体类型</h3>
+    <div class="knowledge-layout">
+      <aside class="knowledge-sidebar">
+        <div class="sidebar-card">
+          <div class="sidebar-head">
+            <h3>项目筛选</h3>
+            <span class="sidebar-meta">{{ projects.length }} 个项目</span>
+          </div>
+          <div class="project-actions">
+          <select v-model="selectedProjectScope" class="knowledge-select" :disabled="loadingProjects || !projects.length">
+            <option value="" disabled>选择项目</option>
+            <option v-for="project in projects" :key="project.project_scope" :value="project.project_scope">
+              {{ project.project_scope }}
+            </option>
+          </select>
+            <button
+              class="icon-btn danger-btn"
+              type="button"
+              title="删除当前项目"
+              :disabled="!selectedProjectScope || deletingProject"
+              @click="deleteSelectedProject"
+            >
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+          <div v-if="selectedProject" class="project-meta">
+            <div><span>页面</span><strong>{{ selectedProject.page_count }}</strong></div>
+            <div><span>元素</span><strong>{{ selectedProject.element_count }}</strong></div>
+            <div><span>实体</span><strong>{{ selectedProject.entity_count }}</strong></div>
+            <div><span>关系</span><strong>{{ selectedProject.edge_count }}</strong></div>
+          </div>
         </div>
-        <ul class="kg-entity-list">
-          <li :class="{ active: activeEntityFilter === 'Page' }" @click="setEntityFilter('Page')"><span class="color-dot page"></span> 页面 (Page) <span class="count">124</span></li>
-          <li :class="{ active: activeEntityFilter === 'Component' }" @click="setEntityFilter('Component')"><span class="color-dot component"></span> 组件 (Component) <span class="count">856</span></li>
-          <li :class="{ active: activeEntityFilter === 'API' }" @click="setEntityFilter('API')"><span class="color-dot api"></span> 接口 (API) <span class="count">342</span></li>
-          <li :class="{ active: activeEntityFilter === 'TestCase' }" @click="setEntityFilter('TestCase')"><span class="color-dot testcase"></span> 测试用例 (TestCase) <span class="count">1,205</span></li>
-          <li :class="{ active: activeEntityFilter === 'Bug' }" @click="setEntityFilter('Bug')"><span class="color-dot bug"></span> 缺陷 (Bug) <span class="count">45</span></li>
-        </ul>
-        
-        <div class="kg-sidebar-header mt-4">
-          <h3>关系类型</h3>
+
+        <div class="sidebar-card">
+          <div class="sidebar-head">
+            <h3>节点过滤</h3>
+            <span class="sidebar-meta">{{ filteredNodes.length }} 个节点</span>
+          </div>
+          <div class="knowledge-kind-tabs">
+            <button
+              v-for="kind in ['all', 'page', 'entity', 'element']"
+              :key="kind"
+              class="kind-tab"
+              :class="{ active: activeKind === kind }"
+              type="button"
+              @click="activeKind = kind as NodeKindFilter"
+            >
+              {{ kind === "all" ? "全部" : kindLabel(kind) }}
+            </button>
+          </div>
+          <input v-model="searchTerm" class="knowledge-search" type="text" placeholder="搜索节点、字段、摘要" />
+          <div class="node-list">
+            <button
+              class="node-row global-row"
+              :class="{ active: activeNodeId === '__GLOBAL_PAGES__' }"
+              type="button"
+              @click="selectNode('__GLOBAL_PAGES__')"
+            >
+              <span class="node-kind" data-kind="project">Global</span>
+              <span class="node-main">
+                <strong>全局页面图谱</strong>
+                <small>查看项目下所有页面及导航关系</small>
+              </span>
+            </button>
+            <button
+              v-for="node in filteredNodes"
+              :key="node.id"
+              class="node-row"
+              :class="{ active: selectedNode?.id === node.id }"
+              type="button"
+              @click="selectNode(node.id)"
+            >
+              <span class="node-kind" :data-kind="node.kind">{{ kindLabel(node.kind) }}</span>
+              <span class="node-main">
+                <strong :title="node.label">{{ truncateText(node.label, 30) }}</strong>
+                <small :title="node.summary || node.id">{{ truncateText(node.summary || node.id, 56) }}</small>
+              </span>
+            </button>
+            <div v-if="!filteredNodes.length" class="empty-state small">当前筛选下没有节点。</div>
+          </div>
         </div>
-        <ul class="kg-relation-list">
-          <li><i class="fa-solid fa-arrow-right-long"></i> 包含 (CONTAINS)</li>
-          <li><i class="fa-solid fa-arrow-right-long"></i> 调用 (CALLS)</li>
-          <li><i class="fa-solid fa-arrow-right-long"></i> 覆盖 (COVERS)</li>
-          <li><i class="fa-solid fa-arrow-right-long"></i> 阻塞 (BLOCKS)</li>
-        </ul>
       </aside>
 
-      <!-- 中间：图谱可视化主区域 -->
-      <main class="kg-canvas-area">
-        <div class="kg-canvas-toolbar">
-          <button class="icon-btn" title="放大" @click="zoomIn"><i class="fa-solid fa-plus"></i></button>
-          <button class="icon-btn" title="缩小" @click="zoomOut"><i class="fa-solid fa-minus"></i></button>
-          <button class="icon-btn" title="适应屏幕" @click="zoomFit"><i class="fa-solid fa-expand"></i></button>
-        </div>
-        
-        <!-- 图谱占位，点击可模拟查看详情 -->
-        <div class="kg-canvas-placeholder" @click.self="closeDetails" :style="{ transform: `scale(${zoomLevel})`, transformOrigin: 'center center', transition: 'transform 0.2s ease' }">
-          <div class="kg-node-mock" style="top: 30%; left: 40%;" @click.stop="handleNodeClick(mockNodes[0])">
-            <div class="node-circle page" :class="{ 'is-selected': activeNode?.id === 'node-1' }"></div>
-            <span>登录页面</span>
-          </div>
-          <div class="kg-node-mock" style="top: 60%; left: 30%;" @click.stop="handleNodeClick(mockNodes[1])">
-            <div class="node-circle api" :class="{ 'is-selected': activeNode?.id === 'node-2' }"></div>
-            <span>/api/auth/login</span>
-          </div>
-          <div class="kg-node-mock" style="top: 50%; left: 60%;" @click.stop="handleNodeClick(mockNodes[2])">
-            <div class="node-circle testcase" :class="{ 'is-selected': activeNode?.id === 'node-3' }"></div>
-            <span>TC-1001: 正常登录</span>
-          </div>
-          
-          <svg class="kg-edge-mock">
-            <line x1="40%" y1="30%" x2="30%" y2="60%" stroke="var(--border-strong)" stroke-width="2" />
-            <line x1="40%" y1="30%" x2="60%" y2="50%" stroke="var(--border-strong)" stroke-width="2" />
-          </svg>
-          
-          <div class="canvas-hint">
-            <i class="fa-solid fa-circle-nodes"></i>
-            <p>图谱渲染引擎加载中... (即将接入 G6 / ECharts 渲染)</p>
-            <small>提示：点击画布任意区域可模拟选中节点</small>
-          </div>
-        </div>
-      </main>
-
-      <!-- 右侧面板：节点详情 -->
-      <aside class="kg-sidebar-right" :class="{ 'is-open': showDetails }">
-        <div class="kg-details-header">
-          <h3>节点详情</h3>
-          <button class="icon-btn" @click.stop="closeDetails"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        
-        <div v-if="activeNode" class="kg-details-content">
-          <div class="node-header">
-            <div class="node-icon" :class="activeNode.typeClass"><i class="fa-solid fa-file-code"></i></div>
-            <div class="node-title">
-              <h4>{{ activeNode.name }}</h4>
-              <span class="badge">{{ activeNode.type }}</span>
+      <main class="knowledge-main">
+        <section ref="canvasCardRef" class="canvas-card" :class="{ fullscreen: isFullscreenCanvas }">
+          <div class="canvas-head">
+            <div>
+              <h3>项目图谱</h3>
             </div>
-          </div>
-          
-          <div class="details-section">
-            <h5>属性 (Properties)</h5>
-            <div class="prop-grid">
-              <div v-for="(val, key) in activeNode.properties" :key="key" class="prop-item">
-                <span class="prop-key">{{ key }}</span>
-                <span class="prop-val">{{ val }}</span>
+            <div class="canvas-head-right">
+              <div class="canvas-toolbar">
+                <button class="icon-btn" type="button" title="缩小" @click="zoomCanvas(-0.12)">
+                  <i class="fa-solid fa-minus"></i>
+                </button>
+                <button class="icon-btn" type="button" title="重置" @click="resetCanvasView">
+                  <i class="fa-solid fa-arrows-rotate"></i>
+                </button>
+                <button class="icon-btn" type="button" title="放大" @click="zoomCanvas(0.12)">
+                  <i class="fa-solid fa-plus"></i>
+                </button>
+                <button class="icon-btn" type="button" :title="isFullscreenCanvas ? '退出全屏' : '全屏显示'" @click="toggleCanvasFullscreen">
+                  <i class="fa-solid" :class="isFullscreenCanvas ? 'fa-compress' : 'fa-expand'"></i>
+                </button>
+              </div>
+              <div class="canvas-meta">
+                <span>更新时间：{{ formatTime(graph?.summary.latest_updated_at) }}</span>
               </div>
             </div>
           </div>
-          
-          <div class="details-section">
-            <h5>相邻关系 (1 级)</h5>
-            <ul class="relation-list">
-              <li v-for="(rel, index) in activeNode.relations" :key="index">
-                <span class="rel-tag">{{ rel.type }}</span> <span class="rel-target">{{ rel.target }}</span>
-              </li>
-            </ul>
+
+          <div v-if="loadingGraph" class="empty-state">正在加载图谱数据...</div>
+          <div v-else-if="errorMessage" class="empty-state danger">{{ errorMessage }}</div>
+          <div v-else-if="!graph" class="empty-state">请选择一个项目来查看知识图谱。</div>
+          <div v-else class="canvas-wrap">
+            <svg
+              ref="canvasViewportRef"
+              viewBox="0 0 840 500"
+              class="graph-canvas"
+              :class="{ dragging: isDraggingCanvas }"
+              role="img"
+              aria-label="Knowledge graph preview"
+              @pointerdown="startCanvasDrag($event)"
+              @pointermove="moveCanvasDrag($event)"
+              @pointerup="endCanvasDrag($event)"
+              @pointerleave="endCanvasDrag($event)"
+              @wheel="handleCanvasWheel($event)"
+            >
+              <g :transform="canvasTransform">
+                <line
+                  v-for="edge in canvasEdges"
+                  :key="edge.id"
+                  :x1="edge.sourceNode.x"
+                  :y1="edge.sourceNode.y"
+                  :x2="edge.targetNode.x"
+                  :y2="edge.targetNode.y"
+                  class="graph-edge"
+                />
+                <g
+                  v-for="node in canvasNodes"
+                  :key="node.id"
+                  class="graph-node"
+                  :class="[node.kind, { active: activeNodeId === node.id }]"
+                  @click.stop="selectNode(node.id)"
+                >
+                  <circle :cx="node.x" :cy="node.y" :r="node.center ? 34 : node.level === 1 ? 24 : 18" />
+                  <text :x="node.x" :y="node.y + (node.center ? 54 : node.level === 1 ? 42 : 34)" text-anchor="middle">
+                    {{ node.label.length > 14 ? `${node.label.slice(0, 14)}...` : node.label }}
+                  </text>
+                </g>
+              </g>
+            </svg>
+
+            <div class="relation-chip-row">
+              <span v-for="[name, count] in relationChips" :key="name" class="relation-chip">
+                {{ name }} · {{ count }}
+              </span>
+            </div>
           </div>
-          
-          <div class="details-actions">
-            <button class="primary-btn full-btn">展开子节点</button>
-            <button class="secondary-btn full-btn">设为起点</button>
-          </div>
-        </div>
-        <div v-else class="kg-details-empty">
-          <i class="fa-solid fa-hand-pointer"></i>
-          <p>请在左侧图谱中点击实体节点</p>
-        </div>
-      </aside>
+        </section>
+      </main>
     </div>
+
+    <transition name="drawer-fade">
+      <div v-if="detailDrawerOpen" class="drawer-backdrop" @click="closeDetailDrawer"></div>
+    </transition>
+    <transition name="drawer-slide">
+      <aside v-if="detailDrawerOpen" class="detail-drawer">
+        <div class="detail-drawer-head">
+          <div>
+            <h3>节点详情</h3>
+            <span class="sidebar-meta">{{ selectedNode ? kindLabel(selectedNode.kind) : "未选择" }}</span>
+          </div>
+          <button class="icon-btn" type="button" @click="closeDetailDrawer" aria-label="关闭详情抽屉">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div v-if="selectedNode" class="detail-content">
+          <div class="detail-title">
+            <strong :title="selectedNode.label">{{ truncateText(selectedNode.label, 48) }}</strong>
+            <small :title="selectedNode.summary || selectedNode.id">
+              {{ truncateText(selectedNode.summary || selectedNode.id, 120) }}
+            </small>
+          </div>
+
+          <div class="detail-section">
+            <h4>相邻关系</h4>
+            <div class="detail-list">
+              <div v-for="edge in selectedNodeEdges" :key="edge.id" class="detail-list-item">
+                <span class="relation-tag">{{ edge.label }}</span>
+                <span
+                  class="relation-target"
+                  :title="
+                    edge.source === selectedNode.id
+                      ? nodesById.get(edge.target)?.label ?? edge.target
+                      : nodesById.get(edge.source)?.label ?? edge.source
+                  "
+                >
+                  {{
+                    truncateText(
+                      edge.source === selectedNode.id
+                        ? nodesById.get(edge.target)?.label ?? edge.target
+                        : nodesById.get(edge.source)?.label ?? edge.source,
+                      56,
+                    )
+                  }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <h4>属性</h4>
+            <div class="detail-list">
+              <div
+                v-for="entry in Object.entries(selectedNode.metadata)"
+                :key="entry[0]"
+                class="detail-list-item property-item"
+              >
+                <span class="property-key">{{ entry[0] }}</span>
+                <span
+                  class="property-value"
+                  :title="typeof entry[1] === 'object' ? JSON.stringify(entry[1]) : String(entry[1])"
+                >
+                  {{ truncateText(typeof entry[1] === 'object' ? JSON.stringify(entry[1]) : entry[1], 96) }}
+                </span>
+              </div>
+              <div v-if="!Object.keys(selectedNode.metadata).length" class="empty-state small">
+                当前节点没有额外属性。
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">从左侧选择一个节点，我们就能查看它的关系和属性。</div>
+      </aside>
+    </transition>
   </section>
 </template>
 
 <style scoped>
-.kg-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 20px 24px;
-}
-
-.page-head {
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-}
-
-.page-head h2 {
-  font-size: 24px;
-  margin-bottom: 4px;
-}
-
-.head-desc {
-  font-size: 13px;
-  margin: 0;
-}
-
-.kg-container {
-  flex: 1;
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  overflow: hidden;
-  position: relative;
-}
-
-.kg-sidebar-left {
-  width: 240px;
-  border-right: 1px solid var(--border);
-  background: var(--surface-soft);
-  display: flex;
-  flex-direction: column;
-  padding: 16px 0;
-  flex-shrink: 0;
-}
-
-.kg-sidebar-header {
-  padding: 0 16px 8px;
-}
-
-.kg-sidebar-header h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.mt-4 {
-  margin-top: 24px;
-}
-
-.kg-entity-list,
-.kg-relation-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.kg-entity-list li,
-.kg-relation-list li {
-  padding: 8px 16px;
-  font-size: 13px;
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.kg-entity-list li:hover,
-.kg-relation-list li:hover {
-  background: var(--surface-muted);
-}
-
-.kg-entity-list li.active {
-  background: var(--surface-strong);
-  font-weight: 600;
-}
-
-.color-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.color-dot.page { background: #3b82f6; }
-.color-dot.component { background: #10b981; }
-.color-dot.api { background: #f59e0b; }
-.color-dot.testcase { background: #8b5cf6; }
-.color-dot.bug { background: #ef4444; }
-
-.kg-entity-list .count {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--surface-muted);
-  padding: 2px 6px;
-  border-radius: 999px;
-}
-
-.kg-relation-list i {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.kg-canvas-area {
-  flex: 1;
-  position: relative;
-  background: var(--surface-strong);
-  overflow: hidden;
-}
-
-.kg-canvas-toolbar {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  z-index: 10;
-  box-shadow: var(--shadow-soft);
-}
-
-.kg-canvas-placeholder {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  cursor: grab;
-}
-
-.canvas-hint {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.canvas-hint i {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.3;
-}
-
-.canvas-hint p {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.kg-node-mock {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  transform: translate(-50%, -50%);
-  cursor: pointer;
-  z-index: 5;
-}
-
-.node-circle {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: var(--surface);
-  border: 3px solid;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-  transition: transform 0.2s;
-}
-
-.node-circle.page { border-color: #3b82f6; }
-.node-circle.api { border-color: #f59e0b; }
-.node-circle.testcase { border-color: #8b5cf6; }
-
-.node-circle.is-selected {
-  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0,0,0,0.15);
-  transform: scale(1.15);
-}
-
-.kg-node-mock:hover .node-circle {
-  transform: scale(1.15);
-}
-
-.kg-node-mock span {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  background: var(--surface);
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.kg-edge-mock {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.kg-sidebar-right {
-  width: 320px;
-  border-left: 1px solid var(--border);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 20;
-}
-
-.kg-sidebar-right.is-open {
-  transform: translateX(0);
-  box-shadow: -4px 0 24px rgba(0,0,0,0.05);
-}
-
-.kg-details-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.kg-details-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.kg-details-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
+.knowledge-page {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  padding: 24px 32px;
 }
 
-.node-header {
+.knowledge-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.knowledge-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 20px;
+  min-height: 0;
+  flex: 1;
+}
+
+.knowledge-sidebar,
+.knowledge-main {
+  min-height: 0;
+}
+
+.knowledge-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sidebar-card,
+.canvas-card,
+.summary-card {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.03);
+}
+
+.sidebar-card,
+.canvas-card {
+  padding: 16px;
+}
+
+.canvas-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.canvas-card.fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.zsidebar-head,
+.canvas-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.sidebar-head h3,
+.canvas-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.canvas-head-right {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.node-icon {
+.canvas-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-meta,
+.canvas-meta,
+.detail-title small,
+.node-main small,
+.empty-state.small {
+  color: var(--muted);
+}
+
+.knowledge-select,
+.knowledge-search {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  outline: none;
+  transition: all 0.2s;
+}
+
+.knowledge-select {
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+  padding-right: 36px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.knowledge-select:focus,
+.knowledge-search:focus {
+  border-color: rgba(17, 24, 39, 0.4);
+  box-shadow: 0 0 0 3px rgba(17, 24, 39, 0.08);
+  background: var(--surface);
+}
+
+.knowledge-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.project-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.danger-btn {
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 40px;
   height: 40px;
   border-radius: 8px;
-  background: var(--surface-muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
+  transition: all 0.2s;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
-.node-icon.page { color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
-.node-icon.api { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
-.node-icon.testcase { color: #8b5cf6; background: rgba(139, 92, 246, 0.1); }
-
-.node-title h4 {
-  margin: 0 0 4px;
-  font-size: 16px;
+.danger-btn:hover:not(:disabled) {
+  background: #ef4444;
+  color: white;
+  border-color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
 }
 
-.node-title .badge {
-  font-size: 11px;
-  padding: 2px 6px;
-  background: var(--border-strong);
-  border-radius: 4px;
+.danger-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(1);
 }
 
-.details-section h5 {
-  margin: 0 0 12px;
-  font-size: 13px;
-  color: var(--muted);
+.project-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
 }
 
-.prop-grid {
+.project-meta div {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  background: var(--surface-muted);
-  padding: 12px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  background: var(--surface-soft);
+  padding: 8px 4px;
   border-radius: 8px;
 }
 
-.prop-item {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-}
-
-.prop-key {
+.project-meta span {
   color: var(--muted);
+  font-size: 11px;
 }
 
-.prop-val {
-  font-weight: 500;
-  color: var(--text);
-}
-
-.relation-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.relation-list li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.rel-tag {
-  font-size: 10px;
-  background: var(--surface-strong);
-  padding: 2px 6px;
-  border-radius: 4px;
+.project-meta strong {
+  font-size: 18px;
   font-weight: 600;
-  color: var(--muted);
+  line-height: 1;
 }
 
-.details-actions {
+.knowledge-kind-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: auto;
+  background: var(--surface-soft);
+  padding: 4px;
+  border-radius: 8px;
+  margin-bottom: 12px;
 }
 
-.kg-details-empty {
+.kind-tab {
   flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.kind-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.node-list {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  margin-top: 16px;
+  max-height: 330px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.node-list::-webkit-scrollbar {
+  width: 4px;
+}
+.node-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.node-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 8px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.node-row:hover {
+  background: var(--surface-soft);
+}
+
+.node-row.active {
+  background: rgba(17, 24, 39, 0.04);
+  border-color: rgba(17, 24, 39, 0.2);
+  box-shadow: 0 2px 6px rgba(17, 24, 39, 0.05);
+}
+
+.node-kind {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 6px;
+  padding: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.node-kind[data-kind="page"] {
+  color: #111827;
+}
+
+.node-kind[data-kind="entity"] {
+  color: #059669;
+}
+
+.node-kind[data-kind="element"] {
+  color: #d97706;
+}
+
+.node-kind[data-kind="project"] {
+  color: #6366f1;
+  border-color: rgba(99, 102, 241, 0.2);
+}
+
+.global-row {
+  border: 1px dashed var(--border);
+  margin-bottom: 8px;
+  background: var(--surface-soft);
+}
+.global-row.active {
+  border-style: solid;
+}
+
+.node-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.node-main strong,
+.node-main small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.node-main strong {
+  -webkit-line-clamp: 2;
+}
+
+.node-main small {
+  -webkit-line-clamp: 2;
+}
+
+.canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-canvas {
+  width: 100%;
+  min-height: 540px;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at center, rgba(17, 24, 39, 0.03), transparent 55%),
+    var(--surface-soft);
+  touch-action: none;
+  cursor: grab;
+}
+
+.graph-canvas.dragging {
+  cursor: grabbing;
+}
+
+.graph-edge {
+  stroke: rgba(100, 116, 139, 0.35);
+  stroke-width: 1.4;
+}
+
+.graph-node {
+  cursor: pointer;
+}
+
+.graph-node circle {
+  fill: var(--surface);
+  stroke-width: 3;
+}
+
+.graph-node.page circle {
+  stroke: #111827;
+}
+
+.graph-node.entity circle {
+  stroke: #059669;
+}
+
+.graph-node.element circle {
+  stroke: #0d9488;
+}
+
+.graph-node.project circle {
+  stroke: #6366f1;
+}
+
+.graph-node.active circle {
+  filter: drop-shadow(0 0 8px rgba(17, 24, 39, 0.18));
+}
+
+.graph-node text {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.relation-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.relation-chip,
+.relation-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(17, 24, 39, 0.08);
+  color: #111827;
+}
+
+.detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detail-title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail-section h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-list-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.property-item {
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
+.property-key {
   color: var(--muted);
+  font-size: 12px;
+}
+
+.property-value,
+.relation-target {
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.empty-state {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  padding: 16px;
+}
+
+.empty-state.danger {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.24);
+  background: rgba(185, 28, 28, 0.05);
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.28);
+  z-index: 40;
+}
+
+.detail-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, calc(100vw - 24px));
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.16);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 16px 16px;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.detail-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.kg-details-empty i {
-  font-size: 32px;
-  opacity: 0.5;
+.detail-drawer-head h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
 }
 
-.full-btn {
-  width: 100%;
-  justify-content: center;
+.detail-drawer .detail-content,
+.detail-drawer > .empty-state {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.drawer-fade-enter-active,
+.drawer-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.drawer-fade-enter-from,
+.drawer-fade-leave-to {
+  opacity: 0;
+}
+
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 0.24s ease;
+}
+
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+}
+
+@media (max-width: 1400px) {
+  .knowledge-layout {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1024px) {
+  .knowledge-layout {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

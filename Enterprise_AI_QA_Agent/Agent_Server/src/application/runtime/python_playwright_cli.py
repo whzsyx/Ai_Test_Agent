@@ -600,6 +600,7 @@ class PythonPlaywrightCliRuntime:
 
         queue = [self._normalize_url(target_url)]
         visited: set[str] = set()
+        explored_page_urls: set[str] = set()
         login_events: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
         graph = {
@@ -609,7 +610,7 @@ class PythonPlaywrightCliRuntime:
             "edges": [],
         }
 
-        while queue and len(visited) < max_pages:
+        while queue and len(pages) < max_pages:
             url = queue.pop(0)
             if url in visited:
                 continue
@@ -630,9 +631,11 @@ class PythonPlaywrightCliRuntime:
                 login_events.append(login_event)
                 stability = await self._wait_for_view_stable(session, max_seconds=8.0)
             snapshot = await self._semantic_snapshot(session, visible_only=visible_only)
-            snapshot_url = str(snapshot.get("page", {}).get("url") or "")
-            if snapshot_url:
-                visited.add(snapshot_url)
+            snapshot_page_url = str(snapshot.get("page", {}).get("url") or "")
+            if snapshot_page_url in explored_page_urls:
+                continue
+            if snapshot_page_url:
+                explored_page_urls.add(snapshot_page_url)
             page_record = {
                 "url": snapshot["page"]["url"],
                 "title": snapshot["page"]["title"],
@@ -671,8 +674,9 @@ class PythonPlaywrightCliRuntime:
                             continue
                         if (
                             interaction_target_url not in visited
+                            and interaction_target_url not in explored_page_urls
                             and interaction_target_url not in queue
-                            and len(visited) + len(queue) < max_pages
+                            and len(pages) + len(queue) < max_pages
                         ):
                             queue.append(interaction_target_url)
 
@@ -684,7 +688,12 @@ class PythonPlaywrightCliRuntime:
                 next_url = urljoin(snapshot["page"]["url"], href)
                 if same_origin_only and not self._same_origin(target_url, next_url):
                     continue
-                if next_url not in visited and next_url not in queue and len(visited) + len(queue) < max_pages:
+                if (
+                    next_url not in visited
+                    and next_url not in explored_page_urls
+                    and next_url not in queue
+                    and len(pages) + len(queue) < max_pages
+                ):
                     queue.append(next_url)
 
         app_map = {
@@ -988,7 +997,16 @@ class PythonPlaywrightCliRuntime:
             if not locator_expression:
                 continue
             try:
-                await self._locator(session, locator_expression).click(timeout=1500)
+                locator = self._locator(session, locator_expression)
+                visibility_state = await self._locator_visibility_state(locator)
+                if isinstance(visibility_state, dict):
+                    if not (
+                        visibility_state.get("visible")
+                        and visibility_state.get("in_viewport")
+                        and visibility_state.get("hit_target")
+                    ):
+                        continue
+                await locator.click(timeout=1500)
                 await self._wait_for_view_stable(session, max_seconds=4.0, quiet_ms=500, sample_ms=150)
                 if session.page.url != baseline_url:
                     navigated_url = session.page.url
@@ -1167,14 +1185,22 @@ class PythonPlaywrightCliRuntime:
                   const visible = (el) => {
                     const style = getComputedStyle(el);
                     const rect = el.getBoundingClientRect();
-                    return style.visibility !== 'hidden'
-                      && style.display !== 'none'
-                      && rect.width > 4
+                    const inViewport = rect.width > 4
                       && rect.height > 4
                       && rect.bottom >= 0
                       && rect.right >= 0
                       && rect.top <= window.innerHeight
                       && rect.left <= window.innerWidth;
+                    if (!inViewport) return false;
+                    const clamp = (value, lower, upper) => Math.min(upper, Math.max(lower, value));
+                    const cx = clamp(rect.left + rect.width / 2, 0, Math.max(0, window.innerWidth - 1));
+                    const cy = clamp(rect.top + rect.height / 2, 0, Math.max(0, window.innerHeight - 1));
+                    const top = document.elementFromPoint(cx, cy);
+                    const hitTarget = !!top && (top === el || el.contains(top) || top.contains(el));
+                    return hitTarget
+                      && style.visibility !== 'hidden'
+                      && style.display !== 'none'
+                      && style.opacity !== '0';
                   };
                   const cssPath = (el) => {
                     if (el.id) return `#${CSS.escape(el.id)}`;
@@ -1240,7 +1266,7 @@ class PythonPlaywrightCliRuntime:
                     const tag = el.tagName.toLowerCase();
                     const roleAttr = normalize(el.getAttribute('role'));
                     const className = normalize(el.className);
-                    const classSignal = /click|btn|button|tab|menu|nav|link|item|card|course|chapter|module|route|panel/i.test(className);
+                    const classSignal = /click|btn|button|tab|menu|nav|link/i.test(className);
                     let clickableAncestor = false;
                     for (let parent = el.parentElement, depth = 0; parent && depth < 4; parent = parent.parentElement, depth += 1) {
                       const parentRole = normalize(parent.getAttribute('role'));
@@ -1248,7 +1274,7 @@ class PythonPlaywrightCliRuntime:
                       if (parent.onclick
                         || Number(parent.getAttribute('tabindex')) >= 0
                         || ['button', 'tab', 'menuitem', 'option', 'switch', 'combobox', 'link'].includes(parentRole)
-                        || /click|btn|button|tab|menu|nav|link|item|card|course|chapter|module|route|panel/i.test(parentClass)) {
+                        || /click|btn|button|tab|menu|nav|link/i.test(parentClass)) {
                         clickableAncestor = true;
                         break;
                       }
@@ -1269,7 +1295,7 @@ class PythonPlaywrightCliRuntime:
                     if (['div', 'span', 'li'].includes(tag)
                       && clickableAncestor
                       && !directSignal
-                      && !/tab|menu|nav|module|route|link|btn|button/i.test(className)
+                      && !/tab|menu|nav|link|btn|button/i.test(className)
                       && !/详情|更多|进入|查看|展开|切换|选择|搜索|筛选|下一页|分页/.test(name)) continue;
                     if (name.length <= 2 && !/详情|更多|进入|设置|AI|ai/.test(name)) continue;
                     const nestedControls = el.querySelectorAll('button,a,input,select,textarea,[role],[onclick],[tabindex]').length;
@@ -1512,15 +1538,56 @@ class PythonPlaywrightCliRuntime:
             return f"getByRole({role}, {{name: {name}}}).nth({node.index})"
         return f"getByRole({role}).nth({node.index})"
 
+    async def _locator_visibility_state(self, locator: Any) -> dict[str, Any] | None:
+        try:
+            if not await locator.is_visible(timeout=250):
+                return {"visible": False, "in_viewport": False, "hit_target": False}
+            return await locator.evaluate(
+                """
+                (el) => {
+                  const style = getComputedStyle(el);
+                  const rect = el.getBoundingClientRect();
+                  const inViewport = rect.width > 0
+                    && rect.height > 0
+                    && rect.bottom >= 0
+                    && rect.right >= 0
+                    && rect.top <= window.innerHeight
+                    && rect.left <= window.innerWidth;
+                  if (!inViewport) {
+                    return { visible: true, in_viewport: false, hit_target: false };
+                  }
+                  const clamp = (value, lower, upper) => Math.min(upper, Math.max(lower, value));
+                  const cx = clamp(rect.left + rect.width / 2, 0, Math.max(0, window.innerWidth - 1));
+                  const cy = clamp(rect.top + rect.height / 2, 0, Math.max(0, window.innerHeight - 1));
+                  const top = document.elementFromPoint(cx, cy);
+                  const hitTarget = !!top && (top === el || el.contains(top) || top.contains(el));
+                  return {
+                    visible: style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0',
+                    in_viewport: inViewport,
+                    hit_target: hitTarget,
+                  };
+                }
+                """,
+                timeout=350,
+            )
+        except Exception:
+            return None
+
     async def _is_locator_visible(self, session: _BrowserSession, locator_expression: str) -> bool | None:
         try:
-            return bool(await self._locator(session, locator_expression).is_visible(timeout=250))
+            state = await self._locator_visibility_state(self._locator(session, locator_expression))
+            if not isinstance(state, dict):
+                return None
+            return bool(state.get("visible")) and bool(state.get("in_viewport")) and bool(state.get("hit_target"))
         except Exception:
             return None
 
     async def _is_text_visible(self, session: _BrowserSession, name: str, index: int) -> bool | None:
         try:
-            return bool(await session.page.get_by_text(name).nth(index).is_visible(timeout=250))
+            state = await self._locator_visibility_state(session.page.get_by_text(name).nth(index))
+            if not isinstance(state, dict):
+                return None
+            return bool(state.get("visible")) and bool(state.get("in_viewport")) and bool(state.get("hit_target"))
         except Exception:
             return None
 
@@ -1528,6 +1595,9 @@ class PythonPlaywrightCliRuntime:
         metadata: dict[str, Any] = {}
         try:
             locator = self._locator(session, node.locator)
+            visibility_state = await self._locator_visibility_state(locator)
+            if isinstance(visibility_state, dict):
+                metadata["visibility_state"] = visibility_state
             box = await locator.bounding_box(timeout=250)
             if box:
                 metadata["bounding_box"] = box
@@ -1882,4 +1952,3 @@ class PythonPlaywrightCliRuntime:
     def _slug(self, value: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
         return slug[:96] or "default"
-

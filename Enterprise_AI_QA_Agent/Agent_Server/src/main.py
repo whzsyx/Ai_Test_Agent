@@ -15,11 +15,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.api.routes.health import router as health_router
+from src.api.routes.knowledge import router as knowledge_router
 from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
 from src.application.model_adapters import build_default_adapter_registry
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
 from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
 from src.application.context.memory_runtime_service import MemoryRuntimeService
@@ -80,6 +82,7 @@ async def lifespan(app: FastAPI):
     )
     await memory_runtime_service.initialize()
     tool_job_store = ArangoToolJobStore(settings=settings)
+    knowledge_graph_service = KnowledgeGraphService(settings=settings)
     tool_job_service = ToolJobService(
         store=tool_job_store,
         heartbeat_timeout_seconds=settings.tool_job_heartbeat_timeout_seconds,
@@ -150,6 +153,7 @@ async def lifespan(app: FastAPI):
     app.state.memory_runtime_service = memory_runtime_service
     app.state.tool_job_store = tool_job_store
     app.state.tool_job_service = tool_job_service
+    app.state.knowledge_graph_service = knowledge_graph_service
     app.state.memory_backend = memory_runtime_service.backend
     app.state.permission_service = permission_service
     app.state.input_orchestrator_service = input_orchestrator_service
@@ -213,6 +217,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router, prefix=settings.api_v1_prefix)
+app.include_router(knowledge_router, prefix=settings.api_v1_prefix)
 app.include_router(registry_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
