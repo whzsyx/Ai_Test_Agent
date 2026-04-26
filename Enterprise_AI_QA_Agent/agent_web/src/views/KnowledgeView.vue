@@ -378,7 +378,7 @@ async function deleteSelectedProject() {
   if (!scope || deletingProject.value) {
     return;
   }
-  const confirmed = window.confirm(`确认删除项目图谱 "${scope}" 吗？这个操作会从 ArangoDB 删除该项目下的页面、元素、实体和关系。`);
+  const confirmed = window.confirm(`确认删除项目图谱 "${scope}" 吗？这个操作会删除该项目下的页面、元素、实体和关系。`);
   if (!confirmed) {
     return;
   }
@@ -520,7 +520,7 @@ function syncFullscreenState() {
     <div class="page-head knowledge-head">
       <div>
         <h2>知识图谱</h2>
-        <p class="head-desc">从 ArangoDB 读取项目级页面、实体、元素与关系网络，按项目切换查看。</p>
+        <p class="head-desc">查看 Memgraph 中的项目级页面、实体、元素与关系网络，按项目切换浏览。</p>
       </div>
     </div>
 

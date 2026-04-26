@@ -16,7 +16,7 @@ flowchart TD
     H --> I["Context Tree Builder"]
     I --> J["Semantic Extractor"]
     J --> K["UI Graph Builder"]
-    K --> L["ArangoDB Project-Scoped UI Graph"]
+    K --> L["Memgraph Project-Scoped UI Graph"]
     K --> M["Artifact: ui_explorer_graph.json"]
     K --> N["Page Knowledge / Observations"]
 ```
@@ -25,8 +25,8 @@ flowchart TD
 - 主数据源是 Playwright `aria_snapshot()`，不是 DOM 扁平扫描。
 - `ui-page-explorer` 只探索和建模，输出 `pages / elements / entities / edges`。
 - 不走 `Verification Harness` 和 `Evaluation Harness`，不生成测试用例、不做断言、不判定通过失败。
-- ArangoDB 图谱顶点集合默认是 `ui_graph_pages`、`ui_graph_elements`、`ui_graph_entities`。
-- ArangoDB 图谱边集合默认是 `ui_graph_page_contains_element`、`ui_graph_element_belongs_to_entity`、`ui_graph_element_triggers_navigation`。
+- Memgraph 图谱节点主要包括 `Page`、`Element`、`Entity`。
+- Memgraph 图谱关系主要包括 `CONTAINS`、`BELONGS_TO`、`TRIGGERS_NAVIGATION`、`REVEALS`。
 
 登录与交互探索：
 - 登录不是固定流程；Explorer 只有在检测到可见 password input / 登录表单后，才会使用调用方提供的 `login_credentials`。
@@ -36,7 +36,7 @@ flowchart TD
 大模型的角色：
 - 决定探索策略：根据目标、项目上下文、历史图谱选择是否提供登录凭据、探索深度、交互预算。
 - 做语义解释：对 ARIA 事实结果进行业务命名、实体归并、页面意图总结和图谱去重建议。
-- 不作为事实源：页面结构、可见性、链接、交互结果必须来自 Playwright / ARIA snapshot / ArangoDB 证据。
+- 不作为事实源：页面结构、可见性、链接、交互结果必须来自 Playwright / ARIA snapshot / Memgraph 图谱证据。
 - 不硬编码流程：登录、点击和导航由 Harness 的检测与策略约束执行，大模型只提出可审计的探索意图。
 
 `Enterprise_AI_QA_Agent` 是一个面向企业级质量保障场景的 Agent 工作台项目，目标是参考 `claude_code_ui_Agent` 的运行骨架，构建一个可扩展的：

@@ -9,13 +9,13 @@ Playwright CLI Runtime
   -> ARIA Snapshot
   -> Context Tree Builder
   -> Semantic Extractor
-  -> ArangoDB UI Graph
+  -> Memgraph UI Graph
 ```
 
 实现落点：
 - `application/runtime/python_playwright_cli.py` 提供 `semantic-snapshot` 与 `explore` 命令。
 - `application/testing/ui_exploration_service.py` 通过 `ui-page-explorer` 调用语义探索闭环。
-- `application/exploration/ui_graph_store.py` 写入 ArangoDB 图谱集合。
+- `application/exploration/ui_graph_store.py` 写入 Memgraph 图谱。
 - 该链路只探索和建模，不进入 Verification/Evaluation，不生成测试或断言。
 
 登录与交互策略：
@@ -23,7 +23,7 @@ Playwright CLI Runtime
 - 交互探索由 `max_interactions` 控制，面向弹窗、抽屉、Tab、展开区等非导航 UI 状态。
 - 交互态通过 `element_reveals_element` 边写入图谱，保留“触发控件 -> 新出现元素”的关系。
 
-大模型在 UI Explorer 中负责策略与解释，不直接充当事实源。事实采集以 Playwright ARIA snapshot、工具输出和 ArangoDB 图谱为准。
+大模型在 UI Explorer 中负责策略与解释，不直接充当事实源。事实采集以 Playwright ARIA snapshot、工具输出和 Memgraph 图谱为准。
 
 一个面向企业级 Agent 测试平台的后端运行时，目标是用 `FastAPI + LangGraph` 复刻类似 Claude Code 的核心组织方式，并沉淀可观测、可审批、可恢复、可扩展的 QA Agent Harness。
 
@@ -34,7 +34,7 @@ Playwright CLI Runtime
 - Tool 注册中心：维护工具能力声明
 - LangGraph 编排：`context_builder -> router -> planner -> permission_gate -> prompt_assembler -> model_invoker -> tool_executor -> finalizer -> responder`
 - SSE 事件流：前端可以实时看到节点执行状态
-- ArangoDB 会话、事件、快照、审批、工具任务与 Memory 存储
+- PostgreSQL 会话与长期记忆存储，Memgraph UI 图谱存储
 - MySQL 模型配置与邮件通道配置
 - 工具审批、恢复、中断、回放与基础验证结果
 

@@ -334,7 +334,7 @@ class ToolRegistry:
                                     "password": {"type": "string"},
                                 },
                             },
-                            "project_scope": {"type": "string", "description": "Optional project scope key for ArangoDB graph storage."},
+                            "project_scope": {"type": "string", "description": "Optional project scope key for knowledge graph storage."},
                         },
                         "required": ["target_url"],
                     },

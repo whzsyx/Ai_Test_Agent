@@ -284,7 +284,7 @@ class ToolRuntimeService:
             )
             memory_matches = [
                 {
-                    "source": item.source or "arangodb",
+                    "source": item.source or (self._memory_runtime_service.backend if self._memory_runtime_service is not None else "memory"),
                     "score": item.score or 0.0,
                     "excerpt": item.summary or item.content,
                     "kind": item.kind,

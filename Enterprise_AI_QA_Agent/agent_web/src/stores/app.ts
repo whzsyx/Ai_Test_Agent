@@ -31,11 +31,11 @@ function applyThemeToDocument(theme: ThemeMode) {
 }
 
 function isOnlineMemoryBackend(memoryBackend: string) {
-  return memoryBackend === "qdrant" || memoryBackend === "arangodb" || memoryBackend.startsWith("postgres");
+  return memoryBackend === "qdrant" || memoryBackend.startsWith("postgres");
 }
 
 function isUnavailableMemoryBackend(memoryBackend: string) {
-  return memoryBackend === "arangodb_unavailable" || memoryBackend.endsWith("_unavailable");
+  return memoryBackend.endsWith("_unavailable");
 }
 
 export const useAppStore = defineStore("app", {
