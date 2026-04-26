@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
+import json
 from datetime import datetime
 from typing import Any
 
 from src.core.config import Settings
-from src.infrastructure.arango_runtime import ArangoRuntimeProvider
+from src.infrastructure.memgraph_runtime import MemgraphRuntimeProvider
+from src.infrastructure.storage_utils import ensure_utc_datetime
 from src.schemas.knowledge import (
     KnowledgeGraphEdge,
     KnowledgeGraphNode,
-    KnowledgeProjectDeleteResponse,
     KnowledgeGraphResponse,
     KnowledgeGraphSummary,
+    KnowledgeProjectDeleteResponse,
     KnowledgeProjectSummary,
 )
 
@@ -20,7 +21,7 @@ from src.schemas.knowledge import (
 class KnowledgeGraphService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._provider = ArangoRuntimeProvider(settings)
+        self._provider = MemgraphRuntimeProvider(settings)
 
     async def list_projects(self) -> list[KnowledgeProjectSummary]:
         return await asyncio.to_thread(self._list_projects_sync)
@@ -33,30 +34,28 @@ class KnowledgeGraphService:
 
     def _list_projects_sync(self) -> list[KnowledgeProjectSummary]:
         summary_map: dict[str, dict[str, Any]] = {}
-
-        self._merge_scope_counts(
-            summary_map,
-            self._settings.arango_ui_page_collection,
-            "page_count",
+        self._provider.initialize()
+        for label, count_field in [("Page", "page_count"), ("Element", "element_count"), ("Entity", "entity_count")]:
+            rows = self._provider.execute(
+                f"""
+                MATCH (n:{label})
+                WHERE n.project_scope IS NOT NULL AND n.project_scope <> ""
+                RETURN n.project_scope AS project_scope,
+                       count(n) AS total,
+                       max(n.updated_at) AS latest_updated_at
+                """
+            )
+            self._merge_scope_counts(summary_map, rows, count_field)
+        edge_rows = self._provider.execute(
+            """
+            MATCH ()-[r]->()
+            WHERE r.project_scope IS NOT NULL AND r.project_scope <> ""
+            RETURN r.project_scope AS project_scope,
+                   count(r) AS total,
+                   max(r.updated_at) AS latest_updated_at
+            """
         )
-        self._merge_scope_counts(
-            summary_map,
-            self._settings.arango_ui_element_collection,
-            "element_count",
-        )
-        self._merge_scope_counts(
-            summary_map,
-            self._settings.arango_ui_entity_collection,
-            "entity_count",
-        )
-        for collection_name in [
-            self._settings.arango_ui_page_contains_edge_collection,
-            self._settings.arango_ui_belongs_edge_collection,
-            self._settings.arango_ui_navigation_edge_collection,
-            self._settings.arango_ui_reveals_edge_collection,
-        ]:
-            self._merge_scope_counts(summary_map, collection_name, "edge_count")
-
+        self._merge_scope_counts(summary_map, edge_rows, "edge_count")
         items = [
             KnowledgeProjectSummary(
                 project_scope=scope,
@@ -83,50 +82,48 @@ class KnowledgeGraphService:
         scope = str(project_scope or "").strip()
         if not scope:
             raise ValueError("project_scope is required")
-
-        pages = self._fetch_collection_rows(self._settings.arango_ui_page_collection, scope)
-        elements = self._fetch_collection_rows(self._settings.arango_ui_element_collection, scope)
-        entities = self._fetch_collection_rows(self._settings.arango_ui_entity_collection, scope)
+        self._provider.initialize()
+        pages = self._provider.execute(
+            "MATCH (n:Page {project_scope: $project_scope}) RETURN n ORDER BY n.updated_at DESC",
+            {"project_scope": scope},
+        )
+        elements = self._provider.execute(
+            "MATCH (n:Element {project_scope: $project_scope}) RETURN n ORDER BY n.updated_at DESC",
+            {"project_scope": scope},
+        )
+        entities = self._provider.execute(
+            "MATCH (n:Entity {project_scope: $project_scope}) RETURN n ORDER BY n.updated_at DESC",
+            {"project_scope": scope},
+        )
         if not pages and not elements and not entities:
             raise KeyError(scope)
-
-        edges_by_type: dict[str, list[dict[str, Any]]] = {}
-        for edge_type, collection_name in [
-            ("page_contains_element", self._settings.arango_ui_page_contains_edge_collection),
-            ("element_belongs_to_entity", self._settings.arango_ui_belongs_edge_collection),
-            ("element_triggers_navigation", self._settings.arango_ui_navigation_edge_collection),
-            ("element_reveals_element", self._settings.arango_ui_reveals_edge_collection),
-        ]:
-            edges_by_type[edge_type] = self._fetch_collection_rows(collection_name, scope)
-
+        edge_rows = self._provider.execute(
+            """
+            MATCH (a)-[r]->(b)
+            WHERE r.project_scope = $project_scope
+            RETURN a.id AS source_id, b.id AS target_id, type(r) AS relation, r
+            ORDER BY r.updated_at DESC
+            """,
+            {"project_scope": scope},
+        )
         nodes = [
-            *[self._page_to_node(item) for item in pages],
-            *[self._element_to_node(item) for item in elements],
-            *[self._entity_to_node(item) for item in entities],
+            *[self._node_from_record(item["n"], "page") for item in pages],
+            *[self._node_from_record(item["n"], "element") for item in elements],
+            *[self._node_from_record(item["n"], "entity") for item in entities],
         ]
         edges: list[KnowledgeGraphEdge] = []
-        relation_counts: dict[str, int] = defaultdict(int)
-        for edge_type, rows in edges_by_type.items():
-            for row in rows:
-                edge = self._edge_to_record(row, edge_type)
-                if edge is None:
-                    continue
-                edges.append(edge)
-                relation_counts[edge.type] += 1
-
+        relation_counts: dict[str, int] = {}
+        for row in edge_rows:
+            edge = self._edge_from_record(row)
+            edges.append(edge)
+            relation_counts[edge.type] = relation_counts.get(edge.type, 0) + 1
         latest_updated_at = max(
-            (
-                value
-                for value in (
-                    [self._parse_datetime(item.get("updated_at")) for item in pages]
-                    + [self._parse_datetime(item.get("updated_at")) for item in elements]
-                    + [self._parse_datetime(item.get("updated_at")) for item in entities]
-                )
-                if value is not None
-            ),
+            [
+                self._parse_datetime(self._record_value(item["n"], "updated_at"))
+                for item in [*pages, *elements, *entities]
+            ],
             default=None,
         )
-
         return KnowledgeGraphResponse(
             summary=KnowledgeGraphSummary(
                 project_scope=scope,
@@ -145,25 +142,21 @@ class KnowledgeGraphService:
         scope = str(project_scope or "").strip()
         if not scope:
             raise ValueError("project_scope is required")
-
-        collection_names = {
-            "pages": self._settings.arango_ui_page_collection,
-            "elements": self._settings.arango_ui_element_collection,
-            "entities": self._settings.arango_ui_entity_collection,
-            "page_contains_element": self._settings.arango_ui_page_contains_edge_collection,
-            "element_belongs_to_entity": self._settings.arango_ui_belongs_edge_collection,
-            "element_triggers_navigation": self._settings.arango_ui_navigation_edge_collection,
-            "element_reveals_element": self._settings.arango_ui_reveals_edge_collection,
+        graph = self._get_graph_sync(scope)
+        deleted_counts = {
+            "pages": graph.summary.page_count,
+            "elements": graph.summary.element_count,
+            "entities": graph.summary.entity_count,
+            "edges": graph.summary.edge_count,
         }
-
-        existing = any(self._count_scope_rows(name, scope) > 0 for name in collection_names.values())
-        if not existing:
-            raise KeyError(scope)
-
-        deleted_counts: dict[str, int] = {}
-        for label, collection_name in collection_names.items():
-            deleted_counts[label] = self._delete_scope_rows(collection_name, scope)
-
+        self._provider.execute_write(
+            """
+            MATCH (n)
+            WHERE n.project_scope = $project_scope
+            DETACH DELETE n
+            """,
+            {"project_scope": scope},
+        )
         return KnowledgeProjectDeleteResponse(
             ok=True,
             project_scope=scope,
@@ -171,23 +164,7 @@ class KnowledgeGraphService:
             message=f"Deleted knowledge graph project '{scope}'",
         )
 
-    def _merge_scope_counts(
-        self,
-        summary_map: dict[str, dict[str, Any]],
-        collection_name: str,
-        count_field: str,
-    ) -> None:
-        query = """
-        FOR doc IN @@collection
-          FILTER doc.project_scope != null AND doc.project_scope != ""
-          COLLECT scope = doc.project_scope INTO grouped
-          RETURN {
-            project_scope: scope,
-            total: LENGTH(grouped),
-            latest_updated_at: MAX(grouped[*].doc.updated_at)
-          }
-        """
-        rows = self._provider.execute(query, {"@collection": collection_name})
+    def _merge_scope_counts(self, summary_map: dict[str, dict[str, Any]], rows: list[dict[str, Any]], count_field: str) -> None:
         for row in rows:
             scope = str(row.get("project_scope") or "").strip()
             if not scope:
@@ -207,136 +184,66 @@ class KnowledgeGraphService:
             if latest and (entry["latest_updated_at"] is None or str(latest) > str(entry["latest_updated_at"])):
                 entry["latest_updated_at"] = latest
 
-    def _fetch_collection_rows(self, collection_name: str, project_scope: str) -> list[dict[str, Any]]:
-        query = """
-        FOR doc IN @@collection
-          FILTER doc.project_scope == @project_scope
-          SORT doc.updated_at DESC, doc._key ASC
-          RETURN UNSET(doc, ["_id", "_rev"])
-        """
-        return self._provider.execute(
-            query,
-            {
-                "@collection": collection_name,
-                "project_scope": project_scope,
-            },
-        )
-
-    def _count_scope_rows(self, collection_name: str, project_scope: str) -> int:
-        query = """
-        RETURN LENGTH(
-          FOR doc IN @@collection
-            FILTER doc.project_scope == @project_scope
-            RETURN 1
-        )
-        """
-        rows = self._provider.execute(
-            query,
-            {
-                "@collection": collection_name,
-                "project_scope": project_scope,
-            },
-        )
-        return int(rows[0] or 0) if rows else 0
-
-    def _delete_scope_rows(self, collection_name: str, project_scope: str) -> int:
-        query = """
-        LET to_remove = (
-          FOR doc IN @@collection
-            FILTER doc.project_scope == @project_scope
-            RETURN doc
-        )
-        FOR doc IN to_remove
-          REMOVE doc IN @@collection
-        RETURN LENGTH(to_remove)
-        """
-        rows = self._provider.execute(
-            query,
-            {
-                "@collection": collection_name,
-                "project_scope": project_scope,
-            },
-        )
-        return int(rows[0] or 0) if rows else 0
-
-    def _page_to_node(self, row: dict[str, Any]) -> KnowledgeGraphNode:
-        label = str(row.get("title") or row.get("name") or row.get("url") or row.get("id") or "Page").strip()
-        summary = str(row.get("url") or row.get("id") or "").strip()
+    def _node_from_record(self, record: Any, kind: str) -> KnowledgeGraphNode:
+        metadata = self._metadata_from_payload(self._record_value(record, "payload_json"))
+        label = str(self._record_value(record, "label") or self._record_value(record, "id") or kind.title()).strip()
+        summary = str(
+            self._record_value(record, "url")
+            or self._record_value(record, "role")
+            or self._record_value(record, "type")
+            or ""
+        ).strip()
         return KnowledgeGraphNode(
-            id=str(row.get("id") or row.get("_key") or label),
+            id=str(self._record_value(record, "id") or label),
             label=label,
-            kind="page",
+            kind=kind,
             summary=summary,
-            metadata=self._clean_metadata(
-                row,
-                exclude={"id", "title", "name", "url", "_key"},
-            ),
+            metadata=metadata,
         )
 
-    def _element_to_node(self, row: dict[str, Any]) -> KnowledgeGraphNode:
-        role = str(row.get("role") or "").strip()
-        name = str(row.get("name") or row.get("title") or "").strip()
-        label = name or role or str(row.get("id") or "Element")
-        summary = role or str(row.get("context_role") or "").strip()
-        return KnowledgeGraphNode(
-            id=str(row.get("id") or row.get("_key") or label),
-            label=label,
-            kind="element",
-            summary=summary,
-            metadata=self._clean_metadata(
-                row,
-                exclude={"id", "name", "title", "role", "_key"},
-            ),
-        )
-
-    def _entity_to_node(self, row: dict[str, Any]) -> KnowledgeGraphNode:
-        label = str(row.get("name") or row.get("title") or row.get("id") or "Entity").strip()
-        summary = str(row.get("type") or row.get("role") or "").strip()
-        return KnowledgeGraphNode(
-            id=str(row.get("id") or row.get("_key") or label),
-            label=label,
-            kind="entity",
-            summary=summary,
-            metadata=self._clean_metadata(
-                row,
-                exclude={"id", "name", "title", "type", "role", "_key"},
-            ),
-        )
-
-    def _edge_to_record(self, row: dict[str, Any], fallback_type: str) -> KnowledgeGraphEdge | None:
-        source = str(row.get("from") or "").strip()
-        target = str(row.get("to") or "").strip()
-        if not source or not target:
-            return None
-        edge_type = str(row.get("type") or fallback_type).strip() or fallback_type
+    def _edge_from_record(self, row: dict[str, Any]) -> KnowledgeGraphEdge:
+        record = row.get("r")
+        relation = str(row.get("relation") or self._record_value(record, "type") or "RELATED_TO").strip()
+        relation_key = self._relation_key(relation)
+        metadata = self._metadata_from_payload(self._record_value(record, "payload_json"))
         return KnowledgeGraphEdge(
-            id=str(row.get("_key") or f"{edge_type}:{source}:{target}"),
-            source=source,
-            target=target,
-            type=edge_type,
-            label=self._format_relation_label(edge_type),
-            metadata=self._clean_metadata(
-                row,
-                exclude={"_key", "_from", "_to", "from", "to", "type"},
-            ),
+            id=str(self._record_value(record, "edge_id") or f"{relation_key}:{row.get('source_id')}:{row.get('target_id')}"),
+            source=str(row.get("source_id") or ""),
+            target=str(row.get("target_id") or ""),
+            type=relation_key,
+            label=self._format_relation_label(relation_key),
+            metadata=metadata,
         )
 
-    def _clean_metadata(self, row: dict[str, Any], *, exclude: set[str]) -> dict[str, Any]:
-        return {
-            str(key): value
-            for key, value in row.items()
-            if key not in exclude and not str(key).startswith("_")
+    def _record_value(self, record: Any, key: str) -> Any:
+        if record is None:
+            return None
+        try:
+            return record.get(key)
+        except AttributeError:
+            return None
+
+    def _metadata_from_payload(self, payload_json: Any) -> dict[str, Any]:
+        if not payload_json:
+            return {}
+        try:
+            payload = json.loads(str(payload_json))
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _relation_key(self, relation: str) -> str:
+        normalized = relation.strip().upper()
+        mapping = {
+            "CONTAINS": "page_contains_element",
+            "BELONGS_TO": "element_belongs_to_entity",
+            "TRIGGERS_NAVIGATION": "element_triggers_navigation",
+            "REVEALS": "element_reveals_element",
         }
+        return mapping.get(normalized, normalized.lower())
 
     def _format_relation_label(self, edge_type: str) -> str:
         return edge_type.replace("_", " ").title()
 
     def _parse_datetime(self, value: Any) -> datetime | None:
-        if value is None or value == "":
-            return None
-        if isinstance(value, datetime):
-            return value
-        try:
-            return datetime.fromisoformat(str(value))
-        except ValueError:
-            return None
+        return ensure_utc_datetime(value)

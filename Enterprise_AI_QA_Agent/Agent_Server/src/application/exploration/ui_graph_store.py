@@ -2,20 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 from datetime import datetime
 from typing import Any
 
 from src.core.config import Settings
-from src.infrastructure.arango_runtime import ArangoRuntimeProvider, day_bucket, make_json_safe, serialize_datetime
+from src.infrastructure.memgraph_runtime import MemgraphRuntimeProvider
 
 
 class UIGraphStore:
-    """Persist UI Explorer output as project-scoped ArangoDB graph collections."""
+    """Persist UI Explorer output as project-scoped Memgraph nodes and relationships."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._provider = ArangoRuntimeProvider(settings)
+        self._provider = MemgraphRuntimeProvider(settings)
 
     async def write_exploration_graph(
         self,
@@ -44,78 +45,35 @@ class UIGraphStore:
         trace_id: str,
         project_scope: str,
     ) -> dict[str, Any]:
-        self._ensure_graph_collections()
-        now = datetime.utcnow()
+        self._provider.initialize()
+        now = datetime.utcnow().isoformat()
         common = {
             "project_scope": project_scope,
             "session_id": session_id,
             "turn_id": turn_id,
             "trace_id": trace_id,
-            "updated_at": serialize_datetime(now),
-            "day_bucket": day_bucket(now),
-            "day_bucket_tz": self._settings.arango_timezone,
+            "updated_at": now,
         }
-        page_count = self._upsert_vertices(
-            self._settings.arango_ui_page_collection,
-            graph.get("pages") or [],
-            common,
-        )
-        element_count = self._upsert_vertices(
-            self._settings.arango_ui_element_collection,
-            graph.get("elements") or [],
-            common,
-        )
-        entity_count = self._upsert_vertices(
-            self._settings.arango_ui_entity_collection,
-            graph.get("entities") or [],
-            common,
-        )
+        page_count = self._upsert_nodes("Page", graph.get("pages") or [], common)
+        element_count = self._upsert_nodes("Element", graph.get("elements") or [], common)
+        entity_count = self._upsert_nodes("Entity", graph.get("entities") or [], common)
         edge_count = 0
         for edge in graph.get("edges") or []:
             if not isinstance(edge, dict):
                 continue
             edge_type = str(edge.get("type") or "").strip()
             if edge_type == "page_contains_element":
-                edge_count += self._upsert_edge(
-                    self._settings.arango_ui_page_contains_edge_collection,
-                    from_collection=self._settings.arango_ui_page_collection,
-                    to_collection=self._settings.arango_ui_element_collection,
-                    edge=edge,
-                    common=common,
-                )
+                edge_count += self._upsert_edge("Page", "CONTAINS", "Element", edge, common)
             elif edge_type == "element_belongs_to_entity":
-                edge_count += self._upsert_edge(
-                    self._settings.arango_ui_belongs_edge_collection,
-                    from_collection=self._settings.arango_ui_element_collection,
-                    to_collection=self._settings.arango_ui_entity_collection,
-                    edge=edge,
-                    common=common,
-                )
+                edge_count += self._upsert_edge("Element", "BELONGS_TO", "Entity", edge, common)
             elif edge_type == "element_triggers_navigation":
-                edge_count += self._upsert_edge(
-                    self._settings.arango_ui_navigation_edge_collection,
-                    from_collection=self._settings.arango_ui_element_collection,
-                    to_collection=self._settings.arango_ui_page_collection,
-                    edge=edge,
-                    common=common,
-                )
+                edge_count += self._upsert_edge("Element", "TRIGGERS_NAVIGATION", "Page", edge, common)
             elif edge_type == "element_reveals_element":
-                edge_count += self._upsert_edge(
-                    self._settings.arango_ui_reveals_edge_collection,
-                    from_collection=self._settings.arango_ui_element_collection,
-                    to_collection=self._settings.arango_ui_element_collection,
-                    edge=edge,
-                    common=common,
-                )
+                edge_count += self._upsert_edge("Element", "REVEALS", "Element", edge, common)
         return {
             "status": "success",
-            "backend": "arangodb",
+            "backend": "memgraph",
             "project_scope": project_scope,
-            "collections": {
-                "pages": self._settings.arango_ui_page_collection,
-                "elements": self._settings.arango_ui_element_collection,
-                "entities": self._settings.arango_ui_entity_collection,
-            },
             "metrics": {
                 "page_vertices": page_count,
                 "element_vertices": element_count,
@@ -124,79 +82,89 @@ class UIGraphStore:
             },
         }
 
-    def _ensure_graph_collections(self) -> None:
-        database = self._provider.db()
-        for name in [
-            self._settings.arango_ui_page_collection,
-            self._settings.arango_ui_element_collection,
-            self._settings.arango_ui_entity_collection,
-        ]:
-            if not database.has_collection(name):
-                database.create_collection(name)
-        for name in [
-            self._settings.arango_ui_page_contains_edge_collection,
-            self._settings.arango_ui_belongs_edge_collection,
-            self._settings.arango_ui_navigation_edge_collection,
-            self._settings.arango_ui_reveals_edge_collection,
-        ]:
-            if not database.has_collection(name):
-                database.create_collection(name, edge=True)
-
-    def _upsert_vertices(self, collection_name: str, rows: list[Any], common: dict[str, Any]) -> int:
-        collection = self._provider.collection(collection_name)
+    def _upsert_nodes(self, label: str, rows: list[Any], common: dict[str, Any]) -> int:
         count = 0
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            key = self._scoped_key(common["project_scope"], row.get("id"))
-            if not key:
+            node_id = str(row.get("id") or "").strip()
+            if not node_id:
                 continue
-            document = {
-                "_key": key,
-                **make_json_safe(row),
-                **common,
-            }
-            if collection.has(key):
-                collection.update(document)
-            else:
-                collection.insert(document)
+            props = self._node_properties(label, row, common)
+            self._provider.execute_write(
+                f"""
+                MERGE (n:{label} {{project_scope: $project_scope, id: $id}})
+                SET n += $props
+                """,
+                {
+                    "project_scope": common["project_scope"],
+                    "id": node_id,
+                    "props": props,
+                },
+            )
             count += 1
         return count
 
     def _upsert_edge(
         self,
-        collection_name: str,
-        *,
-        from_collection: str,
-        to_collection: str,
+        from_label: str,
+        relation: str,
+        to_label: str,
         edge: dict[str, Any],
         common: dict[str, Any],
     ) -> int:
-        project_scope = str(common.get("project_scope") or "default")
-        from_key = self._scoped_key(project_scope, edge.get("from"))
-        to_key = self._scoped_key(project_scope, edge.get("to"))
-        if not from_key or not to_key:
+        source_id = str(edge.get("from") or "").strip()
+        target_id = str(edge.get("to") or "").strip()
+        if not source_id or not target_id:
             return 0
-        collection = self._provider.collection(collection_name)
-        key = self._scoped_key(
-            project_scope,
-            edge.get("type"),
-            edge.get("from"),
-            edge.get("to"),
-            edge.get("href") or "",
+        edge_id = self._scoped_key(common["project_scope"], relation, source_id, target_id, edge.get("href") or "")
+        props = self._edge_properties(edge, common, relation, edge_id)
+        self._provider.execute_write(
+            f"""
+            MATCH (a:{from_label} {{project_scope: $project_scope, id: $source_id}})
+            MATCH (b:{to_label} {{project_scope: $project_scope, id: $target_id}})
+            MERGE (a)-[r:{relation} {{project_scope: $project_scope, edge_id: $edge_id}}]->(b)
+            SET r += $props
+            """,
+            {
+                "project_scope": common["project_scope"],
+                "source_id": source_id,
+                "target_id": target_id,
+                "edge_id": edge_id,
+                "props": props,
+            },
         )
-        document = {
-            "_key": key,
-            "_from": f"{from_collection}/{from_key}",
-            "_to": f"{to_collection}/{to_key}",
-            **make_json_safe(edge),
-            **common,
-        }
-        if collection.has(key):
-            collection.update(document)
-        else:
-            collection.insert(document)
         return 1
+
+    def _node_properties(self, label: str, row: dict[str, Any], common: dict[str, Any]) -> dict[str, Any]:
+        scalar = self._safe_scalar_map(row)
+        if label == "Page":
+            scalar["label"] = str(row.get("title") or row.get("name") or row.get("url") or row.get("id") or "Page")
+        elif label == "Element":
+            scalar["label"] = str(row.get("name") or row.get("title") or row.get("role") or row.get("id") or "Element")
+        else:
+            scalar["label"] = str(row.get("name") or row.get("title") or row.get("id") or "Entity")
+        scalar["kind"] = label.lower()
+        scalar["payload_json"] = json.dumps(row, ensure_ascii=False)
+        scalar.update(common)
+        return scalar
+
+    def _edge_properties(self, row: dict[str, Any], common: dict[str, Any], relation: str, edge_id: str) -> dict[str, Any]:
+        scalar = self._safe_scalar_map(row)
+        scalar["type"] = str(row.get("type") or relation.lower())
+        scalar["edge_id"] = edge_id
+        scalar["payload_json"] = json.dumps(row, ensure_ascii=False)
+        scalar.update(common)
+        return scalar
+
+    def _safe_scalar_map(self, row: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in row.items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                result[str(key)] = value
+        return result
 
     def _scoped_key(self, *parts: Any) -> str:
         raw = "::".join(str(part or "") for part in parts).strip()

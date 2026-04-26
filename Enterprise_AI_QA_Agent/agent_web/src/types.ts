@@ -32,7 +32,11 @@ export interface HealthResponse {
   name: string;
   environment: string;
   memory_backend?: string;
+  session_backend?: string;
+  tool_job_backend?: string;
+  ui_graph_backend?: string;
   knowledge_enabled?: boolean;
+  memory_target?: string;
   knowledge_target?: string;
 }
 

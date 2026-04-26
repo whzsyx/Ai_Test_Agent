@@ -46,6 +46,18 @@ function messageDeliveryStatus(message: ChatMessage | undefined) {
   return String(message?.metadata?.delivery_status || "").trim();
 }
 
+function toolMessageCallId(message: ChatMessage | undefined) {
+  return String(message?.metadata?.tool_call_id || "").trim();
+}
+
+function toolMessageKey(message: ChatMessage | undefined) {
+  return String(message?.metadata?.tool_key || "").trim();
+}
+
+function isTransientToolMessage(message: ChatMessage | undefined) {
+  return message?.role === "tool" && message?.metadata?.transient_tool_event === true;
+}
+
 function hasStreamingAssistantMessage(messages: ChatMessage[]) {
   return messages.some(
     (message) =>
@@ -181,12 +193,24 @@ function mergeSessionMessages(
   sessionStatus: SessionLifecycleStatus,
 ) {
   const serverIds = new Set(serverMessages.map((message) => message.id));
+  const serverToolCallIds = new Set(
+    serverMessages
+      .map((message) => toolMessageCallId(message))
+      .filter((value) => Boolean(value)),
+  );
+  const serverToolKeys = new Set(
+    serverMessages
+      .filter((message) => message.role === "tool")
+      .map((message) => toolMessageKey(message))
+      .filter((value) => Boolean(value)),
+  );
   const localById = new Map(localMessages.map((message) => [message.id, message]));
   const allowTransientLocalMessages =
     sessionStatus === "running" ||
     sessionStatus === "waiting_approval" ||
     sessionStatus === "interrupted" ||
-    hasStreamingAssistantMessage(localMessages);
+    hasStreamingAssistantMessage(localMessages) ||
+    localMessages.some((message) => isTransientToolMessage(message));
 
   const merged = serverMessages.map((serverMessage) => {
     const localMessage = localById.get(serverMessage.id);
@@ -218,23 +242,90 @@ function mergeSessionMessages(
   });
 
   const localOnlyMessages = localMessages.filter((message) => {
-    if (!allowTransientLocalMessages) {
+    if (!allowTransientLocalMessages || serverIds.has(message.id)) {
       return false;
     }
-    if (serverIds.has(message.id)) {
+    if (message.role === "assistant") {
+      const status = messageDeliveryStatus(message);
+      return status === "streaming" && Boolean(message.content.trim());
+    }
+    if (!isTransientToolMessage(message)) {
       return false;
     }
-    if (message.role !== "assistant") {
+    const callId = toolMessageCallId(message);
+    if (callId && serverToolCallIds.has(callId)) {
       return false;
     }
-    const status = messageDeliveryStatus(message);
-    if (status !== "streaming") {
+    const toolKey = toolMessageKey(message);
+    if (!callId && toolKey && serverToolKeys.has(toolKey)) {
       return false;
     }
-    return Boolean(message.content.trim());
+    return true;
   });
 
   return [...merged, ...localOnlyMessages];
+}
+
+function findToolMessageIndex(messages: ChatMessage[], event: ExecutionEvent) {
+  const eventCallId = String(event.payload?.call_id || "").trim();
+  const eventToolKey = String(event.payload?.tool_key || "").trim();
+  if (eventCallId) {
+    const byCallId = messages.findIndex(
+      (message) => isTransientToolMessage(message) && toolMessageCallId(message) === eventCallId,
+    );
+    if (byCallId >= 0) {
+      return byCallId;
+    }
+  }
+  if (!eventToolKey) {
+    return -1;
+  }
+  return messages.findIndex(
+    (message) =>
+      isTransientToolMessage(message) &&
+      toolMessageKey(message) === eventToolKey &&
+      String(message.metadata?.tool_progress_finalized || "").trim() !== "true",
+  );
+}
+
+function createTransientToolMessage(event: ExecutionEvent, status: string, summary: string) {
+  const toolName = String(event.payload?.tool_name || event.payload?.tool_key || "Tool").trim() || "Tool";
+  const toolKey = String(event.payload?.tool_key || "").trim();
+  const callId = String(event.payload?.call_id || "").trim();
+  const toolJobId = String(event.payload?.tool_job_id || "").trim();
+  const approvalId = String(event.payload?.approval_id || "").trim();
+  return {
+    id: `transient-tool-${callId || toolKey || Date.now()}`,
+    role: "tool" as const,
+    content: JSON.stringify(
+      {
+        status,
+        summary,
+        output: {
+          event_type: event.type,
+          tool_name: toolName,
+          tool_key: toolKey,
+        },
+      },
+      null,
+      2,
+    ),
+    created_at: event.timestamp,
+    metadata: {
+      tool_key: toolKey,
+      tool_name: toolName,
+      tool_call_id: callId,
+      tool_job_id: toolJobId,
+      approval_id: approvalId,
+      delivery_status: status === "running" ? "streaming" : "completed",
+      transient_tool_event: true,
+      tool_progress_status: status,
+      tool_progress_finalized: status === "running" ? "false" : "true",
+      persist_transcript: false,
+      context_eligible: false,
+      transcript_bucket: "tool",
+    },
+  };
 }
 
 export const useSessionStore = defineStore("session", {
@@ -699,6 +790,55 @@ export const useSessionStore = defineStore("session", {
         event.type === "turn.resumed"
       ) {
         this.scheduleRefresh(false);
+      }
+
+      if (
+        event.type === "tool.execution_started" ||
+        event.type === "tool.execution_blocked" ||
+        event.type === "tool.execution_completed" ||
+        event.type === "tool.execution_failed" ||
+        event.type === "tool.execution_denied"
+      ) {
+        const statusMap: Record<string, string> = {
+          "tool.execution_started": "running",
+          "tool.execution_blocked": "waiting_approval",
+          "tool.execution_completed": "completed",
+          "tool.execution_failed": "failed",
+          "tool.execution_denied": "denied",
+        };
+        const status = statusMap[event.type] || "running";
+        const fallbackSummary =
+          event.type === "tool.execution_started"
+            ? "Tool execution started."
+            : event.type === "tool.execution_blocked"
+              ? "Tool is waiting for approval."
+              : event.type === "tool.execution_completed"
+                ? "Tool execution completed."
+                : event.type === "tool.execution_denied"
+                  ? "Tool execution was denied."
+                  : "Tool execution failed.";
+        const summary = String(event.payload?.summary || event.payload?.message || fallbackSummary).trim() || fallbackSummary;
+        const index = findToolMessageIndex(this.messages, event);
+        const nextMessage = createTransientToolMessage(event, status, summary);
+
+        if (index >= 0) {
+          const nextMessages = [...this.messages];
+          nextMessages[index] = {
+            ...nextMessages[index],
+            ...nextMessage,
+            id: nextMessages[index].id,
+            created_at: nextMessages[index].created_at || nextMessage.created_at,
+            metadata: {
+              ...nextMessages[index].metadata,
+              ...nextMessage.metadata,
+            },
+          };
+          this.messages = nextMessages;
+        } else {
+          this.messages = [...this.messages, nextMessage];
+        }
+
+        return;
       }
 
       const messageId = String(event.payload?.message_id || "").trim();

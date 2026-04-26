@@ -172,6 +172,7 @@ async def _resolve_tool_call(
             "tool_executor",
             f"Model requested unknown tool '{tool_call.name}'.",
             tool_key=tool_call.name,
+            call_id=tool_call.id,
             status="failed",
         )
         return {
@@ -209,6 +210,7 @@ async def _resolve_tool_call(
             denial_reason,
             tool_key=tool.key,
             tool_name=tool.name,
+            call_id=tool_call.id,
             permission_source=(permission_decision or {}).get("source", "static_policy"),
             permission_reason=denial_reason,
             permission_reason_code=(permission_decision or {}).get("reason_code", "restricted_default_deny"),
@@ -235,6 +237,8 @@ async def _resolve_tool_call(
             "tool_executor",
             f"Tool '{tool.key}' has no runtime handler binding.",
             tool_key=tool.key,
+            tool_name=tool.name,
+            call_id=tool_call.id,
             status="failed",
         )
         return {
@@ -312,6 +316,8 @@ async def _resolve_tool_call(
             f"Tool '{tool.key}' is waiting for approval.",
             tool_key=tool.key,
             tool_name=tool.name,
+            call_id=tool_call.id,
+            tool_job_id=approval_job_id,
             approval_id=approval.id,
             arguments=tool_call.arguments,
             permission_source=permission_source,
@@ -329,6 +335,8 @@ async def _resolve_tool_call(
         "tool_executor",
         f"Tool '{tool.key}' execution started.",
         tool_key=tool.key,
+        tool_name=tool.name,
+        call_id=tool_call.id,
         arguments=tool_call.arguments,
     )
     result = await tool_runtime_service.execute(tool, tool_call, tool_context)
@@ -339,6 +347,9 @@ async def _resolve_tool_call(
         "tool_executor",
         f"Tool '{tool.key}' finished with status '{result.status}'.",
         tool_key=tool.key,
+        tool_name=tool.name,
+        call_id=tool_call.id,
+        tool_job_id=result.job_id,
         status=result.status,
         summary=result.summary,
     )

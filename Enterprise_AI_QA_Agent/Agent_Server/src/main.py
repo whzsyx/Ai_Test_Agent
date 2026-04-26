@@ -43,24 +43,24 @@ from src.application.runtime.tool_runtime_service import ToolRuntimeService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.core.config import get_settings
 from src.graph.builder import build_agent_graph
-from src.infrastructure.arango_memory_store import ArangoDocumentMemoryStore
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
+from src.infrastructure.postgres_vector_memory_store import PostgresVectorMemoryStore
 from src.registry.agents import AgentRegistry
 from src.registry.mcp import MCPRegistry
 from src.registry.modes import ModeRegistry
 from src.registry.models import ModelRegistry
 from src.registry.skills import SkillRegistry
 from src.registry.tools import ToolRegistry
-from src.runtime.store import ArangoSessionStore
+from src.runtime.postgres_session_store import PostgresSessionStore
 from src.runtime.control import RuntimeControlRegistry
-from src.runtime.tool_job_store import ArangoToolJobStore
+from src.runtime.postgres_tool_job_store import PostgresToolJobStore
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    store = ArangoSessionStore(settings)
+    store = PostgresSessionStore(settings)
     await store.initialize()
     agent_registry = AgentRegistry()
     tool_registry = ToolRegistry()
@@ -77,13 +77,13 @@ async def lifespan(app: FastAPI):
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
     mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
     artifact_storage_service = ArtifactStorageService(settings=settings)
-    memory_store = ArangoDocumentMemoryStore(settings=settings)
+    memory_store = PostgresVectorMemoryStore(settings=settings)
     memory_runtime_service = MemoryRuntimeService(
         memory_store=memory_store,
         top_k=settings.memory_top_k,
     )
     await memory_runtime_service.initialize()
-    tool_job_store = ArangoToolJobStore(settings=settings)
+    tool_job_store = PostgresToolJobStore(settings=settings)
     knowledge_graph_service = KnowledgeGraphService(settings=settings)
     tool_job_service = ToolJobService(
         store=tool_job_store,
@@ -154,10 +154,13 @@ async def lifespan(app: FastAPI):
     app.state.artifact_storage_service = artifact_storage_service
     app.state.memory_store = memory_store
     app.state.memory_runtime_service = memory_runtime_service
+    app.state.session_backend = settings.session_backend
     app.state.tool_job_store = tool_job_store
     app.state.tool_job_service = tool_job_service
+    app.state.tool_job_backend = settings.tool_job_backend
     app.state.knowledge_graph_service = knowledge_graph_service
     app.state.memory_backend = memory_runtime_service.backend
+    app.state.ui_graph_backend = settings.ui_graph_backend
     app.state.permission_service = permission_service
     app.state.input_orchestrator_service = input_orchestrator_service
     app.state.prompt_service = prompt_service

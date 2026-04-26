@@ -244,6 +244,87 @@ function toolSummary(content: string) {
   return "Expand to view tool output";
 }
 
+function isTransientToolMessage(message: ChatMessage) {
+  return message.role === "tool" && message.metadata?.transient_tool_event === true;
+}
+
+function toolStatusTone(status: string) {
+  if (status === "completed") return "online";
+  if (status === "running" || status === "queued" || status === "waiting_approval" || status === "partial") {
+    return "degraded";
+  }
+  if (status === "failed" || status === "denied" || status === "cancelled") return "offline";
+  return "online";
+}
+
+function toolStatusLabel(status: string) {
+  switch (status) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "运行中";
+    case "waiting_approval":
+      return "等待审批";
+    case "completed":
+      return "已完成";
+    case "partial":
+      return "部分完成";
+    case "failed":
+      return "失败";
+    case "denied":
+      return "已拒绝";
+    case "cancelled":
+      return "已取消";
+    default:
+      return status || "处理中";
+  }
+}
+
+function parseToolPayload(message: ChatMessage) {
+  try {
+    const parsed = JSON.parse(message.content) as {
+      status?: string;
+      summary?: string;
+      output?: Record<string, unknown>;
+    };
+    return {
+      status: String(parsed.status || message.metadata?.status || message.metadata?.tool_progress_status || "").trim(),
+      summary: String(parsed.summary || "").trim(),
+      output:
+        parsed.output && typeof parsed.output === "object" && !Array.isArray(parsed.output)
+          ? parsed.output
+          : {},
+    };
+  } catch {
+    return {
+      status: String(message.metadata?.status || message.metadata?.tool_progress_status || "").trim(),
+      summary: toolSummary(message.content),
+      output: {},
+    };
+  }
+}
+
+function toolHeadline(message: ChatMessage) {
+  return String(message.metadata?.tool_name || message.metadata?.tool_key || "Tool").trim() || "Tool";
+}
+
+function toolMetaItems(message: ChatMessage) {
+  const items: string[] = [];
+  const toolKey = String(message.metadata?.tool_key || "").trim();
+  const callId = String(message.metadata?.tool_call_id || "").trim();
+  const approvalId = String(message.metadata?.approval_id || "").trim();
+  if (toolKey) {
+    items.push(toolKey);
+  }
+  if (callId) {
+    items.push(`call ${callId.slice(0, 8)}`);
+  }
+  if (approvalId) {
+    items.push(`approval ${approvalId.slice(0, 8)}`);
+  }
+  return items;
+}
+
 function displayAssistantContent(content: string) {
   const marker = content.indexOf("[Framework]");
   return marker >= 0 ? content.slice(0, marker).trim() : content.trim();
@@ -443,7 +524,30 @@ function escapeHtml(content: string) {
           </template>
         </span>
       </div>
-      <details v-if="message.role === 'tool'" class="tool-output-details">
+      <div v-if="message.role === 'tool' && isTransientToolMessage(message)" class="tool-progress-card">
+        <div class="tool-progress-head">
+          <div class="tool-progress-title">
+            <span
+              :class="[
+                'runtime-status-square-dot',
+                `is-${toolStatusTone(parseToolPayload(message).status)}`,
+                { 'is-pulsing': parseToolPayload(message).status === 'running' },
+              ]"
+            ></span>
+            <strong>{{ toolHeadline(message) }}</strong>
+          </div>
+          <span class="tool-progress-status">
+            {{ toolStatusLabel(parseToolPayload(message).status) }}
+          </span>
+        </div>
+        <p class="tool-progress-summary">
+          {{ parseToolPayload(message).summary || "Tool is processing the current step." }}
+        </p>
+        <div v-if="toolMetaItems(message).length" class="tool-progress-meta">
+          <span v-for="item in toolMetaItems(message)" :key="item" class="tool-progress-chip">{{ item }}</span>
+        </div>
+      </div>
+      <details v-else-if="message.role === 'tool'" class="tool-output-details">
         <summary class="tool-output-summary">
           <span>{{ toolSummary(message.content) }}</span>
           <span class="tool-output-hint">

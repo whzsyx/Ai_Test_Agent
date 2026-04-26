@@ -30,6 +30,14 @@ function applyThemeToDocument(theme: ThemeMode) {
   document.documentElement.style.colorScheme = theme;
 }
 
+function isOnlineMemoryBackend(memoryBackend: string) {
+  return memoryBackend === "qdrant" || memoryBackend === "arangodb" || memoryBackend.startsWith("postgres");
+}
+
+function isUnavailableMemoryBackend(memoryBackend: string) {
+  return memoryBackend === "arangodb_unavailable" || memoryBackend.endsWith("_unavailable");
+}
+
 export const useAppStore = defineStore("app", {
   state: () => ({
     health: null as HealthResponse | null,
@@ -45,7 +53,11 @@ export const useAppStore = defineStore("app", {
       const checks: ServiceCheckItem[] = [];
       const backendOnline = state.health?.status === "ok";
       const memoryBackend = state.health?.memory_backend ?? "unknown";
+      const sessionBackend = state.health?.session_backend ?? "unknown";
+      const toolJobBackend = state.health?.tool_job_backend ?? "unknown";
+      const uiGraphBackend = state.health?.ui_graph_backend ?? "unknown";
       const knowledgeEnabled = state.health?.knowledge_enabled ?? false;
+      const memoryTarget = state.health?.memory_target ?? "";
       const knowledgeTarget = state.health?.knowledge_target ?? "";
 
       checks.push(
@@ -89,47 +101,29 @@ export const useAppStore = defineStore("app", {
       );
 
       if (!backendOnline) {
-        checks.push(
-          buildCheck("knowledge", "知识库连接", "offline", "后端未在线，暂时无法确认知识库状态"),
-        );
+        checks.push(buildCheck("knowledge", "知识库连接", "offline", "后端未在线，暂时无法确认知识库状态"));
       } else if (!knowledgeEnabled) {
         checks.push(
-          buildCheck(
-            "knowledge",
-            "知识库连接",
-            "offline",
-            "知识库已被显式关闭，当前不会建立远端连接",
-            "disabled",
-          ),
+          buildCheck("knowledge", "知识库连接", "offline", "知识库已被显式关闭，当前不会建立远端连接", "disabled"),
         );
-      } else if (memoryBackend === "qdrant") {
+      } else if (isOnlineMemoryBackend(memoryBackend)) {
         checks.push(
           buildCheck(
             "knowledge",
             "知识库连接",
             "online",
-            "知识库向量存储已连通",
-            knowledgeTarget || "Qdrant",
+            `知识库已连接，记忆后端 ${memoryBackend}，图谱后端 ${uiGraphBackend}`,
+            memoryTarget || knowledgeTarget || `${sessionBackend} / ${toolJobBackend}`,
           ),
         );
-      } else if (memoryBackend === "arangodb") {
-        checks.push(
-          buildCheck(
-            "knowledge",
-            "知识库连接",
-            "online",
-            "知识库文档存储已连通",
-            knowledgeTarget || "ArangoDB",
-          ),
-        );
-      } else if (memoryBackend === "arangodb_unavailable") {
+      } else if (isUnavailableMemoryBackend(memoryBackend)) {
         checks.push(
           buildCheck(
             "knowledge",
             "知识库连接",
             "offline",
-            "ArangoDB 未连通，请检查数据库地址、账号密码和库名配置",
-            knowledgeTarget || "ArangoDB",
+            `记忆后端 ${memoryBackend} 不可用，请检查 PostgreSQL/向量扩展或后端配置`,
+            memoryTarget || knowledgeTarget || memoryBackend,
           ),
         );
       } else if (memoryBackend === "local_memory") {
@@ -144,13 +138,7 @@ export const useAppStore = defineStore("app", {
         );
       } else {
         checks.push(
-          buildCheck(
-            "knowledge",
-            "知识库连接",
-            "offline",
-            "知识库后端状态未知，请检查 memory backend 配置",
-            memoryBackend,
-          ),
+          buildCheck("knowledge", "知识库连接", "offline", "知识库后端状态未知，请检查 memory backend 配置", memoryBackend),
         );
       }
 
@@ -159,8 +147,7 @@ export const useAppStore = defineStore("app", {
       const hasOffline = checks.some((check) => check.status === "offline");
       const hasDegraded = checks.some((check) => check.status === "degraded");
       const tone: ServiceCheckStatus = hasOffline ? "offline" : hasDegraded ? "degraded" : "online";
-      const label =
-        tone === "online" ? "系统就绪" : tone === "degraded" ? "部分未就绪" : "服务离线";
+      const label = tone === "online" ? "系统就绪" : tone === "degraded" ? "部分未就绪" : "服务离线";
 
       return {
         label,

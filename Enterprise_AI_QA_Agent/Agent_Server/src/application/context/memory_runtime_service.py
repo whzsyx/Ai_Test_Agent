@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Iterable
 from typing import Any
 
-from src.infrastructure.arango_memory_store import ArangoDocumentMemoryStore
+from src.contracts.memory_store import MemoryStoreProtocol
 from src.runtime.execution_logging import truncate_text
 from src.schemas.observation import ObservationRecord
 from src.schemas.memory import MemorySearchRequest, MemorySearchResult, MemoryWriteRequest
@@ -13,7 +13,7 @@ from src.schemas.memory import MemorySearchRequest, MemorySearchResult, MemoryWr
 class MemoryRuntimeService:
     def __init__(
         self,
-        memory_store: ArangoDocumentMemoryStore,
+        memory_store: MemoryStoreProtocol,
         top_k: int = 6,
     ) -> None:
         self._memory_store = memory_store

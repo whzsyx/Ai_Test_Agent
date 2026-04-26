@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #f4f7fb;
+        color: #1f2937;
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      .report-shell {
+        max-width: 880px;
+        margin: 0 auto;
+        background: #ffffff;
+        border: 1px solid #dbe4ef;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+      }
+
+      .report-head {
+        padding: 28px 32px 22px;
+        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%);
+        color: #ffffff;
+      }
+
+      .report-eyebrow {
+        margin: 0 0 10px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.82;
+      }
+
+      .report-title {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.2;
+        font-weight: 800;
+      }
+
+      .report-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 24px;
+        margin-top: 16px;
+        font-size: 14px;
+        line-height: 1.5;
+        opacity: 0.92;
+      }
+
+      .report-meta strong {
+        display: inline-block;
+        margin-right: 6px;
+        font-weight: 700;
+      }
+
+      .report-body {
+        padding: 30px 32px 34px;
+      }
+
+      .report-content {
+        color: #1f2937;
+        font-size: 15px;
+        line-height: 1.8;
+      }
+
+      .report-content h1,
+      .report-content h2,
+      .report-content h3,
+      .report-content h4,
+      .report-content h5,
+      .report-content h6 {
+        margin: 28px 0 12px;
+        color: #0f172a;
+        line-height: 1.35;
+      }
+
+      .report-content h1 { font-size: 28px; }
+      .report-content h2 { font-size: 24px; }
+      .report-content h3 { font-size: 20px; }
+      .report-content h4 { font-size: 18px; }
+      .report-content h5 { font-size: 16px; }
+      .report-content h6 { font-size: 15px; }
+
+      .report-content p {
+        margin: 0 0 14px;
+      }
+
+      .report-content ul,
+      .report-content ol {
+        margin: 0 0 16px 24px;
+        padding: 0;
+      }
+
+      .report-content li {
+        margin-bottom: 8px;
+      }
+
+      .report-content blockquote {
+        margin: 18px 0;
+        padding: 12px 16px;
+        border-left: 4px solid #3b82f6;
+        background: #eff6ff;
+        color: #1e3a8a;
+        border-radius: 10px;
+      }
+
+      .report-content code {
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: #eff1f5;
+        color: #be123c;
+        font-family: "Consolas", "SFMono-Regular", monospace;
+        font-size: 0.92em;
+      }
+
+      .report-content pre {
+        margin: 18px 0;
+        padding: 16px 18px;
+        overflow-x: auto;
+        border-radius: 14px;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      .report-content pre code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+      }
+
+      .report-content a {
+        color: #2563eb;
+        text-decoration: none;
+      }
+
+      .report-content hr {
+        border: none;
+        border-top: 1px solid #dbe4ef;
+        margin: 24px 0;
+      }
+
+      .report-table-shell {
+        margin: 18px 0;
+        overflow-x: auto;
+        border-radius: 10px;
+        border: 1px solid #e2e8f0;
+      }
+
+      .report-table-shell table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+        font-size: 14px;
+      }
+
+      .report-table-shell th {
+        background: #f8fafc;
+        font-weight: 600;
+        color: #334155;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e2e8f0;
+        white-space: nowrap;
+      }
+
+      .report-table-shell td {
+        padding: 12px 16px;
+        border-bottom: 1px solid #e2e8f0;
+        color: #475569;
+      }
+
+      .report-table-shell tr:last-child td {
+        border-bottom: none;
+      }
+
+      .report-foot {
+        padding: 16px 32px 24px;
+        color: #64748b;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="report-shell">
+      <header class="report-head">
+        <p class="report-eyebrow">QA Report</p>
+        <h1 class="report-title">{{ title }}</h1>
+        <div class="report-meta">
+          <span><strong>时间</strong>{{ time }}</span>
+          <span><strong>发送者</strong>{{ sender }}</span>
+        </div>
+      </header>
+      <main class="report-body">
+        <div class="report-content">
+          {{ content_html }}
+        </div>
+      </main>
+      <footer class="report-foot">
+        该报告由 Enterprise AI QA Agent 自动生成。
+      </footer>
+    </div>
+  </body>
+</html>

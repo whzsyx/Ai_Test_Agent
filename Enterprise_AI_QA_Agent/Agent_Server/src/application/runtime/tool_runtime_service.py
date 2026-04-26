@@ -14,6 +14,7 @@ from src.application.context.memory_runtime_service import MemoryRuntimeService
 from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.exploration.ui_graph_store import UIGraphStore
+from src.application.reporting.report_template_service import ReportTemplateService
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.application.testing.ui_exploration_service import UIExplorationService
@@ -62,6 +63,7 @@ class ToolRuntimeService:
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
+        self._report_template_service = ReportTemplateService()
         self._ui_graph_store = UIGraphStore(settings) if settings is not None else None
         self._ui_exploration_service = (
             UIExplorationService(
@@ -486,15 +488,28 @@ class ToolRuntimeService:
                 limit=limit,
             )
             markdown = self._format_session_report_markdown(report)
+            report_html = self._report_template_service.render_report_html(
+                title=f"Session Report: {report['title']}",
+                time_label=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                sender=context.selected_agent_key or "Enterprise AI QA Agent",
+                markdown_content=markdown,
+            )
             return {
                 "summary": f"Generated a structured report for session '{current_session.id}'.",
                 "scope": "current_session",
                 "report": report,
+                "report_markdown": markdown,
+                "report_html": report_html,
                 "artifacts": [
                     {
                         "type": "session_report_markdown",
                         "label": "session_report.md",
                         "content": markdown,
+                    },
+                    {
+                        "type": "session_report_html",
+                        "label": "session_report.html",
+                        "content": report_html,
                     }
                 ],
                 "metrics": {
@@ -982,16 +997,28 @@ class ToolRuntimeService:
         channel = str(arguments.get("channel") or "artifact").strip().lower()
         subject = str(arguments.get("subject") or "Runtime Notification").strip()
         content = str(arguments.get("content") or "").strip()
+        content_markdown = str(arguments.get("content_markdown") or "").strip()
         content_html = str(arguments.get("content_html") or "").strip()
+        sender = str(arguments.get("sender") or context.selected_agent_key or "Enterprise AI QA Agent").strip() or "Enterprise AI QA Agent"
         artifact_dir = self._prepare_local_artifact_dir(context, "message-dispatch")
 
-        if not content and not content_html:
+        if not content and not content_html and not content_markdown:
             return {
                 "status": "failed",
                 "ok": False,
-                "summary": "Message Dispatch requires content or content_html.",
+                "summary": "Message Dispatch requires content, content_markdown, or content_html.",
                 "error": "missing_content",
             }
+
+        if content_markdown and not content_html:
+            content_html = self._report_template_service.render_report_html(
+                title=subject,
+                time_label=str(arguments.get("time_label") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
+                sender=sender,
+                markdown_content=content_markdown,
+            )
+            if not content:
+                content = content_markdown
 
         recipients = [
             str(item).strip()
@@ -1004,7 +1031,9 @@ class ToolRuntimeService:
             "subject": subject,
             "recipients": recipients,
             "content": content,
+            "content_markdown": content_markdown,
             "content_html": content_html,
+            "sender": sender,
             "session_id": context.session_id,
             "turn_id": context.turn_id,
             "trace_id": context.trace_id,
@@ -1071,6 +1100,8 @@ class ToolRuntimeService:
         objective = str(arguments.get("objective") or context.user_message).strip()
         summary = str(arguments.get("summary") or "").strip()
         status = str(arguments.get("status") or "completed").strip()
+        sender = str(arguments.get("sender") or context.selected_agent_key or "Enterprise AI QA Agent").strip() or "Enterprise AI QA Agent"
+        generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         findings = arguments.get("findings") if isinstance(arguments.get("findings"), list) else []
         evidence = arguments.get("evidence") if isinstance(arguments.get("evidence"), list) else []
         recommendations = _to_string_list(arguments.get("recommendations"))
@@ -1088,16 +1119,31 @@ class ToolRuntimeService:
         for section in report_sections:
             markdown_lines.extend(["", f"## {section['title']}", "", str(section["content"])])
         markdown = "\n".join(markdown_lines).strip()
+        report_html = self._report_template_service.render_report_html(
+            title=title,
+            time_label=generated_at,
+            sender=sender,
+            markdown_content=markdown,
+        )
 
         return {
             "summary": f"Generated a structured QA report with {len(report_sections)} sections.",
             "report_title": title,
             "report_sections": report_sections,
+            "report_markdown": markdown,
+            "report_html": report_html,
+            "sender": sender,
+            "generated_at": generated_at,
             "artifacts": [
                 {
                     "type": "report_markdown",
                     "label": "qa_report.md",
                     "content": markdown,
+                },
+                {
+                    "type": "report_html",
+                    "label": "qa_report.html",
+                    "content": report_html,
                 }
             ],
             "metrics": {
