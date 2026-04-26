@@ -77,12 +77,14 @@ class MemoryRuntimeService:
             historical_hits,
             global_hits,
             self._top_k,
+            preferred_session_id=session_id,
         )
+        cross_session_docs = max(total_historical_docs - total_current_session_docs, 0)
         prompt_blocks = [
             (
                 "Memory inventory summary: "
                 f"current_session docs={total_current_session_docs}, "
-                f"all_history session/page/artifact docs={total_historical_docs}, "
+                f"cross_session session/page/artifact docs={cross_session_docs}, "
                 f"global long-term docs={total_global_docs}, "
                 f"retrieved_hits={len(hits)}."
             ),
@@ -140,14 +142,21 @@ class MemoryRuntimeService:
         historical_hits = await self._memory_store.search(historical_request)
         total_current_docs = await self._memory_store.count_documents(current_session_request)
         total_historical_docs = await self._memory_store.count_documents(historical_request)
-        hits = self._merge_ranked_hits(current_hits, historical_hits, [], top_k)
+        hits = self._merge_ranked_hits(
+            current_hits,
+            historical_hits,
+            [],
+            top_k,
+            preferred_session_id=session_id,
+        )
+        cross_session_docs = max(total_historical_docs - total_current_docs, 0)
         prompt_blocks = []
         if hits:
             prompt_blocks = [
                 (
                     "Historical testing observations: "
                     f"current_session={total_current_docs}, "
-                    f"all_history={total_historical_docs}, "
+                    f"cross_session={cross_session_docs}, "
                     f"retrieved_hits={len(hits)}."
                 ),
                 *[
@@ -325,29 +334,34 @@ class MemoryRuntimeService:
         tool_results: list[dict[str, Any]],
         context_bundle: dict[str, Any],
     ) -> list[MemoryWriteRequest]:
+        mode_key = str(context_bundle.get("mode_key") or "default").strip() or "default"
         requests = [
             MemoryWriteRequest(
                 scope="session",
                 kind="episodic",
                 content=f"User goal: {user_message.strip()}",
                 summary=truncate_text(user_message.strip(), 140),
-                tags=["user_goal", "turn_input"],
+                tags=["user_goal", "turn_input", f"mode:{mode_key}"],
                 session_id=session_id,
                 turn_id=turn_id,
                 trace_id=trace_id,
                 source="session.user",
-                metadata={"context_keys": sorted(context_bundle.keys())},
+                metadata={
+                    "context_keys": sorted(context_bundle.keys()),
+                    "mode_key": mode_key,
+                },
             ),
             MemoryWriteRequest(
                 scope="session",
                 kind="semantic",
                 content=f"Assistant outcome: {assistant_message.strip()}",
                 summary=truncate_text(assistant_message.strip(), 160),
-                tags=["assistant_summary", "turn_output"],
+                tags=["assistant_summary", "turn_output", f"mode:{mode_key}"],
                 session_id=session_id,
                 turn_id=turn_id,
                 trace_id=trace_id,
                 source="session.assistant",
+                metadata={"mode_key": mode_key},
             ),
             MemoryWriteRequest(
                 scope="global",
@@ -358,7 +372,7 @@ class MemoryRuntimeService:
                     f"Assistant response: {assistant_message.strip()}"
                 ),
                 summary=truncate_text(f"{user_message.strip()} -> {assistant_message.strip()}", 180),
-                tags=["long_term", "conversation", "semantic"],
+                tags=["long_term", "conversation", "semantic", f"mode:{mode_key}"],
                 session_id=session_id,
                 turn_id=turn_id,
                 trace_id=trace_id,
@@ -366,6 +380,7 @@ class MemoryRuntimeService:
                 metadata={
                     "memory_id": self._stable_long_term_memory_id(session_id, turn_id, user_message),
                     "memory_level": "long_term",
+                    "mode_key": mode_key,
                     "context_keys": sorted(context_bundle.keys()),
                 },
             ),
@@ -385,13 +400,14 @@ class MemoryRuntimeService:
                     kind="verification" if "assert" in str(output).lower() else "episodic",
                     content=content,
                     summary=truncate_text(summary or content, 160),
-                    tags=["tool_result", str(tool_result.get("tool_key") or "tool")],
+                    tags=["tool_result", str(tool_result.get("tool_key") or "tool"), f"mode:{mode_key}"],
                     session_id=session_id,
                     turn_id=turn_id,
                     trace_id=trace_id,
                     source=f"tool.{tool_result.get('tool_key', 'unknown')}",
                     metadata={
                         "tool_key": tool_result.get("tool_key"),
+                        "mode_key": mode_key,
                         "artifact_count": len((output or {}).get("artifacts", []))
                         if isinstance(output, dict)
                         else 0,
@@ -415,6 +431,7 @@ class MemoryRuntimeService:
         historical_hits: list,
         global_hits: list,
         top_k: int,
+        preferred_session_id: str | None = None,
     ) -> list:
         merged: dict[str, Any] = {}
         for hit in global_hits:
@@ -430,6 +447,7 @@ class MemoryRuntimeService:
         ranked = list(merged.values())
         ranked.sort(
             key=lambda item: (
+                1 if preferred_session_id and item.session_id == preferred_session_id else 0,
                 1 if item.session_id else 0,
                 1 if item.scope == "session" else 0,
                 item.score or 0.0,

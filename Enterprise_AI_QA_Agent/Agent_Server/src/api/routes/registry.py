@@ -48,6 +48,11 @@ async def list_tools(request: Request):
     return request.app.state.registry_service.list_tools()
 
 
+@router.get("/modes")
+async def list_modes(request: Request):
+    return request.app.state.registry_service.list_modes()
+
+
 @router.get("/models")
 async def list_models(request: Request):
     return request.app.state.registry_service.list_models()

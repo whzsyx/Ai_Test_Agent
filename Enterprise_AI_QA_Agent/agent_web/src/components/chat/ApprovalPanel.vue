@@ -36,12 +36,18 @@ function approvalKindLabel(approval: ToolApprovalRequest) {
     case "cli-executor":
       return "终端命令";
     case "browser-automation":
+    case "browser-control":
     case "dom-inspector":
       return "浏览器操作";
     case "api-caller":
+    case "api-tester":
       return "接口请求";
+    case "send-email":
+    case "message-dispatch":
+      return "消息发送";
     case "filesystem":
-      return "文件操作";
+    case "file-artifact-manager":
+      return "文件访问";
     default:
       return approval.tool_name || approval.tool_key;
   }
@@ -77,6 +83,10 @@ function approvalPreviewSource(approval: ToolApprovalRequest) {
     }
   }
 
+  if (lines.length === 0 && typeof args.subject === "string") {
+    lines.push(`主题：${args.subject}`);
+  }
+
   if (lines.length === 0 && typeof args.url === "string") {
     lines.push(`访问 ${args.url}`);
   }
@@ -86,11 +96,15 @@ function approvalPreviewSource(approval: ToolApprovalRequest) {
   }
 
   if (lines.length === 0 && typeof args.path === "string") {
-    lines.push(args.path);
+    lines.push(`路径：${args.path}`);
   }
 
   if (lines.length === 0 && typeof args.query === "string") {
-    lines.push(args.query);
+    lines.push(`查询：${args.query}`);
+  }
+
+  if (lines.length === 0 && Array.isArray(args.to) && args.to.length > 0) {
+    lines.push(`收件人：${args.to.join(", ")}`);
   }
 
   if (lines.length === 0) {
@@ -101,34 +115,40 @@ function approvalPreviewSource(approval: ToolApprovalRequest) {
 }
 
 function approvalPreviewLines(approval: ToolApprovalRequest) {
-  return approvalPreviewSource(approval).slice(0, 2);
+  return approvalPreviewSource(approval).slice(0, 3);
 }
 
 function approvalPreviewOverflowCount(approval: ToolApprovalRequest) {
-  return Math.max(0, approvalPreviewSource(approval).length - 2);
+  return Math.max(0, approvalPreviewSource(approval).length - 3);
 }
 
 function approvalHint(approval: ToolApprovalRequest) {
   switch (approval.tool_key) {
     case "cli-executor":
-      return "需要调用本地终端，执行前请确认。";
+      return "需要调用本地终端，请确认命令来源和执行范围。";
     case "browser-automation":
+    case "browser-control":
     case "dom-inspector":
-      return "需要驱动浏览器执行操作，执行前请确认。";
+      return "需要驱动浏览器执行动作，请确认目标页面和操作内容。";
     case "api-caller":
-      return "需要向外部接口发起请求，执行前请确认。";
+    case "api-tester":
+      return "需要向外部接口发起请求，请确认地址、方法和参数。";
+    case "send-email":
+    case "message-dispatch":
+      return "需要发送外部消息，请确认收件人和内容。";
     case "filesystem":
-      return "需要访问文件系统，执行前请确认。";
+    case "file-artifact-manager":
+      return "需要访问文件系统，请确认路径和预期输出。";
     default:
-      return "当前操作需要额外权限，执行前请确认。";
+      return "当前操作需要额外授权，建议确认参数后再继续。";
   }
 }
 
 async function handleDecision(approvalId: string, decision: "approved" | "denied") {
   const reason =
     decision === "approved"
-      ? "用户在工作台右侧审批卡中批准了本次执行。"
-      : "用户在工作台右侧审批卡中拒绝了本次执行。";
+      ? "用户在工作台右侧审批卡片中批准了本次执行。"
+      : "用户在工作台右侧审批卡片中拒绝了本次执行。";
   await sessionStore.resolveApproval(approvalId, decision, reason);
 }
 </script>
@@ -148,7 +168,11 @@ async function handleDecision(approvalId: string, decision: "approved" | "denied
         </div>
         <p class="approval-sidecard-meta">{{ approvalMetaLine(primaryApproval) }}</p>
 
-
+        <div class="approval-sidecard-summary">
+          <span class="approval-sidecard-label">当前操作</span>
+          <strong>{{ approvalKindLabel(primaryApproval) }}</strong>
+          <p>{{ primaryApproval.reason || "保护型工具需要手动确认后才能继续执行。" }}</p>
+        </div>
 
         <div class="approval-sidecard-preview">
           <span
@@ -162,14 +186,14 @@ async function handleDecision(approvalId: string, decision: "approved" | "denied
             v-if="approvalPreviewOverflowCount(primaryApproval) > 0"
             class="approval-sidecard-more"
           >
-            +{{ approvalPreviewOverflowCount(primaryApproval) }}
+            +{{ approvalPreviewOverflowCount(primaryApproval) }} 项更多参数
           </span>
         </div>
 
         <p class="approval-sidecard-hint">{{ approvalHint(primaryApproval) }}</p>
 
         <p v-if="pendingCount > 1" class="approval-sidecard-tail">
-          另有 {{ pendingCount - 1 }} 项待处理
+          另有 {{ pendingCount - 1 }} 项审批正在排队。
         </p>
       </div>
 

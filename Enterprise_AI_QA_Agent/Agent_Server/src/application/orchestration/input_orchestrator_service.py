@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from uuid import uuid4
 
 from src.domain.models import SessionRecord
+from src.registry.modes import ModeRegistry
 from src.application.testing.direction_service import QATaskDirectionService
 from src.application.testing.router_service import QATaskRouterService
 from src.schemas.session import (
@@ -18,7 +19,8 @@ from src.schemas.session import (
 
 
 class InputOrchestratorService:
-    def __init__(self) -> None:
+    def __init__(self, mode_registry: ModeRegistry) -> None:
+        self._mode_registry = mode_registry
         self._qa_task_direction_service = QATaskDirectionService()
         self._qa_task_router_service = QATaskRouterService()
 
@@ -67,13 +69,31 @@ class InputOrchestratorService:
             )
 
         normalized_input = " ".join(content.split())
-        skill_keys = list(dict.fromkeys(payload.skill_keys))
-        test_task_state = self._qa_task_direction_service.classify(
-            message=normalized_input,
-            context=payload.context,
-        )
-        test_route = self._qa_task_router_service.route(test_task_state)
-        for skill_key in test_task_state.recommended_skills:
+        mode = self._mode_registry.resolve(payload.mode_key or session.mode_key)
+        skill_keys = list(dict.fromkeys([*mode.default_skill_keys, *payload.skill_keys]))
+
+        if mode.key == "default":
+            detected_task_state = self._qa_task_direction_service.classify(
+                message=normalized_input,
+                context=payload.context,
+            )
+            test_route = self._qa_task_router_service.route(detected_task_state)
+            test_task_state = {
+                "is_test_task": detected_task_state.is_test_task,
+                "direction": detected_task_state.direction,
+                "confidence": detected_task_state.confidence,
+                "needs_direction_selection": detected_task_state.needs_direction_selection,
+                "reasons": detected_task_state.reasons,
+                "recommended_skills": detected_task_state.recommended_skills,
+            }
+        else:
+            test_task_state = self._build_mode_task_state(mode.key, mode.default_skill_keys)
+            test_route = {
+                "agent_key": mode.default_agent_key,
+                "harness": mode.harness_key,
+            }
+
+        for skill_key in test_task_state["recommended_skills"]:
             if skill_key not in skill_keys:
                 skill_keys.append(skill_key)
         input_envelope = InputEnvelope(
@@ -101,12 +121,14 @@ class InputOrchestratorService:
             existing_flags=payload.context.get("harness_flags", []),
             session=session,
             routing_decision=routing_decision,
+            mode_key=mode.key,
+            harness_key=str(test_route.get("harness") or mode.harness_key),
         )
-        if test_task_state.is_test_task:
+        if bool(test_task_state["is_test_task"]):
             for item in [
-                "qa_task_direction_service",
-                "qa_task_router_service",
-                f"test_direction:{test_task_state.direction}",
+                "mode_routing",
+                f"mode:{mode.key}",
+                f"test_direction:{test_task_state['direction']}",
                 f"test_harness:{test_route.get('harness', 'base_conversation')}",
             ]:
                 if item not in harness_flags:
@@ -118,28 +140,30 @@ class InputOrchestratorService:
         )
         context = {
             **payload.context,
+            "selected_mode": mode.model_dump(mode="python"),
             "input_envelope": input_envelope.model_dump(mode="python"),
             "input_routing": routing_decision.model_dump(mode="python"),
             "test_task_state": {
-                "is_test_task": test_task_state.is_test_task,
-                "direction": test_task_state.direction,
-                "confidence": test_task_state.confidence,
-                "needs_direction_selection": test_task_state.needs_direction_selection,
-                "reasons": test_task_state.reasons,
-                "recommended_skills": test_task_state.recommended_skills,
+                "is_test_task": test_task_state["is_test_task"],
+                "direction": test_task_state["direction"],
+                "confidence": test_task_state["confidence"],
+                "needs_direction_selection": test_task_state["needs_direction_selection"],
+                "reasons": test_task_state["reasons"],
+                "recommended_skills": test_task_state["recommended_skills"],
             },
             "test_route": test_route,
             "attachments": [attachment.model_dump(mode="python") for attachment in attachments],
             "hook_results": [result.model_dump(mode="python") for result in hook_results],
             "harness_flags": harness_flags,
         }
-        requested_agent_key = payload.agent_key or session.selected_agent
-        routed_test_agent_key = test_route.get("agent_key") if test_task_state.is_test_task else ""
-        if routed_test_agent_key and (not requested_agent_key or requested_agent_key in {"auto", "coordinator"}):
+        requested_agent_key = payload.agent_key or session.selected_agent or mode.default_agent_key
+        routed_test_agent_key = test_route.get("agent_key") if bool(test_task_state["is_test_task"]) else ""
+        if mode.key == "default" and routed_test_agent_key and (not requested_agent_key or requested_agent_key in {"auto", "coordinator"}):
             resolved_agent_key = routed_test_agent_key
         else:
-            resolved_agent_key = requested_agent_key
+            resolved_agent_key = requested_agent_key or mode.default_agent_key
         orchestration_meta = {
+            "mode_key": mode.key,
             "message_kind": message_kind.value,
             "submit_mode": payload.submit_mode,
             "command_name": command_name,
@@ -151,7 +175,7 @@ class InputOrchestratorService:
             "queue_behavior": routing_decision.queue_behavior,
             "interrupt_policy": routing_decision.interrupt_policy,
             "source": payload.source,
-            "test_direction": test_task_state.direction,
+            "test_direction": test_task_state["direction"],
             "test_harness": test_route.get("harness", "base_conversation"),
         }
 
@@ -160,6 +184,7 @@ class InputOrchestratorService:
             session_id=session.id,
             user_message=content,
             normalized_input=normalized_input,
+            mode_key=mode.key,
             agent_key=resolved_agent_key,
             model_key=payload.model_key or session.preferred_model,
             skill_keys=skill_keys,
@@ -222,6 +247,8 @@ class InputOrchestratorService:
         existing_flags: object,
         session: SessionRecord,
         routing_decision: InputRoutingDecision,
+        mode_key: str,
+        harness_key: str,
     ) -> list[str]:
         flags: list[str] = []
         for item in existing_flags if isinstance(existing_flags, list) else []:
@@ -236,11 +263,23 @@ class InputOrchestratorService:
             "verification",
             f"session_mode:{session.session_mode.value}",
             f"runtime_mode:{session.runtime_mode.value}",
+            f"mode:{mode_key}",
+            f"harness:{harness_key}",
             f"execution_lane:{routing_decision.execution_lane}",
         ]:
             if item not in flags:
                 flags.append(item)
         return flags
+
+    def _build_mode_task_state(self, mode_key: str, recommended_skills: list[str]) -> dict[str, object]:
+        return {
+            "is_test_task": mode_key != "default",
+            "direction": mode_key,
+            "confidence": 1.0,
+            "needs_direction_selection": False,
+            "reasons": [f"Execution is pinned to explicit mode '{mode_key}'."],
+            "recommended_skills": list(recommended_skills),
+        }
 
     def _parse_slash_command(self, content: str) -> tuple[str | None, str]:
         if not content.startswith("/"):

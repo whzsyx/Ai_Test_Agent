@@ -48,6 +48,7 @@ from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
 from src.registry.agents import AgentRegistry
 from src.registry.mcp import MCPRegistry
+from src.registry.modes import ModeRegistry
 from src.registry.models import ModelRegistry
 from src.registry.skills import SkillRegistry
 from src.registry.tools import ToolRegistry
@@ -72,6 +73,7 @@ async def lifespan(app: FastAPI):
     skill_management_service = SkillManagementService(skill_registry=skill_registry)
     skill_marketplace_service = SkillMarketplaceService(skill_management_service=skill_management_service)
     mcp_registry = MCPRegistry()
+    mode_registry = ModeRegistry()
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
     mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
     artifact_storage_service = ArtifactStorageService(settings=settings)
@@ -89,7 +91,7 @@ async def lifespan(app: FastAPI):
     )
     await tool_job_service.initialize()
     permission_service = PermissionService()
-    input_orchestrator_service = InputOrchestratorService()
+    input_orchestrator_service = InputOrchestratorService(mode_registry=mode_registry)
     prompt_service = PromptSubmissionService(input_orchestrator=input_orchestrator_service)
     prompt_assembly_service = PromptAssemblyService()
     observation_runtime_service = ObservationRuntimeService()
@@ -146,6 +148,7 @@ async def lifespan(app: FastAPI):
     app.state.skill_management_service = skill_management_service
     app.state.skill_marketplace_service = skill_marketplace_service
     app.state.mcp_registry = mcp_registry
+    app.state.mode_registry = mode_registry
     app.state.skill_runtime_service = skill_runtime_service
     app.state.mcp_runtime_service = mcp_runtime_service
     app.state.artifact_storage_service = artifact_storage_service
@@ -171,6 +174,7 @@ async def lifespan(app: FastAPI):
         store=store,
         input_orchestrator_service=input_orchestrator_service,
         runtime_service=runtime_service,
+        mode_registry=mode_registry,
         memory_runtime_service=memory_runtime_service,
         observation_runtime_service=observation_runtime_service,
         transcript_hygiene_service=transcript_hygiene_service,
@@ -191,6 +195,7 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
         skill_registry=skill_registry,
         mcp_registry=mcp_registry,
+        mode_registry=mode_registry,
     )
     app.state.settings_service = SettingsService(
         settings=settings,

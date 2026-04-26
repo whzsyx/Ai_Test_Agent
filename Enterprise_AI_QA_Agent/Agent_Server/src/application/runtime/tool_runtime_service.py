@@ -91,6 +91,12 @@ class ToolRuntimeService:
             "message-dispatch": self._run_message_dispatch,
             "send-email": self._run_send_email,
             "report-writer": self._run_report_writer,
+            "code-review-orchestrator": self._run_code_review_orchestrator,
+            "ui-automation-runner": self._run_ui_automation_runner,
+            "api-test-runner": self._run_api_test_runner,
+            "security-scan-runner": self._run_security_scan_runner,
+            "performance-test-runner": self._run_performance_test_runner,
+            "smoke-suite-runner": self._run_smoke_suite_runner,
         }
 
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
@@ -419,16 +425,21 @@ class ToolRuntimeService:
                 "error": "session_not_found",
             }
 
+        sessions = [current_session]
+        full_sessions = [current_session]
         if scope == "all_sessions":
-            session_summaries = await store.list_sessions()
-            sessions = []
-            for item in session_summaries[:limit]:
-                loaded = await store.get_session(item.id)
-                if loaded is not None:
-                    sessions.append(loaded)
+            sessions = await store.list_sessions()
+            # Only load full transcripts for actions that actually need message bodies.
+            if action == "list_questions":
+                full_sessions = []
+                for item in sessions[:limit]:
+                    loaded = await store.get_session(item.id)
+                    if loaded is not None:
+                        full_sessions.append(loaded)
+            else:
+                full_sessions = sessions
         else:
             scope = "current_session"
-            sessions = [current_session]
 
         if action == "count_sessions":
             status_counts: dict[str, int] = {}
@@ -453,7 +464,7 @@ class ToolRuntimeService:
 
         if action == "list_questions":
             questions = self._extract_questions(
-                sessions=sessions,
+                sessions=full_sessions,
                 include_assistant=include_assistant,
                 limit=limit,
             )
@@ -463,7 +474,7 @@ class ToolRuntimeService:
                 "questions": questions,
                 "metrics": {
                     "question_count": len(questions),
-                    "session_count": len(sessions),
+                    "session_count": len(full_sessions),
                 },
             }
 
@@ -494,10 +505,14 @@ class ToolRuntimeService:
             }
 
         sessions_overview = [self._session_overview(item) for item in sessions[:limit]]
-        recent_questions = self._extract_questions(
-            sessions=sessions,
-            include_assistant=False,
-            limit=limit,
+        recent_questions = (
+            self._extract_questions(
+                sessions=full_sessions,
+                include_assistant=False,
+                limit=limit,
+            )
+            if scope != "all_sessions"
+            else []
         )
         return {
             "summary": f"Built a history summary for scope '{scope}' across {len(sessions)} session(s).",
@@ -1091,6 +1106,124 @@ class ToolRuntimeService:
                 "evidence_count": len(evidence),
                 "recommendation_count": len(recommendations),
             },
+        }
+
+    async def _run_code_review_orchestrator(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        change_summary = str(arguments.get("change_summary") or context.user_message).strip()
+        targets = _to_string_list(arguments.get("targets"))
+        return {
+            "summary": "Initialized the code review mode scaffold and generated a structured review plan.",
+            "approval_decision": "manual_review_required",
+            "findings": [],
+            "review_plan": [
+                "Collect diff and impacted files",
+                "Run logic and edge-case review",
+                "Check security and permission boundaries",
+                "Assess test impact and missing coverage",
+                "Produce approval decision and required actions",
+            ],
+            "targets": targets,
+            "change_summary": change_summary,
+            "next_steps": [
+                "Connect repository-aware diff readers",
+                "Attach specialized review workers",
+                "Persist structured findings into evaluation harness",
+            ],
+            "metrics": {
+                "target_count": len(targets),
+                "finding_count": 0,
+            },
+        }
+
+    async def _run_ui_automation_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        target_url = str(arguments.get("target_url") or "").strip()
+        objective = str(arguments.get("objective") or context.user_message).strip()
+        return {
+            "status": "partial",
+            "summary": "UI automation mode scaffold is registered. Dedicated execution flow can now be attached to this entry tool.",
+            "target_url": target_url,
+            "objective": objective,
+            "steps": [],
+            "artifacts": [],
+            "next_steps": ["Bind this tool to page exploration, scripted actions, and UI verification policies."],
+        }
+
+    async def _run_api_test_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        endpoint = str(arguments.get("endpoint") or "").strip()
+        objective = str(arguments.get("objective") or context.user_message).strip()
+        return {
+            "status": "partial",
+            "summary": "API testing mode scaffold is registered. Dedicated contract and assertion flows can now be attached to this entry tool.",
+            "endpoint": endpoint,
+            "objective": objective,
+            "checks": [],
+            "next_steps": ["Bind this tool to API contract checks, payload assertions, and report generation."],
+        }
+
+    async def _run_security_scan_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return self._build_placeholder_mode_result(
+            mode_key="security_testing",
+            summary="Security testing mode scaffold is ready; specialized scanners are not connected yet.",
+            arguments=arguments,
+            context=context,
+        )
+
+    async def _run_performance_test_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return self._build_placeholder_mode_result(
+            mode_key="performance_testing",
+            summary="Performance testing mode scaffold is ready; benchmark runners are not connected yet.",
+            arguments=arguments,
+            context=context,
+        )
+
+    async def _run_smoke_suite_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return self._build_placeholder_mode_result(
+            mode_key="smoke_testing",
+            summary="Smoke testing mode scaffold is ready; critical-path suites are not connected yet.",
+            arguments=arguments,
+            context=context,
+        )
+
+    def _build_placeholder_mode_result(
+        self,
+        mode_key: str,
+        summary: str,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "status": "partial",
+            "summary": summary,
+            "mode_key": mode_key,
+            "objective": str(arguments.get("objective") or context.user_message).strip(),
+            "next_steps": [
+                "Replace placeholder runtime with dedicated mode executor",
+                "Attach verification and evaluation policies",
+            ],
         }
 
     def _require_mcp_runtime(self) -> MCPRuntimeService:

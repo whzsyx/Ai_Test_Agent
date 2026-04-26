@@ -39,8 +39,11 @@ class PromptAssemblyService:
         selected_model_key = str(state.get("selected_model_key") or "auto")
         session_mode = str(state.get("session_mode") or "normal")
         runtime_mode = str(state.get("runtime_mode") or "interactive")
-        resolved_skills = list(state.get("resolved_skill_keys") or [])
         context_bundle = dict(state.get("context_bundle") or {})
+        mode_key = str(state.get("mode_key") or context_bundle.get("mode_key") or "default")
+        resolved_skills = list(state.get("resolved_skill_keys") or [])
+        selected_mode = context_bundle.get("selected_mode") if isinstance(context_bundle.get("selected_mode"), dict) else {}
+        mode_name = str(selected_mode.get("name") or mode_key)
         sections = [
             PromptSection(
                 key="identity",
@@ -77,6 +80,8 @@ class PromptAssemblyService:
                 content=(
                     f"Current session mode: {session_mode}.\n"
                     f"Current runtime mode: {runtime_mode}.\n"
+                    f"Current mode key: {mode_key}.\n"
+                    f"Current mode name: {mode_name}.\n"
                     f"Selected model key: {selected_model_key}."
                 ),
             ),

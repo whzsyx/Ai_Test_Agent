@@ -15,6 +15,7 @@ from src.application.testing.verification_service import VerificationService
 from src.domain.models import SessionRecord
 from src.runtime.execution_logging import truncate_text
 from src.runtime.store import SessionStore
+from src.registry.modes import ModeRegistry
 from src.schemas.observation import SessionObservationResponse
 from src.schemas.session import (
     ApprovalDecisionRequest,
@@ -46,6 +47,7 @@ class SessionService:
         store: SessionStore,
         input_orchestrator_service: InputOrchestratorService,
         runtime_service: RuntimeService,
+        mode_registry: ModeRegistry,
         memory_runtime_service: MemoryRuntimeService | None = None,
         observation_runtime_service: ObservationRuntimeService | None = None,
         transcript_hygiene_service: TranscriptHygieneService | None = None,
@@ -54,6 +56,7 @@ class SessionService:
         self._store = store
         self._input_orchestrator_service = input_orchestrator_service
         self._runtime_service = runtime_service
+        self._mode_registry = mode_registry
         self._memory_runtime_service = memory_runtime_service
         self._observation_runtime_service = observation_runtime_service
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
@@ -61,6 +64,7 @@ class SessionService:
         self._session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
         self._approval_forward_tasks: dict[str, asyncio.Task[None]] = {}
+        self._approval_resume_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def list_sessions(self) -> list[SessionSummary]:
         sessions = await self._store.list_sessions()
@@ -68,16 +72,18 @@ class SessionService:
 
     async def create_session(self, payload: CreateSessionRequest) -> SessionDetail:
         now = datetime.utcnow()
+        mode = self._mode_registry.resolve(payload.mode_key)
         session = SessionRecord(
             id=str(uuid4()),
             title=payload.title,
             status=SessionStatus.idle,
             session_mode=payload.session_mode,
             runtime_mode=payload.runtime_mode,
+            mode_key=mode.key,
             created_at=now,
             updated_at=now,
             preferred_model=payload.preferred_model,
-            selected_agent=payload.selected_agent,
+            selected_agent=payload.selected_agent or mode.default_agent_key,
             metadata=payload.metadata,
         )
         await self._store.save_session(session)
@@ -90,6 +96,7 @@ class SessionService:
                     "title": session.title,
                     "session_mode": session.session_mode.value,
                     "runtime_mode": session.runtime_mode.value,
+                    "mode_key": session.mode_key,
                 },
             ),
         )
@@ -317,26 +324,96 @@ class SessionService:
                     lambda _finished, proxy_id=approval_id: self._approval_forward_tasks.pop(proxy_id, None)
                 )
                 return approval
-            assistant_message_id = str(uuid4())
-            stream_chunk_handler = self._build_stream_chunk_handler(
-                session_id=session_id,
-                turn_id=str(session.metadata.get("pending_turn", {}).get("turn_id", "")),
-                assistant_message_id=assistant_message_id,
+            session.status = SessionStatus.running
+            control = self._ensure_control_metadata(session)
+            control.update(
+                {
+                    "control_state": "resuming_after_approval",
+                    "is_interrupted": False,
+                    "is_resumable": False,
+                    "last_approval_id": approval.id,
+                }
             )
-            continuation = await self._runtime_service.resume_after_approval(
-                session,
-                approval.model_dump(mode="python"),
-                on_model_chunk=stream_chunk_handler,
+            session.metadata["control"] = control
+            await self._store.save_session(session)
+            await self._store.append_event(
+                session_id,
+                self._make_event(
+                    session_id,
+                    "approval.continuation_scheduled",
+                    {
+                        "approval_id": approval.id,
+                        "tool_key": approval.tool_key,
+                        "decision": approval.status.value,
+                        "message": "Approval continuation has been scheduled in the background.",
+                    },
+                ),
             )
+            task = asyncio.create_task(
+                self._resume_after_approval_async(
+                    session_id=session_id,
+                    approval=approval,
+                )
+            )
+            self._approval_resume_tasks[approval.id] = task
+            task.add_done_callback(
+                lambda _finished, task_id=approval.id: self._approval_resume_tasks.pop(task_id, None)
+            )
+            return approval
 
-            if continuation is not None:
+    async def _resume_after_approval_async(
+        self,
+        session_id: str,
+        approval: ToolApprovalRequest,
+    ) -> None:
+        async with self._session_locks[session_id]:
+            session = await self._require_session(session_id)
+            assistant_message_id = str(uuid4())
+            try:
+                stream_chunk_handler = self._build_stream_chunk_handler(
+                    session_id=session_id,
+                    turn_id=str(session.metadata.get("pending_turn", {}).get("turn_id", "")),
+                    assistant_message_id=assistant_message_id,
+                )
+                continuation = await self._runtime_service.resume_after_approval(
+                    session,
+                    approval.model_dump(mode="python"),
+                    on_model_chunk=stream_chunk_handler,
+                )
+                if continuation is None:
+                    return
                 await self._finalize_runtime_result(
                     session=session,
                     runtime_result=continuation,
                     assistant_message_id=assistant_message_id,
                     user_message_override=str(continuation.state.get("user_message", "")),
                 )
-            return approval
+            except Exception as exc:
+                session.status = SessionStatus.failed
+                control = self._ensure_control_metadata(session)
+                control.update(
+                    {
+                        "control_state": "failed",
+                        "is_interrupted": False,
+                        "is_resumable": False,
+                        "last_approval_id": approval.id,
+                    }
+                )
+                session.metadata["control"] = control
+                await self._store.save_session(session)
+                await self._store.append_event(
+                    session_id,
+                    self._make_event(
+                        session_id,
+                        "approval.continuation_failed",
+                        {
+                            "approval_id": approval.id,
+                            "tool_key": approval.tool_key,
+                            "message": "Approval continuation failed in the background.",
+                            "error": str(exc),
+                        },
+                    ),
+                )
 
     async def send_message(self, session_id: str, payload: SendMessageRequest) -> ConversationResponse:
         session_lock = self._session_locks[session_id]
@@ -374,6 +451,7 @@ class SessionService:
                 title=payload.title,
                 session_mode=payload.session_mode,
                 runtime_mode=RuntimeMode.headless,
+                mode_key=payload.mode_key,
                 preferred_model=payload.model_key,
                 selected_agent=payload.agent_key,
                 metadata={"launch_mode": "headless"},
@@ -383,6 +461,7 @@ class SessionService:
             session.id,
             SendMessageRequest(
                 content=payload.content,
+                mode_key=payload.mode_key,
                 agent_key=payload.agent_key,
                 model_key=payload.model_key,
                 skill_keys=payload.skill_keys,
@@ -437,6 +516,11 @@ class SessionService:
         )
         session.metadata["control"] = control
         session.metadata["pending_turn"] = {}
+        if payload.mode_key:
+            mode = self._mode_registry.resolve(payload.mode_key)
+            session.mode_key = mode.key
+            if not payload.agent_key:
+                session.selected_agent = mode.default_agent_key
         if payload.agent_key:
             session.selected_agent = payload.agent_key
         if payload.model_key:
@@ -1088,6 +1172,7 @@ class SessionService:
             status=session.status,
             session_mode=session.session_mode,
             runtime_mode=session.runtime_mode,
+            mode_key=session.mode_key,
             created_at=session.created_at,
             updated_at=session.updated_at,
         )
@@ -1106,6 +1191,7 @@ class SessionService:
             status=session.status,
             session_mode=session.session_mode,
             runtime_mode=session.runtime_mode,
+            mode_key=session.mode_key,
             created_at=session.created_at,
             updated_at=session.updated_at,
             messages=session.messages,

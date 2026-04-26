@@ -33,11 +33,29 @@ def build_context_builder_node(
                 total_historical_docs=observation_result.total_docs,
             )
 
+        harness_flags = [
+            str(item).strip()
+            for item in context.get("harness_flags", [])
+            if str(item).strip()
+        ] if isinstance(context.get("harness_flags"), list) else []
+        for item in [
+            "event_sourcing",
+            "permission_gate",
+            "checkpoint_ready",
+            "registry_driven",
+            "recursive_tool_loop",
+            "observation_context",
+            f"mode:{state['mode_key']}",
+        ]:
+            if item not in harness_flags:
+                harness_flags.append(item)
+
         context.update(
             {
                 "message_count": state["message_count"],
                 "session_mode": state["session_mode"],
                 "runtime_mode": state["runtime_mode"],
+                "mode_key": state["mode_key"],
                 "preferred_model": state["preferred_model"] or "auto",
                 "loop_iteration": state["loop_iteration"],
                 "observation_hit_count": len(state["observation_hits"]),
@@ -50,14 +68,7 @@ def build_context_builder_node(
                     }
                     - {""}
                 ),
-                "harness_flags": [
-                    "event_sourcing",
-                    "permission_gate",
-                    "checkpoint_ready",
-                    "registry_driven",
-                    "recursive_tool_loop",
-                    "observation_context",
-                ],
+                "harness_flags": harness_flags,
             }
         )
         state["context_bundle"] = context

@@ -5,6 +5,7 @@ import type {
   AgentDescriptor,
   ChatMessage,
   ExecutionEvent,
+  ModeDescriptor,
   PendingInputQueueEntry,
   SessionDetail,
   SessionReplayResponse,
@@ -170,6 +171,10 @@ function createOptimisticAssistantMessage() {
   };
 }
 
+const WATCHER_INTERVAL_MS = 5000;
+const EVENT_REFRESH_DEBOUNCE_MS = 220;
+const TOOLING_REFRESH_MIN_INTERVAL_MS = 10000;
+
 function mergeSessionMessages(
   serverMessages: ChatMessage[],
   localMessages: ChatMessage[],
@@ -238,13 +243,19 @@ export const useSessionStore = defineStore("session", {
     messages: [] as ChatMessage[],
     activity: [] as ExecutionEvent[],
     agents: [] as AgentDescriptor[],
+    modes: [] as ModeDescriptor[],
     tools: [] as ToolDescriptor[],
     selectedAgentKey: "coordinator",
+    selectedModeKey: "default",
     isBootstrapping: false,
     isSending: false,
     resolvingApprovalIds: [] as string[],
     refreshTimer: null as number | null,
+    scheduledRefreshTimer: null as number | null,
+    scheduledToolingRefresh: false,
     refreshInFlight: false,
+    toolingRefreshInFlight: false,
+    lastToolingRefreshAt: "",
     watcherFailures: 0,
     watcherError: "",
     watcherLastSyncAt: "",
@@ -260,6 +271,9 @@ export const useSessionStore = defineStore("session", {
   getters: {
     activeAgent(state) {
       return state.agents.find((item) => item.key === state.selectedAgentKey) ?? null;
+    },
+    activeMode(state) {
+      return state.modes.find((item) => item.key === state.selectedModeKey) ?? null;
     },
     isAssistantStreaming(state) {
       return hasStreamingAssistantMessage(state.messages);
@@ -378,18 +392,21 @@ export const useSessionStore = defineStore("session", {
       this.isBootstrapping = true;
       this.error = "";
       try {
-        const [agents, tools] = await Promise.all([
+        const [agents, tools, modes] = await Promise.all([
           api.listAgents(),
           api.listTools(),
+          api.listModes(),
         ]);
         this.agents = agents;
+        this.modes = modes;
         this.tools = tools;
         this.selectedAgentKey = agents[0]?.key ?? "coordinator";
+        this.selectedModeKey = modes[0]?.key ?? "default";
 
         if (!this.session) {
           const session = await api.createSession(
             "Enterprise Intelligent QA Session",
-            this.selectedAgentKey,
+            this.selectedModeKey,
           );
           this.applySession(session);
           await this.refreshToolingData();
@@ -410,6 +427,7 @@ export const useSessionStore = defineStore("session", {
       this.session = session;
       this.messages = mergedMessages;
       this.selectedAgentKey = session.selected_agent ?? this.selectedAgentKey;
+      this.selectedModeKey = session.mode_key || this.selectedModeKey;
     },
     connectEvents() {
       if (!this.session) {
@@ -422,11 +440,18 @@ export const useSessionStore = defineStore("session", {
         if (
           event.type === "approval.created" ||
           event.type === "approval.resolved" ||
-          event.type === "tool.execution_started" ||
           event.type === "tool.execution_completed" ||
           event.type === "tool.execution_failed" ||
           event.type === "tool.execution_denied" ||
           event.type === "verification.completed" ||
+          event.type === "turn.completed" ||
+          event.type === "turn.failed"
+        ) {
+          this.scheduleRefresh(true);
+          return;
+        }
+        if (
+          event.type === "tool.execution_started" ||
           event.type === "worker.task_notification_received" ||
           event.type === "worker.auto_stopped" ||
           event.type === "input.queued" ||
@@ -434,26 +459,43 @@ export const useSessionStore = defineStore("session", {
           event.type === "queue.interrupted_turn_superseded" ||
           event.type === "runtime.interrupt_requested" ||
           event.type === "turn.interrupted" ||
-          event.type === "turn.resumed" ||
-          event.type === "turn.completed" ||
-          event.type === "turn.failed"
+          event.type === "turn.resumed"
         ) {
-          void this.refreshSession();
+          this.scheduleRefresh(false);
         }
       });
       this.eventSource.onerror = () => {
         this.error = "事件流已断开，请刷新会话后重新连接。";
       };
     },
-    async refreshSession() {
-      if (!this.session || this.refreshInFlight) {
+    scheduleRefresh(includeTooling = false, delayMs = EVENT_REFRESH_DEBOUNCE_MS) {
+      if (!this.session) {
+        return;
+      }
+      this.scheduledToolingRefresh = this.scheduledToolingRefresh || includeTooling;
+      if (this.scheduledRefreshTimer !== null) {
+        return;
+      }
+      this.scheduledRefreshTimer = window.setTimeout(() => {
+        const nextIncludeTooling = this.scheduledToolingRefresh;
+        this.scheduledRefreshTimer = null;
+        this.scheduledToolingRefresh = false;
+        void this.refreshSession({ includeTooling: nextIncludeTooling });
+      }, delayMs);
+    },
+    async refreshSession(options: { includeTooling?: boolean } = {}) {
+      if (!this.session) {
+        return;
+      }
+      if (this.refreshInFlight) {
+        this.scheduledToolingRefresh = this.scheduledToolingRefresh || Boolean(options.includeTooling);
         return;
       }
       this.refreshInFlight = true;
       try {
         const detail = await api.getSession(this.session.id);
         this.applySession(detail);
-        await this.refreshToolingData();
+        await this.refreshToolingData(Boolean(options.includeTooling));
         this.watcherFailures = 0;
         this.watcherError = "";
         this.watcherLastSyncAt = new Date().toISOString();
@@ -462,22 +504,37 @@ export const useSessionStore = defineStore("session", {
         this.watcherError = error instanceof Error ? error.message : "刷新会话失败。";
       } finally {
         this.refreshInFlight = false;
+        if (this.scheduledToolingRefresh) {
+          this.scheduleRefresh(this.scheduledToolingRefresh, EVENT_REFRESH_DEBOUNCE_MS);
+        }
       }
     },
     startWatcher() {
       if (this.refreshTimer !== null) {
         return;
       }
-      void this.refreshSession();
+      this.scheduleRefresh(false, 0);
       this.refreshTimer = window.setInterval(() => {
-        void this.refreshSession();
-      }, 3000);
+        this.scheduleRefresh(false);
+      }, WATCHER_INTERVAL_MS);
     },
     stopWatcher() {
       if (this.refreshTimer !== null) {
         window.clearInterval(this.refreshTimer);
         this.refreshTimer = null;
       }
+      if (this.scheduledRefreshTimer !== null) {
+        window.clearTimeout(this.scheduledRefreshTimer);
+        this.scheduledRefreshTimer = null;
+      }
+      this.scheduledToolingRefresh = false;
+    },
+    setModeKey(modeKey: string) {
+      const normalized = String(modeKey || "").trim();
+      if (!normalized) {
+        return;
+      }
+      this.selectedModeKey = normalized;
     },
     async sendMessage(content: string) {
       if (!this.session || !content.trim()) {
@@ -503,7 +560,7 @@ export const useSessionStore = defineStore("session", {
         const response = await api.sendMessage(
           this.session.id,
           trimmedContent,
-          this.selectedAgentKey,
+          this.selectedModeKey,
         );
         this.applySession(response.session);
         this.activity = [...response.events.slice().reverse(), ...this.activity].slice(0, 50);
@@ -539,7 +596,10 @@ export const useSessionStore = defineStore("session", {
       this.error = "";
       try {
         await api.resolveApproval(this.session.id, approvalId, decision, reason);
-        await this.refreshSession();
+        if (this.session) {
+          this.session.pending_approvals = this.session.pending_approvals.filter((item) => item.id !== approvalId);
+        }
+        this.scheduleRefresh(true, 120);
       } catch (error) {
         this.error = error instanceof Error ? error.message : "Failed to resolve approval.";
       } finally {
@@ -590,24 +650,35 @@ export const useSessionStore = defineStore("session", {
         this.error = error instanceof Error ? error.message : "加载回放时间线失败。";
       }
     },
-    async refreshToolingData() {
-      if (!this.session) {
+    async refreshToolingData(force = false) {
+      if (!this.session || this.toolingRefreshInFlight) {
         return;
       }
+      if (!force && this.lastToolingRefreshAt) {
+        const elapsed = Date.now() - Date.parse(this.lastToolingRefreshAt);
+        if (Number.isFinite(elapsed) && elapsed < TOOLING_REFRESH_MIN_INTERVAL_MS) {
+          return;
+        }
+      }
+      this.toolingRefreshInFlight = true;
       try {
-        const [jobs, artifacts] = await Promise.all([
+        const [jobs, artifacts, verifications] = await Promise.all([
           api.listToolJobs(this.session.id),
           api.listArtifacts(this.session.id),
+          api.listVerifications(this.session.id),
         ]);
         this.toolJobs = jobs;
         this.sessionArtifacts = artifacts;
-        this.verificationMeta = await api.listVerifications(this.session.id);
+        this.verificationMeta = verifications;
+        this.lastToolingRefreshAt = new Date().toISOString();
         if (this.selectedToolJob) {
           const refreshed = await api.getToolJobDetail(this.session.id, this.selectedToolJob.id);
           this.selectedToolJob = refreshed;
         }
       } catch (error) {
         this.error = error instanceof Error ? error.message : "刷新工具任务数据失败。";
+      } finally {
+        this.toolingRefreshInFlight = false;
       }
     },
     async inspectToolJob(jobId: string) {
@@ -627,7 +698,7 @@ export const useSessionStore = defineStore("session", {
         event.type === "runtime.interrupt_requested" ||
         event.type === "turn.resumed"
       ) {
-        void this.refreshSession();
+        this.scheduleRefresh(false);
       }
 
       const messageId = String(event.payload?.message_id || "").trim();

@@ -128,6 +128,7 @@ class SessionSummary(BaseModel):
     status: SessionStatus
     session_mode: SessionMode
     runtime_mode: RuntimeMode
+    mode_key: str = "default"
     created_at: datetime
     updated_at: datetime
 
@@ -152,6 +153,7 @@ class CreateSessionRequest(BaseModel):
     title: str = "New Intelligent QA Session"
     session_mode: SessionMode = SessionMode.normal
     runtime_mode: RuntimeMode = RuntimeMode.interactive
+    mode_key: str = "default"
     preferred_model: str | None = None
     selected_agent: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -175,6 +177,7 @@ class InputHookResult(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = ""
+    mode_key: str | None = None
     agent_key: str | None = None
     model_key: str | None = None
     skill_keys: list[str] = Field(default_factory=list)
@@ -228,6 +231,7 @@ class ExecutionRequest(BaseModel):
     session_id: str
     user_message: str
     normalized_input: str
+    mode_key: str = "default"
     agent_key: str | None = None
     model_key: str | None = None
     skill_keys: list[str] = Field(default_factory=list)
@@ -282,6 +286,7 @@ class HeadlessExecutionRequest(BaseModel):
     title: str = "Headless Agent Task"
     content: str
     session_mode: SessionMode = SessionMode.background_task
+    mode_key: str = "default"
     agent_key: str | None = None
     model_key: str | None = None
     skill_keys: list[str] = Field(default_factory=list)

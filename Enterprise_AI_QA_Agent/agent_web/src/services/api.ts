@@ -8,6 +8,7 @@ import type {
   EmailConfigUpdateRequest,
   ExecutionEvent,
   HealthResponse,
+  ModeDescriptor,
   ModelConfigActionResponse,
   ModelConfigConnectionTestResponse,
   ModelConfigPublic,
@@ -71,6 +72,9 @@ export const api = {
   },
   listTools(): Promise<ToolDescriptor[]> {
     return request("/api/v1/registry/tools");
+  },
+  listModes(): Promise<ModeDescriptor[]> {
+    return request("/api/v1/registry/modes");
   },
   listSkills(): Promise<SkillDescriptor[]> {
     return request("/api/v1/registry/skills");
@@ -173,13 +177,13 @@ export const api = {
   },
   createSession(
     title = "Enterprise Intelligent QA Session",
-    selectedAgent?: string,
+    modeKey = "default",
   ): Promise<SessionDetail> {
     return request("/api/v1/sessions", {
       method: "POST",
       body: JSON.stringify({
         title,
-        selected_agent: selectedAgent ?? null,
+        mode_key: modeKey,
       }),
     });
   },
@@ -206,13 +210,13 @@ export const api = {
   sendMessage(
     sessionId: string,
     content: string,
-    agentKey?: string,
+    modeKey?: string,
   ): Promise<ConversationResponse> {
     return request(`/api/v1/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify({
         content,
-        agent_key: agentKey || null,
+        mode_key: modeKey || null,
       }),
     });
   },

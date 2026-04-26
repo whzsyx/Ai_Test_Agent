@@ -11,6 +11,7 @@ class AgentGraphState(TypedDict):
     normalized_input: str
     session_mode: str
     runtime_mode: str
+    mode_key: str
     message_count: int
     preferred_model: str
     selected_agent_key: str

@@ -14,6 +14,7 @@ class SessionRecord:
     status: SessionStatus
     session_mode: SessionMode
     runtime_mode: RuntimeMode
+    mode_key: str
     created_at: datetime
     updated_at: datetime
     preferred_model: str | None = None

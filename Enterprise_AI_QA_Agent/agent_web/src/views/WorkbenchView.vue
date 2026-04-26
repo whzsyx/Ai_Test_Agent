@@ -23,6 +23,7 @@ const layoutStyle = computed(() => ({
 
 const composerAnchorStyle = computed(() => ({
   "--runtime-panel-size": `${runtimePanelSize.value}px`,
+  "--composer-anchor-height": `${composerAnchorHeight.value}px`,
 }));
 
 function updateRuntimeLayout() {

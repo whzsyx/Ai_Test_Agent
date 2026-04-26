@@ -70,6 +70,7 @@ class ArangoRuntimeProvider:
             hosts=f"http://{settings.arango_host}:{settings.arango_port}"
         )
         self._db: StandardDatabase | None = None
+        self._collections: dict[str, Any] = {}
 
     @property
     def database_url(self) -> str:
@@ -229,7 +230,12 @@ class ArangoRuntimeProvider:
         )
 
     def collection(self, name: str):
-        return self.db().collection(name)
+        cached = self._collections.get(name)
+        if cached is not None:
+            return cached
+        collection = self.db().collection(name)
+        self._collections[name] = collection
+        return collection
 
     def execute(self, query: str, bind_vars: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         cursor = self.db().aql.execute(query, bind_vars=bind_vars or {})

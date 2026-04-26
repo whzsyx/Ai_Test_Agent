@@ -16,6 +16,14 @@ export type SessionMode =
   | "background_task";
 
 export type RuntimeMode = "interactive" | "headless" | "background";
+export type ModeKey =
+  | "default"
+  | "code_review"
+  | "ui_automation"
+  | "api_testing"
+  | "security_testing"
+  | "performance_testing"
+  | "smoke_testing";
 
 export type MessageRole = "system" | "user" | "assistant" | "tool" | "event";
 
@@ -139,6 +147,22 @@ export interface AgentDescriptor {
   supported_skills: string[];
   supported_models: string[];
   default_model?: string | null;
+  tags: string[];
+}
+
+export interface ModeDescriptor {
+  key: ModeKey | string;
+  name: string;
+  summary: string;
+  description: string;
+  category: string;
+  is_test_mode: boolean;
+  default_agent_key: string;
+  allowed_agent_keys: string[];
+  default_skill_keys: string[];
+  registered_tool_keys: string[];
+  harness_key: string;
+  placeholder: boolean;
   tags: string[];
 }
 
@@ -365,6 +389,7 @@ export interface SessionDetail {
   status: SessionStatus;
   session_mode: SessionMode;
   runtime_mode: RuntimeMode;
+  mode_key: ModeKey | string;
   created_at: string;
   updated_at: string;
   messages: ChatMessage[];

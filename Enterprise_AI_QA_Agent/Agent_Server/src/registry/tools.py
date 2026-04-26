@@ -528,6 +528,104 @@ class ToolRegistry:
                 ),
                 handler_key="report-writer",
             ),
+            "code-review-orchestrator": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="code-review-orchestrator",
+                    name="Code Review Orchestrator",
+                    description="Run the code review mode scaffold and return structured review planning output.",
+                    category="review",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "change_summary": {"type": "string"},
+                            "diff_text": {"type": "string"},
+                            "targets": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                    output_schema={"approval_decision": "string", "findings": "array"},
+                    tags=["code-review", "approval", "mode"],
+                ),
+                handler_key="code-review-orchestrator",
+            ),
+            "ui-automation-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="ui-automation-runner",
+                    name="UI Automation Runner",
+                    description="Mode-scoped entry tool for UI automation workflows.",
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "target_url": {"type": "string"},
+                            "objective": {"type": "string"},
+                        },
+                    },
+                    output_schema={"steps": "array", "artifacts": "array"},
+                    tags=["ui", "automation", "mode"],
+                ),
+                handler_key="ui-automation-runner",
+            ),
+            "api-test-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="api-test-runner",
+                    name="API Test Runner",
+                    description="Mode-scoped entry tool for API interface testing workflows.",
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {"type": "string"},
+                            "method": {"type": "string"},
+                            "objective": {"type": "string"},
+                        },
+                    },
+                    output_schema={"checks": "array"},
+                    tags=["api", "testing", "mode"],
+                ),
+                handler_key="api-test-runner",
+            ),
+            "security-scan-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="security-scan-runner",
+                    name="Security Scan Runner",
+                    description="Placeholder mode entry tool for future security testing workflows.",
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={"type": "object", "properties": {"objective": {"type": "string"}}},
+                    output_schema={"summary": "string"},
+                    tags=["security", "testing", "mode", "placeholder"],
+                ),
+                handler_key="security-scan-runner",
+            ),
+            "performance-test-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="performance-test-runner",
+                    name="Performance Test Runner",
+                    description="Placeholder mode entry tool for future performance testing workflows.",
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={"type": "object", "properties": {"objective": {"type": "string"}}},
+                    output_schema={"summary": "string"},
+                    tags=["performance", "testing", "mode", "placeholder"],
+                ),
+                handler_key="performance-test-runner",
+            ),
+            "smoke-suite-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="smoke-suite-runner",
+                    name="Smoke Suite Runner",
+                    description="Placeholder mode entry tool for future smoke testing workflows.",
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={"type": "object", "properties": {"objective": {"type": "string"}}},
+                    output_schema={"summary": "string"},
+                    tags=["smoke", "testing", "mode", "placeholder"],
+                ),
+                handler_key="smoke-suite-runner",
+            ),
         }
 
     def list(self) -> list[ToolDescriptor]:
