@@ -3,11 +3,16 @@ from __future__ import annotations
 import html
 import re
 from pathlib import Path
+from typing import Any
 
 
 class ReportTemplateService:
     def __init__(self) -> None:
-        self._template_path = Path(__file__).resolve().parents[2] / "templates" / "report_email.html"
+        self._template_dir = Path(__file__).resolve().parents[2] / "templates"
+        self._template_paths = {
+            "default": self._template_dir / "report_email.html",
+            "code_review_debate": self._template_dir / "code_review_debate_report.html",
+        }
 
     def render_report_html(
         self,
@@ -16,19 +21,57 @@ class ReportTemplateService:
         time_label: str,
         sender: str,
         markdown_content: str,
+        template_key: str = "default",
+        template_context: dict[str, Any] | None = None,
     ) -> str:
-        template = self._template_path.read_text(encoding="utf-8")
         content_html = self.render_markdown(markdown_content)
+        if template_key == "code_review_debate":
+            return self.render_code_review_debate_html(
+                title=title,
+                time_label=time_label,
+                sender=sender,
+                markdown_content=markdown_content,
+                template_context=template_context,
+                content_html=content_html,
+            )
+
         replacements = {
             "{{ title }}": html.escape(title),
             "{{ time }}": html.escape(time_label),
             "{{ sender }}": html.escape(sender),
             "{{ content_html }}": content_html,
         }
-        rendered = template
-        for key, value in replacements.items():
-            rendered = rendered.replace(key, value)
-        return rendered
+        return self._render_template("default", replacements)
+
+    def render_code_review_debate_html(
+        self,
+        *,
+        title: str,
+        time_label: str,
+        sender: str,
+        markdown_content: str,
+        template_context: dict[str, Any] | None = None,
+        content_html: str | None = None,
+    ) -> str:
+        context = template_context or {}
+        content_html = content_html or self.render_markdown(markdown_content)
+        result_summary_markdown = str(context.get("result_summary_markdown") or "").strip()
+        result_summary_html = (
+            self.render_markdown(result_summary_markdown)
+            if result_summary_markdown
+            else "<p>暂无审批结果摘要。</p>"
+        )
+        replacements = {
+            "{{ title }}": html.escape(title),
+            "{{ time }}": html.escape(time_label),
+            "{{ sender }}": html.escape(sender),
+            "{{ project_name }}": html.escape(str(context.get("project_name") or title)),
+            "{{ approval_result }}": html.escape(str(context.get("approval_result") or "待定")),
+            "{{ agent_count }}": html.escape(str(context.get("agent_count") or "0")),
+            "{{ result_summary_html }}": result_summary_html,
+            "{{ content_html }}": content_html,
+        }
+        return self._render_template("code_review_debate", replacements)
 
     def render_markdown(self, markdown_text: str) -> str:
         lines = markdown_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -198,3 +241,14 @@ class ReportTemplateService:
             body_html += f"<tr>{cells_html}</tr>"
 
         return f'<div class="report-table-shell"><table><thead><tr>{head_html}</tr></thead><tbody>{body_html}</tbody></table></div>'
+
+    def _render_template(self, template_key: str, replacements: dict[str, str]) -> str:
+        template = self._load_template(template_key)
+        rendered = template
+        for key, value in replacements.items():
+            rendered = rendered.replace(key, value)
+        return rendered
+
+    def _load_template(self, template_key: str) -> str:
+        template_path = self._template_paths.get(template_key) or self._template_paths["default"]
+        return template_path.read_text(encoding="utf-8")

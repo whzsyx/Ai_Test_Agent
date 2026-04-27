@@ -87,6 +87,8 @@ class CoordinatorRuntimeService:
         workers = self._normalize_workers(payload)
         if not workers:
             raise ValueError("subagent-dispatch requires at least one worker specification.")
+        followup_workers = self._normalize_followup_workers(payload)
+        completion_worker = self._normalize_completion_worker(payload)
 
         launch_records: list[dict[str, Any]] = []
         immediate_failures: list[tuple[WorkerDispatchSpec, str]] = []
@@ -106,6 +108,9 @@ class CoordinatorRuntimeService:
                 immediate_failures.append((worker, f"Unknown agent: {worker.agent_key}"))
                 continue
 
+            debate_stage = str(worker.context.get("debate_stage") or "").strip()
+            debate_round_index = int(worker.context.get("debate_round_index") or 0)
+            dispatch_role = str(worker.context.get("dispatch_role") or "worker").strip() or "worker"
             child_session = await self._session_service.create_session(
                 CreateSessionRequest(
                     title=f"Worker: {worker.description}",
@@ -119,7 +124,7 @@ class CoordinatorRuntimeService:
                         "parent_trace_id": parent_trace_id,
                         "task_id": worker.task_id,
                         "worker_description": worker.description,
-                        "dispatch_role": "worker",
+                        "dispatch_role": dispatch_role,
                         "notification_mode": "task-notification",
                     },
                 )
@@ -132,6 +137,12 @@ class CoordinatorRuntimeService:
                 "model_key": worker.model_key or "",
                 "description": worker.description,
                 "status": "running",
+                "debate_stage": debate_stage,
+                "debate_round_index": debate_round_index,
+                "debate_total_round_count": int(worker.context.get("debate_total_round_count") or 0),
+                "dispatch_role": dispatch_role,
+                "source_stage": str(worker.context.get("source_stage") or "").strip(),
+                "source_round_index": int(worker.context.get("source_round_index") or 0),
             }
             launch_records.append(launch_record)
 
@@ -148,6 +159,20 @@ class CoordinatorRuntimeService:
             task.add_done_callback(lambda _finished, task_id=worker.task_id: self._active_tasks.pop(task_id, None))
 
         await self._register_worker_dispatches(parent_session_id, parent_turn_id, launch_records)
+        if followup_workers:
+            await self._register_followup_workers(
+                parent_session_id=parent_session_id,
+                parent_turn_id=parent_turn_id,
+                parent_trace_id=parent_trace_id,
+                workers=followup_workers,
+            )
+        if completion_worker is not None:
+            await self._register_completion_worker(
+                parent_session_id=parent_session_id,
+                parent_turn_id=parent_turn_id,
+                parent_trace_id=parent_trace_id,
+                worker=completion_worker,
+            )
 
         for worker, failure_reason in immediate_failures:
             await self._deliver_notification(
@@ -312,6 +337,7 @@ class CoordinatorRuntimeService:
                 task_id=worker.task_id,
                 status=status,
                 child_session_id=child_session_id,
+                worker=worker,
             )
             await self._store.append_event(
                 parent_session_id,
@@ -345,6 +371,13 @@ class CoordinatorRuntimeService:
                 status=status,
                 worker=worker,
                 failure_reason=failure_reason or self._extract_failure_reason(content),
+            )
+            self._update_code_review_report_metadata(
+                session=parent_session,
+                worker=worker,
+                status=status,
+                child_session_id=child_session_id,
+                content=content,
             )
             await self._store.save_session(parent_session)
 
@@ -381,6 +414,24 @@ class CoordinatorRuntimeService:
                     ),
                 )
                 return
+
+            followup_launches = await self._maybe_launch_followup_workers(
+                parent_session=parent_session,
+                parent_turn_id=parent_turn_id,
+            )
+            if followup_launches:
+                parent_session = await self._store.get_session(parent_session_id)
+                if parent_session is None:
+                    return
+
+            completion_launch = await self._maybe_launch_completion_worker(
+                parent_session=parent_session,
+                parent_turn_id=parent_turn_id,
+            )
+            if completion_launch is not None:
+                parent_session = await self._store.get_session(parent_session_id)
+                if parent_session is None:
+                    return
 
             auto_resume = (
                 parent_session.session_mode == SessionMode.coordinator
@@ -453,6 +504,15 @@ class CoordinatorRuntimeService:
 
             status = child_session.status.value
             if status == SessionStatus.waiting_approval.value:
+                # Child workers can create fresh approvals after a prior approval
+                # continuation. Keep mirroring them to the parent while blocked so
+                # the workbench approval panel stays truthful.
+                await self._sync_child_approvals_to_parent(
+                    parent_session_id=parent_session_id,
+                    parent_turn_id=parent_turn_id,
+                    child_session_id=child_session_id,
+                    worker=worker,
+                )
                 continue
 
             if status == SessionStatus.running.value:
@@ -600,22 +660,99 @@ class CoordinatorRuntimeService:
         parent_session.metadata["worker_dispatches"] = worker_dispatches
         await self._store.save_session(parent_session)
 
+    async def _register_followup_workers(
+        self,
+        parent_session_id: str,
+        parent_turn_id: str,
+        parent_trace_id: str,
+        workers: list[WorkerDispatchSpec],
+    ) -> None:
+        parent_session = await self._store.get_session(parent_session_id)
+        if parent_session is None:
+            return
+        total_round_count = 0
+        if workers:
+            total_round_count = int(workers[0].context.get("debate_total_round_count") or 0)
+        parent_session.metadata["pending_followup_workers"] = [
+            {
+                "task_id": worker.task_id,
+                "description": worker.description,
+                "prompt": worker.prompt,
+                "agent_key": worker.agent_key,
+                "model_key": worker.model_key,
+                "skill_keys": list(worker.skill_keys),
+                "context": dict(worker.context),
+            }
+            for worker in workers
+        ]
+        parent_session.metadata["followup_workers_parent_turn_id"] = parent_turn_id
+        parent_session.metadata["followup_workers_parent_trace_id"] = parent_trace_id
+        parent_session.metadata["followup_workers_dispatched"] = False
+        parent_session.metadata["code_review_debate_progress"] = self._build_debate_progress_meta(
+            stage="independent_findings",
+            status="running",
+            current_round_index=1,
+            total_round_count=total_round_count,
+        )
+        await self._store.save_session(parent_session)
+
+    async def _register_completion_worker(
+        self,
+        parent_session_id: str,
+        parent_turn_id: str,
+        parent_trace_id: str,
+        worker: WorkerDispatchSpec,
+    ) -> None:
+        parent_session = await self._store.get_session(parent_session_id)
+        if parent_session is None:
+            return
+        parent_session.metadata["pending_completion_worker"] = {
+            "task_id": worker.task_id,
+            "description": worker.description,
+            "prompt": worker.prompt,
+            "agent_key": worker.agent_key,
+            "model_key": worker.model_key,
+            "skill_keys": list(worker.skill_keys),
+            "context": dict(worker.context),
+            "parent_turn_id": parent_turn_id,
+            "parent_trace_id": parent_trace_id,
+        }
+        parent_session.metadata["completion_worker_dispatched"] = False
+        parent_session.metadata["code_review_report"] = {
+            "task_id": worker.task_id,
+            "agent_key": worker.agent_key,
+            "description": worker.description,
+            "status": "pending",
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        parent_session.metadata["code_review_debate_progress"] = self._build_debate_progress_meta(
+            stage="independent_findings",
+            status="running",
+            current_round_index=1,
+            total_round_count=int(worker.context.get("debate_total_round_count") or 0),
+        )
+        await self._store.save_session(parent_session)
+
     async def _mark_worker_status(
         self,
         parent_session_id: str,
         task_id: str,
         status: str,
         child_session_id: str,
+        worker: WorkerDispatchSpec | None = None,
     ) -> None:
         parent_session = await self._store.get_session(parent_session_id)
         if parent_session is None:
             return
 
         worker_dispatches = []
+        matched = False
+        completion_task_id = str(parent_session.metadata.get("completion_worker_task_id") or "")
         for record in parent_session.metadata.get("worker_dispatches", []):
             if not isinstance(record, dict):
                 continue
             if record.get("task_id") == task_id:
+                matched = True
                 worker_dispatches.append(
                     {
                         **record,
@@ -626,6 +763,26 @@ class CoordinatorRuntimeService:
                 )
             else:
                 worker_dispatches.append(record)
+
+        if not matched and worker is not None:
+            worker_dispatches.append(
+                {
+                    "task_id": task_id,
+                    "child_session_id": child_session_id,
+                    "agent_key": worker.agent_key,
+                    "model_key": worker.model_key or "",
+                    "description": worker.description,
+                    "status": status,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "is_completion_worker": bool(completion_task_id and completion_task_id == task_id),
+                    "debate_stage": str(worker.context.get("debate_stage") or "").strip(),
+                    "debate_round_index": int(worker.context.get("debate_round_index") or 0),
+                    "debate_total_round_count": int(worker.context.get("debate_total_round_count") or 0),
+                    "dispatch_role": str(worker.context.get("dispatch_role") or "").strip(),
+                    "source_stage": str(worker.context.get("source_stage") or "").strip(),
+                    "source_round_index": int(worker.context.get("source_round_index") or 0),
+                }
+            )
 
         parent_session.metadata["worker_dispatches"] = worker_dispatches
         await self._store.save_session(parent_session)
@@ -662,6 +819,377 @@ class CoordinatorRuntimeService:
                 )
             )
         return workers
+
+    def _normalize_followup_workers(self, payload: dict[str, Any]) -> list[WorkerDispatchSpec]:
+        raw_workers = payload.get("followup_workers")
+        if not isinstance(raw_workers, list):
+            return []
+
+        workers: list[WorkerDispatchSpec] = []
+        for item in raw_workers:
+            if not isinstance(item, dict):
+                continue
+            description = str(item.get("description") or "").strip()
+            prompt = str(item.get("prompt") or "").strip()
+            agent_key = str(item.get("agent_key") or "").strip()
+            if not description or not prompt or not agent_key:
+                continue
+            skill_keys = [
+                str(skill_key).strip()
+                for skill_key in item.get("skill_keys", [])
+                if str(skill_key).strip()
+            ]
+            workers.append(
+                WorkerDispatchSpec(
+                    task_id=str(uuid4()),
+                    description=description,
+                    prompt=prompt,
+                    agent_key=agent_key,
+                    model_key=str(item.get("model_key") or "").strip() or None,
+                    skill_keys=skill_keys,
+                    context=dict(item.get("context", {})) if isinstance(item.get("context"), dict) else {},
+                )
+            )
+        return workers
+
+    def _normalize_completion_worker(self, payload: dict[str, Any]) -> WorkerDispatchSpec | None:
+        raw_item = payload.get("completion_worker")
+        if not isinstance(raw_item, dict):
+            return None
+        description = str(raw_item.get("description") or "").strip()
+        prompt = str(raw_item.get("prompt") or "").strip()
+        agent_key = str(raw_item.get("agent_key") or "").strip()
+        if not description or not prompt or not agent_key:
+            return None
+        skill_keys = [
+            str(skill_key).strip()
+            for skill_key in raw_item.get("skill_keys", [])
+            if str(skill_key).strip()
+        ]
+        return WorkerDispatchSpec(
+            task_id=str(uuid4()),
+            description=description,
+            prompt=prompt,
+            agent_key=agent_key,
+            model_key=str(raw_item.get("model_key") or "").strip() or None,
+            skill_keys=skill_keys,
+            context=dict(raw_item.get("context", {})) if isinstance(raw_item.get("context"), dict) else {},
+        )
+
+    async def _maybe_launch_completion_worker(
+        self,
+        parent_session,
+        parent_turn_id: str,
+    ) -> dict[str, Any] | None:
+        pending = parent_session.metadata.get("pending_completion_worker")
+        if not isinstance(pending, dict):
+            return None
+        if bool(parent_session.metadata.get("completion_worker_dispatched")):
+            return None
+        if str(pending.get("parent_turn_id") or "") != parent_turn_id:
+            return None
+
+        pending_followup_workers = parent_session.metadata.get("pending_followup_workers")
+        if isinstance(pending_followup_workers, list) and pending_followup_workers:
+            return None
+
+        reviewer_dispatches = [
+            record
+            for record in parent_session.metadata.get("worker_dispatches", [])
+            if isinstance(record, dict) and not record.get("is_completion_worker")
+        ]
+        if not reviewer_dispatches:
+            return None
+        if any(
+            str(record.get("status") or "") in {"running", "waiting_approval", "idle", ""}
+            for record in reviewer_dispatches
+        ):
+            return None
+
+        worker = WorkerDispatchSpec(
+            task_id=str(pending.get("task_id") or uuid4()),
+            description=str(pending.get("description") or "Completion Worker"),
+            prompt=str(pending.get("prompt") or "").strip(),
+            agent_key=str(pending.get("agent_key") or "").strip(),
+            model_key=str(pending.get("model_key") or "").strip() or None,
+            skill_keys=[
+                str(skill_key).strip()
+                for skill_key in pending.get("skill_keys", [])
+                if str(skill_key).strip()
+            ],
+            context=dict(pending.get("context", {})) if isinstance(pending.get("context"), dict) else {},
+        )
+        if not worker.prompt or not worker.agent_key:
+            return None
+
+        parent_session_id = parent_session.id
+        parent_trace_id = str(pending.get("parent_trace_id") or "")
+        worker.context = {
+            **worker.context,
+            "completion_trigger": "all_reviewers_completed",
+            "reviewer_dispatches": reviewer_dispatches,
+        }
+
+        child_session = await self._session_service.create_session(
+            CreateSessionRequest(
+                title=f"Worker: {worker.description}",
+                session_mode=SessionMode.background_task,
+                runtime_mode=RuntimeMode.background,
+                preferred_model=worker.model_key,
+                selected_agent=worker.agent_key,
+                metadata={
+                    "parent_session_id": parent_session_id,
+                    "parent_turn_id": parent_turn_id,
+                    "parent_trace_id": parent_trace_id,
+                    "task_id": worker.task_id,
+                    "worker_description": worker.description,
+                    "dispatch_role": "completion_worker",
+                    "notification_mode": "task-notification",
+                },
+            )
+        )
+
+        launch_record = {
+            "task_id": worker.task_id,
+            "child_session_id": child_session.id,
+            "agent_key": worker.agent_key,
+            "model_key": worker.model_key or "",
+            "description": worker.description,
+            "status": "running",
+            "is_completion_worker": True,
+            "debate_stage": "summary_resolution",
+            "debate_round_index": int(worker.context.get("debate_round_index") or 0),
+            "debate_total_round_count": int(worker.context.get("debate_total_round_count") or 0),
+            "dispatch_role": "completion_worker",
+        }
+        worker_dispatches = list(parent_session.metadata.get("worker_dispatches", []))
+        worker_dispatches.append(launch_record)
+        parent_session.metadata["worker_dispatches"] = worker_dispatches
+        parent_session.metadata["completion_worker_dispatched"] = True
+        parent_session.metadata["completion_worker_task_id"] = worker.task_id
+        parent_session.metadata["code_review_debate_progress"] = self._build_debate_progress_meta(
+            stage="summary_resolution",
+            status="running",
+            current_round_index=int(worker.context.get("debate_round_index") or 0),
+            total_round_count=int(worker.context.get("debate_total_round_count") or 0),
+        )
+        await self._store.save_session(parent_session)
+
+        task = asyncio.create_task(
+            self._run_child_session(
+                parent_session_id=parent_session_id,
+                parent_turn_id=parent_turn_id,
+                parent_trace_id=parent_trace_id,
+                child_session_id=child_session.id,
+                worker=worker,
+            )
+        )
+        self._active_tasks[worker.task_id] = task
+        task.add_done_callback(lambda _finished, task_id=worker.task_id: self._active_tasks.pop(task_id, None))
+        return launch_record
+
+    async def _maybe_launch_followup_workers(
+        self,
+        parent_session,
+        parent_turn_id: str,
+    ) -> list[dict[str, Any]] | None:
+        pending_raw = parent_session.metadata.get("pending_followup_workers")
+        if not isinstance(pending_raw, list) or not pending_raw:
+            return None
+        if str(parent_session.metadata.get("followup_workers_parent_turn_id") or "") != parent_turn_id:
+            return None
+
+        normalized_pending = [item for item in pending_raw if isinstance(item, dict)]
+        if not normalized_pending:
+            return None
+
+        next_round_index = min(self._pending_worker_round_index(item) for item in normalized_pending)
+        round_batch = [
+            item for item in normalized_pending if self._pending_worker_round_index(item) == next_round_index
+        ]
+        if not round_batch:
+            return None
+
+        source_round_index = self._pending_worker_source_round_index(round_batch[0])
+        source_stage = self._pending_worker_source_stage(round_batch[0])
+        source_dispatches = [
+            record
+            for record in parent_session.metadata.get("worker_dispatches", [])
+            if isinstance(record, dict)
+            and not record.get("is_completion_worker")
+            and int(record.get("debate_round_index") or 0) == source_round_index
+            and str(record.get("debate_stage") or "").strip() == source_stage
+        ]
+        if not source_dispatches:
+            return None
+        if any(
+            str(record.get("status") or "") in {"running", "waiting_approval", "idle", "", "pending"}
+            for record in source_dispatches
+        ):
+            return None
+
+        peer_bundle = await self._build_peer_review_bundle(source_dispatches)
+        launch_records: list[dict[str, Any]] = []
+        parent_session_id = parent_session.id
+        parent_trace_id = str(parent_session.metadata.get("followup_workers_parent_trace_id") or "")
+        current_round_total = int(self._pending_worker_total_round_count(round_batch[0]) or 0)
+
+        for item in round_batch[: self._settings.coordinator_max_workers]:
+            worker = WorkerDispatchSpec(
+                task_id=str(item.get("task_id") or uuid4()),
+                description=str(item.get("description") or "Cross Review Worker"),
+                prompt=str(item.get("prompt") or "").strip(),
+                agent_key=str(item.get("agent_key") or "").strip(),
+                model_key=str(item.get("model_key") or "").strip() or None,
+                skill_keys=[
+                    str(skill_key).strip()
+                    for skill_key in item.get("skill_keys", [])
+                    if str(skill_key).strip()
+                ],
+                context=dict(item.get("context", {})) if isinstance(item.get("context"), dict) else {},
+            )
+            if not worker.prompt or not worker.agent_key:
+                continue
+            if not self._is_agent_available(worker.agent_key):
+                continue
+
+            debate_stage = str(worker.context.get("debate_stage") or "cross_review").strip() or "cross_review"
+            debate_round_index = int(worker.context.get("debate_round_index") or next_round_index)
+            source_stage = str(worker.context.get("source_stage") or source_stage).strip() or "independent_findings"
+            source_round_index = int(worker.context.get("source_round_index") or source_round_index)
+            worker.context = {
+                **worker.context,
+                "debate_stage": debate_stage,
+                "debate_round_index": debate_round_index,
+                "peer_review_bundle": peer_bundle,
+            }
+            worker.prompt = (
+                f"{worker.prompt}\n\n"
+                f"Peer findings bundle from round {source_round_index}:\n"
+                f"{peer_bundle}\n\n"
+                "Execution constraints:\n"
+                "- Debate the peer findings in this bundle before opening new files.\n"
+                "- Only read additional files if you need one precise piece of evidence to support or refute a claim.\n"
+                "- Explicitly reference peer finding ids or reviewer names in your rebuttal.\n"
+            )
+
+            child_session = await self._session_service.create_session(
+                CreateSessionRequest(
+                    title=f"Worker: {worker.description}",
+                    session_mode=SessionMode.background_task,
+                    runtime_mode=RuntimeMode.background,
+                    preferred_model=worker.model_key,
+                    selected_agent=worker.agent_key,
+                    metadata={
+                        "parent_session_id": parent_session_id,
+                        "parent_turn_id": parent_turn_id,
+                        "parent_trace_id": parent_trace_id,
+                        "task_id": worker.task_id,
+                        "worker_description": worker.description,
+                        "dispatch_role": "debate_followup",
+                        "notification_mode": "task-notification",
+                    },
+                )
+            )
+
+            launch_record = {
+                "task_id": worker.task_id,
+                "child_session_id": child_session.id,
+                "agent_key": worker.agent_key,
+                "model_key": worker.model_key or "",
+                "description": worker.description,
+                "status": "running",
+                "debate_stage": debate_stage,
+                "debate_round_index": debate_round_index,
+                "debate_total_round_count": int(worker.context.get("debate_total_round_count") or current_round_total),
+                "dispatch_role": "debate_followup",
+                "source_stage": source_stage,
+                "source_round_index": source_round_index,
+            }
+            launch_records.append(launch_record)
+
+            task = asyncio.create_task(
+                self._run_child_session(
+                    parent_session_id=parent_session_id,
+                    parent_turn_id=parent_turn_id,
+                    parent_trace_id=parent_trace_id,
+                    child_session_id=child_session.id,
+                    worker=worker,
+                )
+            )
+            self._active_tasks[worker.task_id] = task
+            task.add_done_callback(lambda _finished, task_id=worker.task_id: self._active_tasks.pop(task_id, None))
+
+        remaining_pending = [
+            item for item in normalized_pending if self._pending_worker_round_index(item) != next_round_index
+        ]
+        if not launch_records:
+            parent_session.metadata["pending_followup_workers"] = remaining_pending
+            parent_session.metadata["followup_workers_dispatched"] = not bool(remaining_pending)
+            parent_session.metadata["code_review_debate_progress"] = self._build_debate_progress_meta(
+                stage="summary_resolution" if not remaining_pending else "cross_review",
+                status="running",
+                current_round_index=next_round_index if remaining_pending else current_round_total,
+                total_round_count=current_round_total,
+                peer_review_count=len(source_dispatches),
+            )
+            await self._store.save_session(parent_session)
+            return None
+
+        worker_dispatches = list(parent_session.metadata.get("worker_dispatches", []))
+        worker_dispatches.extend(launch_records)
+        parent_session.metadata["worker_dispatches"] = worker_dispatches
+        parent_session.metadata["pending_followup_workers"] = remaining_pending
+        parent_session.metadata["followup_workers_dispatched"] = not bool(remaining_pending)
+        parent_session.metadata["code_review_debate_progress"] = self._build_debate_progress_meta(
+            stage="cross_review",
+            status="running",
+            current_round_index=next_round_index,
+            total_round_count=current_round_total,
+            peer_review_count=len(source_dispatches),
+        )
+        await self._store.save_session(parent_session)
+        return launch_records
+
+    def _update_code_review_report_metadata(
+        self,
+        session,
+        worker: WorkerDispatchSpec,
+        status: str,
+        child_session_id: str,
+        content: str,
+    ) -> None:
+        completion_task_id = str(session.metadata.get("completion_worker_task_id") or "")
+        if not completion_task_id:
+            pending_worker = session.metadata.get("pending_completion_worker")
+            if isinstance(pending_worker, dict):
+                completion_task_id = str(pending_worker.get("task_id") or "")
+        if not completion_task_id or completion_task_id != worker.task_id:
+            return
+
+        report_meta = session.metadata.get("code_review_report", {})
+        if not isinstance(report_meta, dict):
+            report_meta = {}
+        result_excerpt = self._extract_failure_reason(content) if content else ""
+        session.metadata["code_review_report"] = {
+            **report_meta,
+            "task_id": worker.task_id,
+            "agent_key": worker.agent_key,
+            "description": worker.description,
+            "status": status,
+            "report_session_id": child_session_id or str(report_meta.get("report_session_id") or ""),
+            "summary": result_excerpt[:4000],
+            "updated_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.utcnow().isoformat()
+            if status not in {SessionStatus.running.value, SessionStatus.waiting_approval.value}
+            else report_meta.get("completed_at"),
+        }
+        session.metadata["code_review_debate_progress"] = self._build_debate_progress_meta(
+            stage="completed" if status == SessionStatus.completed.value else "summary_resolution",
+            status=status,
+            current_round_index=int(worker.context.get("debate_round_index") or 0),
+            total_round_count=int(worker.context.get("debate_total_round_count") or 0),
+        )
 
     def _build_task_notification(
         self,
@@ -706,6 +1234,104 @@ class CoordinatorRuntimeService:
             if message.role != MessageRole.user and message.content.strip():
                 return message.content
         return ""
+
+    async def _build_peer_review_bundle(self, dispatches: list[dict[str, Any]]) -> str:
+        bundle_parts: list[str] = []
+        for index, record in enumerate(dispatches, start=1):
+            child_session_id = str(record.get("child_session_id") or "").strip()
+            if not child_session_id:
+                continue
+            try:
+                child_detail = await self._session_service.get_session(child_session_id)
+            except Exception:
+                continue
+            result_text = self._extract_worker_result(child_detail.messages).strip()
+            if not result_text:
+                continue
+            agent_key = str(record.get("agent_key") or "unknown-agent").strip()
+            debate_stage = str(record.get("debate_stage") or "independent_findings").strip()
+            task_id = str(record.get("task_id") or "").strip()
+            trimmed_result = result_text[:6000]
+            bundle_parts.append(
+                "\n".join(
+                    [
+                        f"## Peer Reviewer {index}",
+                        f"- agent_key: {agent_key}",
+                        f"- task_id: {task_id}",
+                        f"- debate_stage: {debate_stage}",
+                        "",
+                        trimmed_result,
+                    ]
+                )
+            )
+        return "\n\n".join(bundle_parts).strip() or "No peer findings were captured."
+
+    def _pending_worker_round_index(self, item: dict[str, Any]) -> int:
+        context = item.get("context")
+        if isinstance(context, dict):
+            try:
+                return int(context.get("debate_round_index") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    def _pending_worker_source_round_index(self, item: dict[str, Any]) -> int:
+        context = item.get("context")
+        if isinstance(context, dict):
+            try:
+                return int(context.get("source_round_index") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    def _pending_worker_source_stage(self, item: dict[str, Any]) -> str:
+        context = item.get("context")
+        if isinstance(context, dict):
+            return str(context.get("source_stage") or "").strip()
+        return ""
+
+    def _pending_worker_total_round_count(self, item: dict[str, Any]) -> int:
+        context = item.get("context")
+        if isinstance(context, dict):
+            try:
+                return int(context.get("debate_total_round_count") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    def _build_debate_progress_meta(
+        self,
+        *,
+        stage: str,
+        status: str,
+        current_round_index: int = 0,
+        total_round_count: int = 0,
+        peer_review_count: int = 0,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "stage": stage,
+            "status": status,
+            "stage_label": self._debate_stage_label(stage, current_round_index, total_round_count),
+            "current_round_index": current_round_index,
+            "total_round_count": total_round_count,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        if peer_review_count > 0:
+            payload["peer_review_count"] = peer_review_count
+        return payload
+
+    def _debate_stage_label(self, stage: str, current_round_index: int, total_round_count: int) -> str:
+        if stage == "independent_findings":
+            return "第1轮立论"
+        if stage == "cross_review":
+            round_label = current_round_index or 2
+            return f"第{round_label}轮攻防"
+        if stage == "summary_resolution":
+            round_label = current_round_index or total_round_count or 0
+            return f"第{round_label}轮裁决" if round_label else "总结裁决"
+        if stage == "completed":
+            return "辩论完成"
+        return "待启动"
 
     def _is_agent_available(self, agent_key: str) -> bool:
         try:

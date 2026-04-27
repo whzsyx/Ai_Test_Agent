@@ -5169,7 +5169,8 @@ textarea {
 }
 
 .runtime-console-content .event-console-panel,
-.runtime-console-content .observability-panel {
+.runtime-console-content .observability-panel,
+.runtime-console-content .review-progress-panel {
   width: 100%;
   margin: 0;
   padding: 0;
@@ -5182,7 +5183,8 @@ textarea {
 .runtime-console-content .event-console-list,
 .runtime-console-content .tool-activity-list,
 .runtime-console-content .tool-job-list,
-.runtime-console-content .tool-artifact-list {
+.runtime-console-content .tool-artifact-list,
+.runtime-console-content .review-progress-scroll {
   max-height: 260px;
 }
 

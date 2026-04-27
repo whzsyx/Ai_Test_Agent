@@ -353,6 +353,46 @@ export interface WorkerDispatchRecord {
   description: string;
   status: string;
   completed_at?: string;
+  is_completion_worker?: boolean;
+  debate_stage?: string;
+  debate_round_index?: number;
+  debate_total_round_count?: number;
+  dispatch_role?: string;
+  source_stage?: string;
+  source_round_index?: number;
+}
+
+export interface CodeReviewReportMeta {
+  task_id?: string;
+  agent_key?: string;
+  description?: string;
+  status?: string;
+  report_session_id?: string;
+  summary?: string;
+  updated_at?: string;
+  completed_at?: string;
+}
+
+export interface PendingCompletionWorkerMeta {
+  task_id?: string;
+  description?: string;
+  prompt?: string;
+  agent_key?: string;
+  model_key?: string | null;
+  skill_keys?: string[];
+  context?: Record<string, unknown>;
+  parent_turn_id?: string;
+  parent_trace_id?: string;
+}
+
+export interface CodeReviewDebateProgressMeta {
+  stage?: string;
+  status?: string;
+  stage_label?: string;
+  updated_at?: string;
+  peer_review_count?: number;
+  current_round_index?: number;
+  total_round_count?: number;
 }
 
 export interface WorkerFailureReason {
@@ -385,6 +425,17 @@ export interface ChatMessage {
   content: string;
   created_at: string;
   metadata: Record<string, unknown>;
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  status: SessionStatus;
+  session_mode: SessionMode;
+  runtime_mode: RuntimeMode;
+  mode_key: ModeKey | string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SessionDetail {

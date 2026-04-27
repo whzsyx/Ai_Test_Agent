@@ -244,6 +244,66 @@ function toolSummary(content: string) {
   return "Expand to view tool output";
 }
 
+function decodeUnicodeEscapes(content: string) {
+  return String(content || "").replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+}
+
+function normalizeEmbeddedObservationContent(content: string) {
+  return decodeUnicodeEscapes(content)
+    .split("\n")
+    .map((line) => {
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex <= 0) {
+        return line;
+      }
+      const key = line.slice(0, separatorIndex);
+      const rawValue = line.slice(separatorIndex + 1).trim();
+      if (!["output", "context"].includes(key)) {
+        return `${key}=${rawValue}`;
+      }
+      try {
+        const parsed = JSON.parse(rawValue) as unknown;
+        return `${key}=${JSON.stringify(normalizeToolDisplayValue(parsed), null, 2)}`;
+      } catch {
+        return `${key}=${rawValue}`;
+      }
+    })
+    .join("\n");
+}
+
+function normalizeToolDisplayValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeToolDisplayValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        normalizeToolDisplayValue(item),
+      ]),
+    );
+  }
+  if (typeof value === "string") {
+    const decoded = decodeUnicodeEscapes(value);
+    if (decoded.includes("tool_key=") && (decoded.includes("\noutput=") || decoded.includes("\ncontext="))) {
+      return normalizeEmbeddedObservationContent(decoded);
+    }
+    return decoded;
+  }
+  return value;
+}
+
+function formatToolOutputContent(content: string) {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return JSON.stringify(normalizeToolDisplayValue(parsed), null, 2);
+  } catch {
+    return normalizeEmbeddedObservationContent(content);
+  }
+}
+
 function isTransientToolMessage(message: ChatMessage) {
   return message.role === "tool" && message.metadata?.transient_tool_event === true;
 }
@@ -555,7 +615,7 @@ function escapeHtml(content: string) {
             <span class="tool-output-hint-expanded">收起</span>
           </span>
         </summary>
-        <pre class="conversation-entry-content tool-output-content">{{ message.content }}</pre>
+        <pre class="conversation-entry-content tool-output-content">{{ formatToolOutputContent(message.content) }}</pre>
       </details>
       <div
         v-else-if="message.role === 'assistant'"

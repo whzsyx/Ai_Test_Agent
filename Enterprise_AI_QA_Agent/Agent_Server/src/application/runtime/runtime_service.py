@@ -10,6 +10,7 @@ from src.application.models.model_runtime_service import ModelRuntimeService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.application.runtime.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
 from src.domain.models import SessionRecord
+from src.infrastructure.storage_utils import make_json_safe
 from src.registry.tools import ToolRegistry
 from src.runtime.control import RuntimeControlRegistry
 from src.runtime.execution_logging import append_graph_event, truncate_text
@@ -664,7 +665,7 @@ class RuntimeService:
                 f"{item.get('tool_name', item.get('tool_key', 'tool'))}\n"
                 f"status: {item.get('status', 'unknown')}\n"
                 f"summary: {item.get('summary', '')}\n\n"
-                f"{json.dumps(item.get('output', {}), ensure_ascii=False, indent=2)}"
+                f"{json.dumps(make_json_safe(item.get('output', {})), ensure_ascii=False, indent=2)}"
             ).strip()
             messages.append(
                 ChatMessage(
@@ -692,11 +693,13 @@ class RuntimeService:
             "tool_call_id": record.call_id,
             "name": record.tool_key,
             "content": json.dumps(
-                {
+                make_json_safe(
+                    {
                     "status": record.status,
                     "summary": record.summary,
                     "output": record.output,
-                },
+                    }
+                ),
                 ensure_ascii=False,
             ),
         }

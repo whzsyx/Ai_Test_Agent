@@ -2,18 +2,31 @@
 
 import asyncio
 import json
+import os
 import re
+import shlex
+import shutil
 import smtplib
+import subprocess
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from src.application.context.memory_runtime_service import MemoryRuntimeService
 from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.exploration.ui_graph_store import UIGraphStore
+from src.modes.code_review_mode import build_code_review_campaign
+from src.modes.code_review_mode.project_source import (
+    DEFAULT_IGNORED_NAMES,
+    normalize_project_source,
+    project_source_root,
+    resolve_local_project_file,
+    resolve_local_project_root,
+)
 from src.application.reporting.report_template_service import ReportTemplateService
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
@@ -22,7 +35,22 @@ from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.runtime.store import SessionStore
 from src.schemas.agent import ToolDescriptor
+from src.schemas.model_config import ModelConfigRecord
 from src.schemas.tool_runtime import ModelToolCall, ToolExecutionRecord
+
+CODE_REVIEW_RESULT_CATEGORY_LABELS = {
+    "serious_issue": "严重问题",
+    "critical": "严重问题",
+    "严重问题": "严重问题",
+    "defect": "缺陷",
+    "缺陷": "缺陷",
+    "risk": "隐患",
+    "隐患": "隐患",
+    "feasible": "可行",
+    "可行": "可行",
+    "excellent": "优秀",
+    "优秀": "优秀",
+}
 
 
 @dataclass
@@ -62,6 +90,7 @@ class ToolRuntimeService:
         self._session_store = session_store
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
+        self._model_registry = None
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
         self._report_template_service = ReportTemplateService()
         self._ui_graph_store = UIGraphStore(settings) if settings is not None else None
@@ -93,6 +122,10 @@ class ToolRuntimeService:
             "message-dispatch": self._run_message_dispatch,
             "send-email": self._run_send_email,
             "report-writer": self._run_report_writer,
+            "project-source-loader": self._run_project_source_loader,
+            "project-tree-scanner": self._run_project_tree_scanner,
+            "project-file-reader": self._run_project_file_reader,
+            "project-diff-reader": self._run_project_diff_reader,
             "code-review-orchestrator": self._run_code_review_orchestrator,
             "ui-automation-runner": self._run_ui_automation_runner,
             "api-test-runner": self._run_api_test_runner,
@@ -103,6 +136,9 @@ class ToolRuntimeService:
 
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
         self._coordinator_runtime_service = coordinator_runtime_service
+
+    def set_model_registry(self, model_registry) -> None:
+        self._model_registry = model_registry
 
     def set_memory_runtime_service(self, memory_runtime_service: MemoryRuntimeService) -> None:
         self._memory_runtime_service = memory_runtime_service
@@ -916,25 +952,27 @@ class ToolRuntimeService:
 
         executable, shell_args = self._build_cli_invocation(shell_name, command)
         started_at = datetime.utcnow()
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            *shell_args,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        timed_out = False
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-        except asyncio.TimeoutError:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                [shutil.which(executable) or executable, *shell_args],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+            stdout_text = completed.stdout or ""
+            stderr_text = completed.stderr or ""
+            exit_code = completed.returncode
+            timed_out = False
+        except subprocess.TimeoutExpired as exc:
+            stdout_text = exc.stdout or ""
+            stderr_text = exc.stderr or ""
+            exit_code = -1
             timed_out = True
-            process.kill()
-            stdout_bytes, stderr_bytes = await process.communicate()
 
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-        exit_code = process.returncode if process.returncode is not None else -1
         status = "completed" if exit_code == 0 and not timed_out else "partial" if timed_out else "failed"
         ok = exit_code == 0 and not timed_out
 
@@ -994,13 +1032,23 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
+        arguments = self._coerce_message_dispatch_arguments(arguments)
         channel = str(arguments.get("channel") or "artifact").strip().lower()
         subject = str(arguments.get("subject") or "Runtime Notification").strip()
         content = str(arguments.get("content") or "").strip()
         content_markdown = str(arguments.get("content_markdown") or "").strip()
         content_html = str(arguments.get("content_html") or "").strip()
         sender = str(arguments.get("sender") or context.selected_agent_key or "Enterprise AI QA Agent").strip() or "Enterprise AI QA Agent"
+        template_key = str(arguments.get("template_key") or "default").strip() or "default"
+        template_context = arguments.get("template_context") if isinstance(arguments.get("template_context"), dict) else {}
         artifact_dir = self._prepare_local_artifact_dir(context, "message-dispatch")
+
+        if not content and not content_html and not content_markdown:
+            raw_payload = str(arguments.get("raw") or "").strip()
+            if raw_payload:
+                # Keep artifact delivery moving even when the model emitted a
+                # single raw payload blob instead of fully structured fields.
+                content = raw_payload
 
         if not content and not content_html and not content_markdown:
             return {
@@ -1016,6 +1064,8 @@ class ToolRuntimeService:
                 time_label=str(arguments.get("time_label") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
                 sender=sender,
                 markdown_content=content_markdown,
+                template_key=template_key,
+                template_context=template_context,
             )
             if not content:
                 content = content_markdown
@@ -1034,6 +1084,8 @@ class ToolRuntimeService:
             "content_markdown": content_markdown,
             "content_html": content_html,
             "sender": sender,
+            "template_key": template_key,
+            "template_context": template_context,
             "session_id": context.session_id,
             "turn_id": context.turn_id,
             "trace_id": context.trace_id,
@@ -1080,6 +1132,29 @@ class ToolRuntimeService:
             "error": "unsupported_channel",
         }
 
+    def _coerce_message_dispatch_arguments(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = dict(arguments)
+        raw_payload = normalized.get("raw")
+        if not isinstance(raw_payload, str) or not raw_payload.strip():
+            return normalized
+        if any(
+            str(normalized.get(key) or "").strip()
+            for key in ("content", "content_markdown", "content_html")
+        ):
+            return normalized
+        try:
+            parsed = json.loads(raw_payload)
+        except Exception:
+            return normalized
+        if not isinstance(parsed, dict):
+            return normalized
+        for key, value in parsed.items():
+            normalized.setdefault(key, value)
+        return normalized
+
     async def _run_send_email(
         self,
         arguments: dict[str, Any],
@@ -1096,34 +1171,100 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
+        campaign_kind = str(context.context_bundle.get("campaign_kind") or "").strip()
+        campaign_project_name = str(context.context_bundle.get("campaign_project_name") or "").strip()
+        requested_template_key = str(arguments.get("template_key") or "").strip()
+        template_key = requested_template_key or "default"
+        if (
+            template_key == "default"
+            and campaign_kind in {"code_review_debate", "code_review_debate_summary"}
+        ):
+            template_key = "code_review_debate"
+
         title = str(arguments.get("title") or "QA Execution Report").strip()
+        if (
+            template_key == "code_review_debate"
+            and (not title or title == "QA Execution Report")
+            and campaign_project_name
+        ):
+            title = f"《{campaign_project_name}》的辩论报告"
         objective = str(arguments.get("objective") or context.user_message).strip()
         summary = str(arguments.get("summary") or "").strip()
         status = str(arguments.get("status") or "completed").strip()
         sender = str(arguments.get("sender") or context.selected_agent_key or "Enterprise AI QA Agent").strip() or "Enterprise AI QA Agent"
+        content_markdown = str(arguments.get("content_markdown") or "").strip()
         generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         findings = arguments.get("findings") if isinstance(arguments.get("findings"), list) else []
         evidence = arguments.get("evidence") if isinstance(arguments.get("evidence"), list) else []
         recommendations = _to_string_list(arguments.get("recommendations"))
+        report_sections: list[dict[str, Any]]
+        template_context: dict[str, Any] | None = None
+        report_artifact_stem = "qa_report"
 
-        report_sections = [
-            {"title": "Overview", "content": summary or f"Report generated for: {objective or title}."},
-            {"title": "Status", "content": status},
-            {"title": "Findings", "content": _format_object_list(findings)},
-            {"title": "Evidence", "content": _format_object_list(evidence)},
-            {"title": "Recommendations", "content": "\n".join(f"- {item}" for item in recommendations) or "None provided."},
-        ]
-        markdown_lines = [f"# {title}", "", f"Status: {status}"]
-        if objective:
-            markdown_lines.extend(["", f"Objective: {objective}"])
-        for section in report_sections:
-            markdown_lines.extend(["", f"## {section['title']}", "", str(section["content"])])
-        markdown = "\n".join(markdown_lines).strip()
+        if template_key == "code_review_debate":
+            project_name = str(arguments.get("project_name") or campaign_project_name or title).strip() or title
+            approval_time = str(arguments.get("approval_time") or generated_at).strip() or generated_at
+            approval_result = str(arguments.get("approval_result") or status).strip() or status
+            reviewer_dispatches = (
+                context.context_bundle.get("reviewer_dispatches")
+                if isinstance(context.context_bundle.get("reviewer_dispatches"), list)
+                else []
+            )
+            inferred_agent_count = len(reviewer_dispatches)
+            agent_count = _clamp_int(
+                arguments.get("agent_count"),
+                minimum=0,
+                maximum=99,
+                default=inferred_agent_count,
+            )
+            result_rows = arguments.get("result_rows") if isinstance(arguments.get("result_rows"), list) else []
+            report_sections = [
+                {"title": "审批概览", "content": summary or f"围绕《{project_name}》生成的代码审批辩论报告。"},
+                {"title": "最终结论", "content": approval_result},
+                {"title": "审批结果", "content": self._build_code_review_category_sections(result_rows)},
+                {"title": "证据与发现", "content": _format_object_list(findings)},
+                {"title": "辩论证据", "content": _format_object_list(evidence)},
+                {"title": "建议措施", "content": "\n".join(f"- {item}" for item in recommendations) or "None provided."},
+            ]
+            markdown = content_markdown or self._build_code_review_debate_markdown(
+                title=title,
+                project_name=project_name,
+                approval_time=approval_time,
+                approval_result=approval_result,
+                agent_count=agent_count,
+                report_sections=report_sections,
+                result_rows=result_rows,
+            )
+            template_context = {
+                "project_name": project_name,
+                "approval_result": approval_result,
+                "agent_count": str(agent_count),
+                "result_summary_markdown": self._build_code_review_result_summary_markdown(result_rows),
+            }
+            report_artifact_stem = "code_review_debate_report"
+            generated_at = approval_time
+        else:
+            report_sections = [
+                {"title": "Overview", "content": summary or f"Report generated for: {objective or title}."},
+                {"title": "Status", "content": status},
+                {"title": "Findings", "content": _format_object_list(findings)},
+                {"title": "Evidence", "content": _format_object_list(evidence)},
+                {"title": "Recommendations", "content": "\n".join(f"- {item}" for item in recommendations) or "None provided."},
+            ]
+            markdown_lines = [f"# {title}", "", f"Status: {status}"]
+            if objective:
+                markdown_lines.extend(["", f"Objective: {objective}"])
+            for section in report_sections:
+                markdown_lines.extend(["", f"## {section['title']}", "", str(section["content"])])
+            markdown = content_markdown or "\n".join(markdown_lines).strip()
+
         report_html = self._report_template_service.render_report_html(
             title=title,
             time_label=generated_at,
             sender=sender,
             markdown_content=markdown,
+            template_key=template_key,
+            template_context=template_context,
         )
 
         return {
@@ -1134,15 +1275,17 @@ class ToolRuntimeService:
             "report_html": report_html,
             "sender": sender,
             "generated_at": generated_at,
+            "template_key": template_key,
+            "template_context": template_context,
             "artifacts": [
                 {
                     "type": "report_markdown",
-                    "label": "qa_report.md",
+                    "label": f"{report_artifact_stem}.md",
                     "content": markdown,
                 },
                 {
                     "type": "report_html",
-                    "label": "qa_report.html",
+                    "label": f"{report_artifact_stem}.html",
                     "content": report_html,
                 }
             ],
@@ -1154,34 +1297,315 @@ class ToolRuntimeService:
             },
         }
 
+    async def _run_project_source_loader(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        project_source = normalize_project_source(arguments)
+        timeout_seconds = _clamp_float(arguments.get("timeout_seconds"), minimum=5.0, maximum=60.0, default=20.0)
+        try:
+            source_info = (
+                await self._collect_ssh_source_info(project_source, timeout_seconds)
+                if project_source.source_type == "ssh"
+                else await self._collect_local_source_info(project_source, timeout_seconds)
+            )
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Failed to load project source '{project_source.project_name}': {exc}",
+                "project_source": project_source.model_dump(mode="python"),
+                "error": str(exc),
+            }
+        return {
+            "summary": (
+                f"Loaded project source '{project_source.project_name}' via {project_source.source_type} "
+                f"at {source_info['root_path']}."
+            ),
+            "project_source": project_source.model_dump(mode="python"),
+            "source_info": source_info,
+            "metrics": {
+                "top_entry_count": len(source_info.get("top_entries", [])),
+                "git_repo": 1 if source_info.get("is_git_repo") else 0,
+            },
+        }
+
+    async def _run_project_tree_scanner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        project_source = normalize_project_source(arguments)
+        max_depth = _clamp_int(arguments.get("max_depth"), minimum=1, maximum=8, default=3)
+        max_files = _clamp_int(arguments.get("max_files"), minimum=20, maximum=2000, default=400)
+        timeout_seconds = _clamp_float(arguments.get("timeout_seconds"), minimum=5.0, maximum=90.0, default=30.0)
+        try:
+            tree_summary = (
+                await self._scan_ssh_project_tree(project_source, max_depth=max_depth, max_files=max_files, timeout_seconds=timeout_seconds)
+                if project_source.source_type == "ssh"
+                else await self._scan_local_project_tree(project_source, max_depth=max_depth, max_files=max_files)
+            )
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Failed to scan project tree for '{project_source.project_name}': {exc}",
+                "project_source": project_source.model_dump(mode="python"),
+                "error": str(exc),
+            }
+        return {
+            "summary": (
+                f"Scanned project tree for '{project_source.project_name}' and sampled "
+                f"{len(tree_summary.get('sample_files', []))} file(s)."
+            ),
+            "project_source": project_source.model_dump(mode="python"),
+            "tree_summary": tree_summary,
+            "sample_files": tree_summary.get("sample_files", []),
+            "metrics": {
+                "sample_file_count": len(tree_summary.get("sample_files", [])),
+                "top_module_count": len(tree_summary.get("top_modules", [])),
+                "extension_count": len(tree_summary.get("extensions", {})),
+            },
+        }
+
+    async def _run_project_file_reader(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        project_source = normalize_project_source(arguments)
+        file_path = str(arguments.get("path") or arguments.get("file_path") or "").strip()
+        if not file_path:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": "Project file reader requires a path or file_path.",
+                "error": "missing_file_path",
+            }
+        start_line = _clamp_int(arguments.get("start_line"), minimum=1, maximum=500000, default=1)
+        end_line = _clamp_int(arguments.get("end_line"), minimum=start_line, maximum=500000, default=start_line + 199)
+        max_chars = _clamp_int(arguments.get("max_chars"), minimum=500, maximum=120000, default=16000)
+        timeout_seconds = _clamp_float(arguments.get("timeout_seconds"), minimum=5.0, maximum=90.0, default=20.0)
+        try:
+            file_payload = (
+                await self._read_ssh_project_file(
+                    project_source,
+                    file_path=file_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    max_chars=max_chars,
+                    timeout_seconds=timeout_seconds,
+                )
+                if project_source.source_type == "ssh"
+                else self._read_local_project_file(
+                    project_source,
+                    file_path=file_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    max_chars=max_chars,
+                )
+            )
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Failed to read file '{file_path}': {exc}",
+                "project_source": project_source.model_dump(mode="python"),
+                "error": str(exc),
+            }
+        return {
+            "summary": (
+                f"Read file '{file_payload['file']['path']}' lines "
+                f"{file_payload['file']['start_line']}-{file_payload['file']['end_line']}."
+            ),
+            "project_source": project_source.model_dump(mode="python"),
+            **file_payload,
+        }
+
+    async def _run_project_diff_reader(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        project_source = normalize_project_source(arguments)
+        timeout_seconds = _clamp_float(arguments.get("timeout_seconds"), minimum=5.0, maximum=90.0, default=20.0)
+        max_chars = _clamp_int(arguments.get("max_chars"), minimum=1000, maximum=200000, default=24000)
+        try:
+            diff_payload = (
+                await self._read_ssh_project_diff(project_source, arguments, timeout_seconds=timeout_seconds, max_chars=max_chars)
+                if project_source.source_type == "ssh"
+                else await self._read_local_project_diff(project_source, arguments, timeout_seconds=timeout_seconds, max_chars=max_chars)
+            )
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Failed to read project diff for '{project_source.project_name}': {exc}",
+                "project_source": project_source.model_dump(mode="python"),
+                "error": str(exc),
+            }
+        return {
+            "summary": (
+                f"Collected git diff context for '{project_source.project_name}' with "
+                f"{len(diff_payload.get('status_lines', []))} status line(s)."
+            ),
+            "project_source": project_source.model_dump(mode="python"),
+            **diff_payload,
+        }
+
     async def _run_code_review_orchestrator(
         self,
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        change_summary = str(arguments.get("change_summary") or context.user_message).strip()
-        targets = _to_string_list(arguments.get("targets"))
+        bootstrap = await self._build_code_review_bootstrap(arguments, context)
+        debate_plan = self._resolve_code_review_debate_plan(arguments, bootstrap, context)
+        effective_arguments = {
+            **arguments,
+            "cross_review_rounds": debate_plan["cross_review_round_count"],
+            "debate_time_budget_minutes": debate_plan["debate_time_budget_minutes"],
+        }
+        campaign = build_code_review_campaign(effective_arguments, context)
+        campaign["bootstrap"] = bootstrap
+        campaign["debate_plan"] = debate_plan
+        scanned_file_count = int(((bootstrap.get("tree_summary") or {}) if isinstance(bootstrap.get("tree_summary"), dict) else {}).get("scanned_file_count") or 0)
+        requested_reviewer_limit = _clamp_int(arguments.get("reviewer_count"), minimum=0, maximum=5, default=0)
+        reviewer_limit = requested_reviewer_limit
+        if reviewer_limit <= 0:
+            if scanned_file_count and scanned_file_count <= 80:
+                reviewer_limit = 3
+            elif scanned_file_count and scanned_file_count <= 200:
+                reviewer_limit = 4
+        workers_payload = campaign["dispatch_payload"].get("workers", [])
+        followup_workers_payload = campaign["dispatch_payload"].get("followup_workers", [])
+        if reviewer_limit > 0 and isinstance(workers_payload, list):
+            campaign["dispatch_payload"]["workers"] = workers_payload[:reviewer_limit]
+            if isinstance(followup_workers_payload, list):
+                limited_followup_workers: list[dict[str, Any]] = []
+                grouped_followup_workers: dict[int, list[dict[str, Any]]] = {}
+                for item in followup_workers_payload:
+                    if not isinstance(item, dict):
+                        continue
+                    context_payload = item.get("context")
+                    debate_round_index = 0
+                    if isinstance(context_payload, dict):
+                        debate_round_index = int(context_payload.get("debate_round_index") or 0)
+                    grouped_followup_workers.setdefault(debate_round_index, []).append(item)
+                for round_index in sorted(grouped_followup_workers):
+                    limited_followup_workers.extend(grouped_followup_workers[round_index][:reviewer_limit])
+                campaign["dispatch_payload"]["followup_workers"] = limited_followup_workers
+            campaign["review_team"] = campaign["review_team"][:reviewer_limit]
+            campaign["metrics"]["reviewer_count"] = len(campaign["dispatch_payload"]["workers"])
+        bootstrap_brief = self._build_code_review_bootstrap_brief(bootstrap)
+        for worker in campaign["dispatch_payload"].get("workers", []):
+            if isinstance(worker, dict):
+                prompt = str(worker.get("prompt") or "").strip()
+                if prompt and bootstrap_brief:
+                    worker["prompt"] = (
+                        f"{prompt}\n\n"
+                        "Bootstrap digest:\n"
+                        f"{bootstrap_brief}\n\n"
+                        "Execution constraints:\n"
+                        "- Start with findings from the bootstrap digest before exploring more files.\n"
+                        "- Do not rerun project-source-loader or project-tree-scanner unless the bootstrap digest is missing critical evidence.\n"
+                        "- During the first pass, read at most 3 targeted files with project-file-reader.\n"
+                        "- Avoid shell-style exploration and focus on evidence-backed findings quickly.\n"
+                        "- If you already have enough evidence for a finding, write it immediately instead of continuing broad exploration.\n"
+                    )
+                worker_context = worker.get("context")
+                if isinstance(worker_context, dict):
+                    worker_context["project_bootstrap"] = bootstrap
+                    worker_context["debate_plan"] = debate_plan
+        for worker in campaign["dispatch_payload"].get("followup_workers", []):
+            if isinstance(worker, dict):
+                prompt = str(worker.get("prompt") or "").strip()
+                if prompt and bootstrap_brief:
+                    worker["prompt"] = (
+                        f"{prompt}\n\n"
+                        "Bootstrap digest:\n"
+                        f"{bootstrap_brief}\n\n"
+                        "Execution constraints:\n"
+                        "- This is the rebuttal round, so begin from peer findings instead of rediscovering the repository.\n"
+                        "- Use the bootstrap digest only to validate or challenge claims precisely.\n"
+                        "- Read at most 2 additional targeted files unless a claim is impossible to evaluate otherwise.\n"
+                        f"- Stay within the moderator budget of approximately {debate_plan['debate_time_budget_minutes']} minutes for the whole debate.\n"
+                    )
+                worker_context = worker.get("context")
+                if isinstance(worker_context, dict):
+                    worker_context["project_bootstrap"] = bootstrap
+                    worker_context["debate_plan"] = debate_plan
+        summary_agent = campaign.get("summary_agent", {})
+        if isinstance(summary_agent, dict):
+            summary_prompt = str(summary_agent.get("prompt") or "").strip()
+            if summary_prompt and bootstrap_brief:
+                summary_agent["prompt"] = (
+                    f"{summary_prompt}\n\n"
+                    "Bootstrap digest:\n"
+                    f"{bootstrap_brief}\n\n"
+                    "Debate time budget:\n"
+                    f"- moderator_budget_minutes: {debate_plan['debate_time_budget_minutes']}\n"
+                    f"- context_window_tokens: {debate_plan['model_context_window_tokens']}\n"
+                    f"- context_pressure: {debate_plan['context_pressure']}\n\n"
+                    "Execution constraints:\n"
+                    "- Synthesize reviewer outputs first; do not restart broad repository exploration unless reviewer evidence is clearly insufficient.\n"
+                    "- Prefer report generation over additional discovery once proposer/support/challenge relationships are established.\n"
+                )
+        summary_context = summary_agent.get("context")
+        if isinstance(summary_context, dict):
+            summary_context["project_bootstrap"] = bootstrap
+            summary_context["debate_plan"] = debate_plan
+        campaign["metrics"]["debate_time_budget_minutes"] = debate_plan["debate_time_budget_minutes"]
+        campaign["metrics"]["cross_review_round_count"] = debate_plan["cross_review_round_count"]
+        launch_workers = bool(campaign.get("launch_workers", True))
+        dispatch_result: dict[str, Any] | None = None
+        if launch_workers:
+            coordinator_runtime = self._require_coordinator_runtime()
+            dispatch_result = await coordinator_runtime.dispatch(
+                payload=campaign["dispatch_payload"],
+                context=asdict(context),
+            )
+
+        workers = dispatch_result.get("workers", []) if isinstance(dispatch_result, dict) else []
+        dispatch_status = str(dispatch_result.get("status") or "").strip() if isinstance(dispatch_result, dict) else ""
         return {
-            "summary": "Initialized the code review mode scaffold and generated a structured review plan.",
-            "approval_decision": "manual_review_required",
+            "status": "partial" if launch_workers else "completed",
+            "summary": (
+                f"Initialized code review debate campaign for '{campaign['project_source']['project_name']}' "
+                f"and launched {len(workers)} reviewer worker session(s)."
+                if launch_workers
+                else f"Prepared code review debate campaign for '{campaign['project_source']['project_name']}'."
+            ),
+            "approval_decision": "pending_debate",
             "findings": [],
+            "campaign": campaign,
             "review_plan": [
-                "Collect diff and impacted files",
-                "Run logic and edge-case review",
-                "Check security and permission boundaries",
-                "Assess test impact and missing coverage",
-                "Produce approval decision and required actions",
+                "Normalize project source and scope",
+                "Create review points for project or target paths",
+                "Launch parallel round-1 reviewer sessions",
+                "Launch parallel round-2 cross-review rebuttals",
+                "Collect debated findings for summary synthesis",
+                "Produce approval-ready structured report",
             ],
-            "targets": targets,
-            "change_summary": change_summary,
+            "targets": [point["target"] for point in campaign["review_points"]],
+            "change_summary": str(arguments.get("change_summary") or context.user_message).strip(),
+            "dispatch": dispatch_result or {
+                "status": "not_started",
+                "summary": "Reviewer dispatch was skipped for this invocation.",
+                "workers": [],
+            },
+            "bootstrap": bootstrap,
             "next_steps": [
-                "Connect repository-aware diff readers",
-                "Attach specialized review workers",
-                "Persist structured findings into evaluation harness",
+                "Connect repository-aware project readers for local and SSH sources",
+                "Feed reviewer outputs into cross-review rounds and summary synthesis",
+                "Persist debated findings into the evaluation harness and report center",
             ],
             "metrics": {
-                "target_count": len(targets),
-                "finding_count": 0,
+                **campaign.get("metrics", {}),
+                "bootstrap_ok": 1 if bootstrap.get("ok", False) else 0,
+                "launched_worker_count": len(workers),
+                "dispatch_started": launch_workers,
+                "dispatch_status": dispatch_status or "not_started",
             },
         }
 
@@ -1271,6 +1695,749 @@ class ToolRuntimeService:
                 "Attach verification and evaluation policies",
             ],
         }
+
+    async def _collect_local_source_info(
+        self,
+        project_source,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        root = resolve_local_project_root(project_source)
+        if not root.exists():
+            raise FileNotFoundError(f"Project root was not found: {root}")
+        if not root.is_dir():
+            raise NotADirectoryError(f"Project root is not a directory: {root}")
+
+        top_entries = [
+            {
+                "name": item.name,
+                "kind": "directory" if item.is_dir() else "file",
+            }
+            for item in sorted(root.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:25]
+        ]
+        git_root = ""
+        branch = project_source.branch
+        git_check = await self._run_subprocess("git", ["-C", str(root), "rev-parse", "--show-toplevel"], timeout_seconds=timeout_seconds)
+        is_git_repo = git_check["ok"]
+        if is_git_repo:
+            git_root = git_check["stdout"].strip()
+            if not branch:
+                branch_result = await self._run_subprocess(
+                    "git",
+                    ["-C", git_root, "branch", "--show-current"],
+                    timeout_seconds=timeout_seconds,
+                )
+                branch = branch_result["stdout"].strip() if branch_result["ok"] else ""
+
+        return {
+            "access_mode": "local",
+            "root_path": str(root),
+            "exists": True,
+            "is_directory": True,
+            "is_git_repo": is_git_repo,
+            "git_root": git_root,
+            "branch": branch,
+            "top_entries": top_entries,
+        }
+
+    async def _build_code_review_bootstrap(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        source_result = await self._run_project_source_loader(arguments, context)
+        tree_result = await self._run_project_tree_scanner(arguments, context)
+        diff_result = await self._run_project_diff_reader(
+            {
+                **arguments,
+                "max_chars": arguments.get("max_chars") or 12000,
+            },
+            context,
+        )
+        source_ok = source_result.get("ok", True)
+        tree_ok = tree_result.get("ok", True)
+        diff_ok = diff_result.get("ok", True)
+        project_source = source_result.get("project_source") or normalize_project_source(arguments).model_dump(mode="python")
+        return {
+            "ok": bool(source_ok and tree_ok),
+            "project_source": project_source,
+            "source_info": source_result.get("source_info"),
+            "tree_summary": tree_result.get("tree_summary"),
+            "sample_files": tree_result.get("sample_files", []),
+            "diff_summary": {
+                "ok": diff_ok,
+                "diff_mode": diff_result.get("diff_mode"),
+                "commit_range": diff_result.get("commit_range"),
+                "status_lines": diff_result.get("status_lines", []),
+                "diff_stat": diff_result.get("diff_stat"),
+                "diff_text": diff_result.get("diff_text"),
+                "truncated": diff_result.get("truncated", False),
+                "error": diff_result.get("error"),
+            },
+            "errors": {
+                "source": source_result.get("error"),
+                "tree": tree_result.get("error"),
+                "diff": diff_result.get("error"),
+            },
+        }
+
+    def _build_code_review_bootstrap_brief(self, bootstrap: dict[str, Any]) -> str:
+        if not isinstance(bootstrap, dict):
+            return ""
+
+        project_source = bootstrap.get("project_source") if isinstance(bootstrap.get("project_source"), dict) else {}
+        source_info = bootstrap.get("source_info") if isinstance(bootstrap.get("source_info"), dict) else {}
+        tree_summary = bootstrap.get("tree_summary") if isinstance(bootstrap.get("tree_summary"), dict) else {}
+        diff_summary = bootstrap.get("diff_summary") if isinstance(bootstrap.get("diff_summary"), dict) else {}
+        sample_files = bootstrap.get("sample_files") if isinstance(bootstrap.get("sample_files"), list) else []
+
+        project_name = str(project_source.get("project_name") or source_info.get("root_path") or "Unnamed Project").strip()
+        branch = str(source_info.get("branch") or project_source.get("branch") or "unknown").strip()
+        scanned_file_count = int(tree_summary.get("scanned_file_count") or 0)
+        directory_count = int(tree_summary.get("directory_count") or 0)
+        top_modules = [
+            str(item).strip()
+            for item in (tree_summary.get("top_modules") if isinstance(tree_summary.get("top_modules"), list) else [])
+            if str(item).strip()
+        ][:6]
+        sample_paths: list[str] = []
+        for item in sample_files[:6]:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or item.get("relative_path") or "").strip()
+            if path:
+                sample_paths.append(path)
+        diff_stat = str(diff_summary.get("diff_stat") or "").strip()
+        status_lines = [
+            str(item).strip()
+            for item in (diff_summary.get("status_lines") if isinstance(diff_summary.get("status_lines"), list) else [])
+            if str(item).strip()
+        ][:5]
+
+        lines = [
+            f"- project_name: {project_name}",
+            f"- branch: {branch}",
+            f"- scanned_files: {scanned_file_count}",
+            f"- directories: {directory_count}",
+            f"- top_modules: {', '.join(top_modules) if top_modules else 'unknown'}",
+            f"- diff_stat: {diff_stat or 'no diff summary'}",
+            f"- changed_paths: {', '.join(status_lines) if status_lines else 'none captured'}",
+            f"- sampled_files: {', '.join(sample_paths) if sample_paths else 'none captured'}",
+        ]
+        return "\n".join(lines)
+
+    def _resolve_code_review_debate_plan(
+        self,
+        arguments: dict[str, Any],
+        bootstrap: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        requested_budget = _clamp_int(
+            arguments.get("debate_time_budget_minutes"),
+            minimum=5,
+            maximum=60,
+            default=0,
+        )
+        tree_summary = bootstrap.get("tree_summary") if isinstance(bootstrap.get("tree_summary"), dict) else {}
+        diff_summary = bootstrap.get("diff_summary") if isinstance(bootstrap.get("diff_summary"), dict) else {}
+
+        scanned_file_count = int(tree_summary.get("scanned_file_count") or 0)
+        directory_count = int(tree_summary.get("directory_count") or 0)
+        changed_path_count = len(diff_summary.get("status_lines", [])) if isinstance(diff_summary.get("status_lines"), list) else 0
+
+        reviewer_count = _clamp_int(arguments.get("reviewer_count"), minimum=2, maximum=5, default=3)
+        model_config = self._resolve_code_review_model_config(arguments, context)
+        context_window_tokens = int(model_config.max_tokens) if model_config is not None else 8192
+        supports_reasoning = bool(model_config.supports_reasoning) if model_config is not None else False
+
+        if context_window_tokens <= 8192:
+            context_pressure = "high"
+            context_round_cap = 2
+            context_budget_penalty = 8
+        elif context_window_tokens <= 32768:
+            context_pressure = "medium"
+            context_round_cap = 3
+            context_budget_penalty = 3
+        else:
+            context_pressure = "low"
+            context_round_cap = 4
+            context_budget_penalty = 0
+
+        if scanned_file_count <= 80:
+            project_size = "small"
+            base_budget = 12
+        elif scanned_file_count <= 200:
+            project_size = "medium"
+            base_budget = 22
+        elif scanned_file_count <= 500:
+            project_size = "large"
+            base_budget = 34
+        else:
+            project_size = "xlarge"
+            base_budget = 46
+
+        complexity_bonus = min(8, directory_count // 12)
+        diff_bonus = min(6, max(0, changed_path_count // 8))
+        reviewer_bonus = max(0, reviewer_count - 3)
+        reasoning_bonus = 4 if supports_reasoning else 0
+
+        auto_budget = base_budget + complexity_bonus + diff_bonus + reviewer_bonus + reasoning_bonus - context_budget_penalty
+        effective_budget = requested_budget if requested_budget > 0 else auto_budget
+        debate_time_budget_minutes = max(8, min(60, effective_budget))
+
+        if debate_time_budget_minutes <= 15:
+            derived_rounds = 1
+        elif debate_time_budget_minutes <= 28:
+            derived_rounds = 2
+        elif debate_time_budget_minutes <= 42:
+            derived_rounds = 3
+        else:
+            derived_rounds = 4
+        cross_review_round_count = min(context_round_cap, derived_rounds)
+
+        return {
+            "strategy": "time_budget",
+            "requested_time_budget_minutes": requested_budget,
+            "debate_time_budget_minutes": debate_time_budget_minutes,
+            "cross_review_round_count": cross_review_round_count,
+            "project_size": project_size,
+            "scanned_file_count": scanned_file_count,
+            "directory_count": directory_count,
+            "changed_path_count": changed_path_count,
+            "reviewer_count": reviewer_count,
+            "model_context_window_tokens": context_window_tokens,
+            "supports_reasoning": supports_reasoning,
+            "context_pressure": context_pressure,
+        }
+
+    def _resolve_code_review_model_config(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> ModelConfigRecord | None:
+        if self._model_registry is None:
+            return None
+        candidate_keys = [
+            str(arguments.get("worker_model_key") or "").strip(),
+            str(arguments.get("summary_model_key") or "").strip(),
+            str(context.selected_model_key or "").strip(),
+            str(context.context_bundle.get("preferred_model") or "").strip(),
+        ]
+        for model_key in candidate_keys:
+            if not model_key:
+                continue
+            try:
+                return self._model_registry.get_runtime_config(model_key)
+            except Exception:
+                continue
+        try:
+            return self._model_registry.get_default_runtime_config()
+        except Exception:
+            return None
+
+    async def _collect_ssh_source_info(
+        self,
+        project_source,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        root_value = project_source_root(project_source).replace("\\", "/")
+        script = (
+            f"ROOT={shlex.quote(root_value)}; "
+            'if [ ! -d "$ROOT" ]; then echo "__ERROR__:missing_root"; exit 4; fi; '
+            'echo "__TOP__"; '
+            'find "$ROOT" -mindepth 1 -maxdepth 1 | head -n 25; '
+            'echo "__TOP_END__"; '
+            'if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then '
+            'echo "__GIT__"; '
+            'git -C "$ROOT" rev-parse --show-toplevel; '
+            'git -C "$ROOT" branch --show-current 2>/dev/null; '
+            'else echo "__NO_GIT__"; fi'
+        )
+        result = await self._run_ssh_shell(project_source, script, timeout_seconds=timeout_seconds)
+        if not result["ok"]:
+            raise RuntimeError(result["stderr"].strip() or result["stdout"].strip() or "SSH source probe failed.")
+
+        top_entries: list[dict[str, Any]] = []
+        is_git_repo = False
+        git_root = ""
+        branch = project_source.branch
+        section = ""
+        git_lines: list[str] = []
+        for raw_line in result["stdout"].splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line == "__TOP__":
+                section = "top"
+                continue
+            if line == "__TOP_END__":
+                section = ""
+                continue
+            if line == "__GIT__":
+                section = "git"
+                is_git_repo = True
+                continue
+            if line == "__NO_GIT__":
+                section = ""
+                continue
+            if line.startswith("__ERROR__:"):
+                raise RuntimeError(line.removeprefix("__ERROR__:"))
+            if section == "top":
+                top_entries.append(
+                    {
+                        "name": PurePosixPath(line).name,
+                        "kind": "unknown",
+                        "path": line,
+                    }
+                )
+            elif section == "git":
+                git_lines.append(line)
+
+        if git_lines:
+            git_root = git_lines[0]
+        if len(git_lines) > 1 and not branch:
+            branch = git_lines[1]
+
+        return {
+            "access_mode": "ssh",
+            "root_path": root_value,
+            "exists": True,
+            "is_directory": True,
+            "is_git_repo": is_git_repo,
+            "git_root": git_root,
+            "branch": branch,
+            "top_entries": top_entries,
+            "ssh_target": self._build_ssh_target(project_source),
+        }
+
+    async def _scan_local_project_tree(
+        self,
+        project_source,
+        max_depth: int,
+        max_files: int,
+    ) -> dict[str, Any]:
+        root = resolve_local_project_root(project_source)
+        if not root.exists():
+            raise FileNotFoundError(f"Project root was not found: {root}")
+
+        sample_files: list[dict[str, Any]] = []
+        extension_counter: Counter[str] = Counter()
+        language_counter: Counter[str] = Counter()
+        top_modules: set[str] = set()
+        directories_seen: set[str] = set()
+        scanned_files = 0
+        scan_truncated = False
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            current_path = Path(dirpath)
+            relative_dir = current_path.relative_to(root).as_posix() if current_path != root else "."
+            depth = 0 if relative_dir == "." else len(PurePosixPath(relative_dir).parts)
+            dirnames[:] = [
+                item
+                for item in dirnames
+                if item not in DEFAULT_IGNORED_NAMES and depth < max_depth
+            ]
+            directories_seen.add(relative_dir)
+            if relative_dir != ".":
+                top_modules.add(relative_dir.split("/")[0])
+            if depth > max_depth:
+                continue
+            for filename in sorted(filenames):
+                full_path = current_path / filename
+                relative_path = full_path.relative_to(root).as_posix()
+                extension = full_path.suffix.lower() or "<none>"
+                extension_counter[extension] += 1
+                language_counter[_language_from_extension(extension)] += 1
+                scanned_files += 1
+                if len(sample_files) < 50:
+                    sample_files.append(
+                        {
+                            "path": relative_path,
+                            "extension": extension,
+                            "size_bytes": full_path.stat().st_size,
+                        }
+                    )
+                if scanned_files >= max_files:
+                    scan_truncated = True
+                    break
+            if scan_truncated:
+                break
+
+        top_entries = [
+            {
+                "name": item.name,
+                "kind": "directory" if item.is_dir() else "file",
+            }
+            for item in sorted(root.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:25]
+        ]
+        return {
+            "access_mode": "local",
+            "root_path": str(root),
+            "max_depth": max_depth,
+            "scan_truncated": scan_truncated,
+            "scanned_file_count": scanned_files,
+            "directory_count": len(directories_seen),
+            "top_modules": sorted(top_modules)[:50],
+            "top_entries": top_entries,
+            "extensions": dict(extension_counter.most_common(20)),
+            "languages": dict(language_counter.most_common(15)),
+            "sample_files": sample_files,
+        }
+
+    async def _scan_ssh_project_tree(
+        self,
+        project_source,
+        max_depth: int,
+        max_files: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        root_value = project_source_root(project_source).replace("\\", "/")
+        prune_clause = " -o ".join(f"-name {shlex.quote(item)}" for item in sorted(DEFAULT_IGNORED_NAMES))
+        script = (
+            f"ROOT={shlex.quote(root_value)}; "
+            'if [ ! -d "$ROOT" ]; then echo "__ERROR__:missing_root"; exit 4; fi; '
+            'echo "__TOP__"; '
+            'find "$ROOT" -mindepth 1 -maxdepth 1 | head -n 25; '
+            'echo "__TOP_END__"; '
+            'echo "__FILES__"; '
+            f'find "$ROOT" -maxdepth {max_depth} \\( {prune_clause} \\) -prune -o -type f -print | head -n {max_files}; '
+            'echo "__FILES_END__"'
+        )
+        result = await self._run_ssh_shell(project_source, script, timeout_seconds=timeout_seconds)
+        if not result["ok"]:
+            raise RuntimeError(result["stderr"].strip() or result["stdout"].strip() or "SSH tree scan failed.")
+
+        top_entries: list[dict[str, Any]] = []
+        sample_files: list[dict[str, Any]] = []
+        extension_counter: Counter[str] = Counter()
+        language_counter: Counter[str] = Counter()
+        top_modules: set[str] = set()
+        section = ""
+        for raw_line in result["stdout"].splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line == "__TOP__":
+                section = "top"
+                continue
+            if line == "__TOP_END__":
+                section = ""
+                continue
+            if line == "__FILES__":
+                section = "files"
+                continue
+            if line == "__FILES_END__":
+                section = ""
+                continue
+            if line.startswith("__ERROR__:"):
+                raise RuntimeError(line.removeprefix("__ERROR__:"))
+            if section == "top":
+                top_entries.append(
+                    {
+                        "name": PurePosixPath(line).name,
+                        "kind": "unknown",
+                        "path": line,
+                    }
+                )
+            elif section == "files":
+                relative_path = _relativize_remote_path(root_value, line)
+                extension = PurePosixPath(relative_path).suffix.lower() or "<none>"
+                extension_counter[extension] += 1
+                language_counter[_language_from_extension(extension)] += 1
+                sample_files.append({"path": relative_path, "extension": extension})
+                if relative_path and "/" in relative_path:
+                    top_modules.add(relative_path.split("/")[0])
+
+        return {
+            "access_mode": "ssh",
+            "root_path": root_value,
+            "max_depth": max_depth,
+            "scan_truncated": len(sample_files) >= max_files,
+            "scanned_file_count": len(sample_files),
+            "directory_count": len(top_entries),
+            "top_modules": sorted(top_modules)[:50],
+            "top_entries": top_entries,
+            "extensions": dict(extension_counter.most_common(20)),
+            "languages": dict(language_counter.most_common(15)),
+            "sample_files": sample_files[:50],
+            "ssh_target": self._build_ssh_target(project_source),
+        }
+
+    def _read_local_project_file(
+        self,
+        project_source,
+        file_path: str,
+        start_line: int,
+        end_line: int,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        resolved = resolve_local_project_file(project_source, file_path)
+        if not resolved.exists():
+            raise FileNotFoundError(f"File was not found: {resolved}")
+        if not resolved.is_file():
+            raise IsADirectoryError(f"Target path is not a file: {resolved}")
+
+        text = resolved.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        total_lines = len(lines)
+        bounded_end = min(end_line, total_lines if total_lines > 0 else end_line)
+        selected_lines = lines[start_line - 1:bounded_end]
+        content = "\n".join(selected_lines)
+        truncated = len(content) > max_chars
+        if truncated:
+            content = content[:max_chars]
+
+        return {
+            "content": content,
+            "file": {
+                "path": resolved.relative_to(resolve_local_project_root(project_source)).as_posix(),
+                "absolute_path": str(resolved),
+                "start_line": start_line,
+                "end_line": bounded_end,
+                "total_lines": total_lines,
+                "truncated": truncated,
+            },
+        }
+
+    async def _read_ssh_project_file(
+        self,
+        project_source,
+        file_path: str,
+        start_line: int,
+        end_line: int,
+        max_chars: int,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        remote_path = _join_remote_path(project_source_root(project_source), file_path)
+        script = (
+            f"FILE={shlex.quote(remote_path)}; "
+            'if [ ! -f "$FILE" ]; then echo "__ERROR__:missing_file"; exit 4; fi; '
+            'printf "__LINES__=%s\n" "$(wc -l < "$FILE" 2>/dev/null || echo 0)"; '
+            'echo "__CONTENT__"; '
+            f"sed -n '{start_line},{end_line}p' \"$FILE\""
+        )
+        result = await self._run_ssh_shell(project_source, script, timeout_seconds=timeout_seconds)
+        if not result["ok"]:
+            raise RuntimeError(result["stderr"].strip() or result["stdout"].strip() or "SSH file read failed.")
+
+        total_lines = 0
+        content_lines: list[str] = []
+        capture = False
+        for raw_line in result["stdout"].splitlines():
+            line = raw_line.rstrip("\n")
+            if line.startswith("__ERROR__:"):
+                raise RuntimeError(line.removeprefix("__ERROR__:"))
+            if line.startswith("__LINES__="):
+                total_lines = int(line.removeprefix("__LINES__=") or "0")
+                continue
+            if line == "__CONTENT__":
+                capture = True
+                continue
+            if capture:
+                content_lines.append(raw_line)
+
+        content = "\n".join(content_lines)
+        truncated = len(content) > max_chars
+        if truncated:
+            content = content[:max_chars]
+
+        return {
+            "content": content,
+            "file": {
+                "path": _relativize_remote_path(project_source_root(project_source), remote_path),
+                "absolute_path": remote_path,
+                "start_line": start_line,
+                "end_line": min(end_line, total_lines if total_lines > 0 else end_line),
+                "total_lines": total_lines,
+                "truncated": truncated,
+            },
+        }
+
+    async def _read_local_project_diff(
+        self,
+        project_source,
+        arguments: dict[str, Any],
+        timeout_seconds: float,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        root = resolve_local_project_root(project_source)
+        git_root_result = await self._run_subprocess("git", ["-C", str(root), "rev-parse", "--show-toplevel"], timeout_seconds=timeout_seconds)
+        if not git_root_result["ok"]:
+            raise RuntimeError("Local project source is not a git repository.")
+        git_root = git_root_result["stdout"].strip()
+
+        diff_mode = str(arguments.get("diff_mode") or "").strip().lower()
+        commit_range = str(arguments.get("commit_range") or project_source.commit_range or "").strip()
+        paths = _to_string_list(arguments.get("paths") or arguments.get("targets"))
+
+        status_result = await self._run_subprocess("git", ["-C", git_root, "status", "--short"], timeout_seconds=timeout_seconds)
+        diff_stat_args = self._build_git_diff_args(git_root, commit_range, diff_mode, paths, stat_only=True)
+        diff_args = self._build_git_diff_args(git_root, commit_range, diff_mode, paths, stat_only=False)
+        diff_stat_result = await self._run_subprocess("git", diff_stat_args, timeout_seconds=timeout_seconds)
+        diff_result = await self._run_subprocess("git", diff_args, timeout_seconds=timeout_seconds)
+        diff_text, truncated = _truncate_text(diff_result["stdout"], max_chars)
+
+        return {
+            "git_root": git_root,
+            "commit_range": commit_range,
+            "diff_mode": diff_mode or ("range" if commit_range else "working_tree"),
+            "status_lines": [line for line in status_result["stdout"].splitlines() if line.strip()],
+            "diff_stat": diff_stat_result["stdout"].strip(),
+            "diff_text": diff_text,
+            "truncated": truncated,
+            "paths": paths,
+        }
+
+    async def _read_ssh_project_diff(
+        self,
+        project_source,
+        arguments: dict[str, Any],
+        timeout_seconds: float,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        root_value = project_source_root(project_source).replace("\\", "/")
+        diff_mode = str(arguments.get("diff_mode") or "").strip().lower()
+        commit_range = str(arguments.get("commit_range") or project_source.commit_range or "").strip()
+        paths = _to_string_list(arguments.get("paths") or arguments.get("targets"))
+        path_clause = ""
+        if paths:
+            path_clause = " --" + "".join(f" {shlex.quote(item)}" for item in paths)
+        range_clause = f" {shlex.quote(commit_range)}" if commit_range else ""
+        cached_clause = " --cached" if diff_mode == "staged" else ""
+        script = (
+            f"ROOT={shlex.quote(root_value)}; "
+            'if ! command -v git >/dev/null 2>&1; then echo "__ERROR__:git_missing"; exit 5; fi; '
+            'if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then echo "__ERROR__:not_git_repo"; exit 6; fi; '
+            'echo "__STATUS__"; '
+            'git -C "$ROOT" status --short; '
+            'echo "__STAT__"; '
+            f'git -C "$ROOT" diff --stat{cached_clause}{range_clause}{path_clause}; '
+            'echo "__DIFF__"; '
+            f'git -C "$ROOT" diff --unified=3{cached_clause}{range_clause}{path_clause}'
+        )
+        result = await self._run_ssh_shell(project_source, script, timeout_seconds=timeout_seconds)
+        if not result["ok"]:
+            raise RuntimeError(result["stderr"].strip() or result["stdout"].strip() or "SSH diff read failed.")
+
+        status_lines: list[str] = []
+        diff_stat_lines: list[str] = []
+        diff_lines: list[str] = []
+        section = ""
+        for raw_line in result["stdout"].splitlines():
+            line = raw_line.rstrip("\n")
+            if line.startswith("__ERROR__:"):
+                raise RuntimeError(line.removeprefix("__ERROR__:"))
+            if line == "__STATUS__":
+                section = "status"
+                continue
+            if line == "__STAT__":
+                section = "stat"
+                continue
+            if line == "__DIFF__":
+                section = "diff"
+                continue
+            if section == "status":
+                status_lines.append(line)
+            elif section == "stat":
+                diff_stat_lines.append(line)
+            elif section == "diff":
+                diff_lines.append(raw_line)
+
+        diff_text, truncated = _truncate_text("\n".join(diff_lines), max_chars)
+        return {
+            "git_root": root_value,
+            "commit_range": commit_range,
+            "diff_mode": diff_mode or ("range" if commit_range else "working_tree"),
+            "status_lines": [line for line in status_lines if line.strip()],
+            "diff_stat": "\n".join(diff_stat_lines).strip(),
+            "diff_text": diff_text,
+            "truncated": truncated,
+            "paths": paths,
+            "ssh_target": self._build_ssh_target(project_source),
+        }
+
+    def _build_git_diff_args(
+        self,
+        git_root: str,
+        commit_range: str,
+        diff_mode: str,
+        paths: list[str],
+        *,
+        stat_only: bool,
+    ) -> list[str]:
+        args = ["-C", git_root, "diff"]
+        if stat_only:
+            args.append("--stat")
+        else:
+            args.append("--unified=3")
+        normalized_mode = diff_mode or ("range" if commit_range else "working_tree")
+        if normalized_mode == "staged":
+            args.append("--cached")
+        elif commit_range:
+            args.append(commit_range)
+        if paths:
+            args.append("--")
+            args.extend(paths)
+        return args
+
+    async def _run_ssh_shell(
+        self,
+        project_source,
+        remote_script: str,
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        target = self._build_ssh_target(project_source)
+        if not target:
+            raise ValueError("SSH project source requires at least a host.")
+        args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-p", str(project_source.ssh.port or 22)]
+        auth_ref = str(project_source.ssh.auth_ref or "").strip()
+        if auth_ref:
+            args.extend(["-i", auth_ref])
+        args.extend([target, f"sh -lc {shlex.quote(remote_script)}"])
+        return await self._run_subprocess("ssh", args, timeout_seconds=timeout_seconds)
+
+    async def _run_subprocess(
+        self,
+        executable: str,
+        args: list[str],
+        *,
+        cwd: str | None = None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        try:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                [shutil.which(executable) or executable, *args],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+            )
+            stdout_text = completed.stdout or ""
+            stderr_text = completed.stderr or ""
+            exit_code = completed.returncode
+            timed_out = False
+        except subprocess.TimeoutExpired as exc:
+            stdout_text = exc.stdout or ""
+            stderr_text = exc.stderr or ""
+            exit_code = -1
+            timed_out = True
+        return {
+            "ok": exit_code == 0 and not timed_out,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+        }
+
+    def _build_ssh_target(self, project_source) -> str:
+        host = str(project_source.ssh.host or "").strip()
+        username = str(project_source.ssh.username or "").strip()
+        if not host:
+            return ""
+        return f"{username}@{host}" if username else host
 
     def _require_mcp_runtime(self) -> MCPRuntimeService:
         if self._mcp_runtime_service is None:
@@ -1591,6 +2758,96 @@ class ToolRuntimeService:
             lines.append("- None")
         return "\n".join(lines).strip()
 
+    def _build_code_review_debate_markdown(
+        self,
+        *,
+        title: str,
+        project_name: str,
+        approval_time: str,
+        approval_result: str,
+        agent_count: int,
+        report_sections: list[dict[str, Any]],
+        result_rows: list[Any],
+    ) -> str:
+        markdown_lines = [
+            f"# {title}",
+            "",
+            f"## 就《{project_name}》的辩论报告",
+            "",
+            f"- 审批时间: {approval_time}",
+            f"- 审批结果: {approval_result}",
+            f"- 参与agent数量: {agent_count}",
+            "",
+            "## 审批结果总览",
+            "",
+            self._build_code_review_result_summary_markdown(result_rows),
+        ]
+        for section in report_sections:
+            markdown_lines.extend(["", f"## {section['title']}", "", str(section["content"])])
+        return "\n".join(markdown_lines).strip()
+
+    def _build_code_review_result_summary_markdown(self, result_rows: list[Any]) -> str:
+        if not result_rows:
+            return "暂无审批结果摘要。"
+        lines = [
+            "| 类别 | 结果 | 提出Agent | 摘要 | 建议措施 |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for item in result_rows:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        self._escape_markdown_table_cell(self._code_review_category_label(item.get("category"))),
+                        self._escape_markdown_table_cell(str(item.get("title") or item.get("result") or "未命名结果")),
+                        self._escape_markdown_table_cell(str(item.get("proposer_agent") or item.get("agent") or "未标注")),
+                        self._escape_markdown_table_cell(str(item.get("summary") or item.get("detail") or "暂无摘要")),
+                        self._escape_markdown_table_cell(str(item.get("recommended_action") or item.get("action") or "待补充")),
+                    ]
+                )
+                + " |"
+            )
+        return "\n".join(lines)
+
+    def _build_code_review_category_sections(self, result_rows: list[Any]) -> str:
+        grouped: dict[str, list[dict[str, Any]]] = {
+            "严重问题": [],
+            "缺陷": [],
+            "隐患": [],
+            "可行": [],
+            "优秀": [],
+        }
+        for item in result_rows:
+            if not isinstance(item, dict):
+                continue
+            grouped[self._code_review_category_label(item.get("category"))].append(item)
+
+        section_lines: list[str] = []
+        for label, items in grouped.items():
+            section_lines.append(f"### {label}")
+            if not items:
+                section_lines.extend(["", "- None provided.", ""])
+                continue
+            section_lines.append("")
+            for item in items:
+                title = str(item.get("title") or item.get("result") or "未命名结果")
+                proposer = str(item.get("proposer_agent") or item.get("agent") or "未标注")
+                summary = str(item.get("summary") or item.get("detail") or "暂无摘要")
+                section_lines.append(f"- {title} | 提出Agent: {proposer} | {summary}")
+            section_lines.append("")
+        return "\n".join(section_lines).strip()
+
+    def _code_review_category_label(self, value: Any) -> str:
+        raw_value = str(value or "").strip()
+        if raw_value in CODE_REVIEW_RESULT_CATEGORY_LABELS:
+            return CODE_REVIEW_RESULT_CATEGORY_LABELS[raw_value]
+        return CODE_REVIEW_RESULT_CATEGORY_LABELS.get(raw_value.lower(), "隐患")
+
+    def _escape_markdown_table_cell(self, value: str) -> str:
+        return value.replace("|", "\\|").replace("\n", "<br>")
+
 
 def _build_excerpt(text: str, tokens: list[str], radius: int = 140) -> str:
     lowered = text.lower()
@@ -1613,6 +2870,78 @@ def _to_string_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _clamp_int(value: Any, *, minimum: int, maximum: int, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _clamp_float(value: Any, *, minimum: float, maximum: float, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
+    if len(value) <= max_chars:
+        return value, False
+    return value[:max_chars], True
+
+
+def _language_from_extension(extension: str) -> str:
+    mapping = {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".jsx": "javascript",
+        ".vue": "vue",
+        ".java": "java",
+        ".go": "go",
+        ".rs": "rust",
+        ".cs": "csharp",
+        ".cpp": "cpp",
+        ".c": "c",
+        ".h": "c",
+        ".hpp": "cpp",
+        ".json": "json",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".md": "markdown",
+        ".sql": "sql",
+        ".sh": "shell",
+        ".ps1": "powershell",
+        ".html": "html",
+        ".css": "css",
+        ".scss": "scss",
+    }
+    return mapping.get(extension.lower(), "other")
+
+
+def _join_remote_path(root_path: str, child_path: str) -> str:
+    normalized_root = root_path.replace("\\", "/").strip()
+    normalized_child = child_path.replace("\\", "/").strip()
+    if not normalized_child:
+        return normalized_root
+    if normalized_child.startswith("/"):
+        return normalized_child
+    return str(PurePosixPath(normalized_root) / normalized_child)
+
+
+def _relativize_remote_path(root_path: str, target_path: str) -> str:
+    normalized_root = root_path.replace("\\", "/").rstrip("/")
+    normalized_target = target_path.replace("\\", "/")
+    if normalized_target.startswith(f"{normalized_root}/"):
+        return normalized_target[len(normalized_root) + 1:]
+    if normalized_target == normalized_root:
+        return "."
+    return normalized_target
 
 
 def _lookup_path(payload: dict[str, Any], dotted_path: str) -> tuple[Any, bool]:

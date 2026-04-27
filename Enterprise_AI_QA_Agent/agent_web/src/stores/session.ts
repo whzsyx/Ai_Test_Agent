@@ -4,9 +4,12 @@ import { api } from "../services/api";
 import type {
   AgentDescriptor,
   ChatMessage,
+  CodeReviewDebateProgressMeta,
+  CodeReviewReportMeta,
   ExecutionEvent,
   ModeDescriptor,
   PendingInputQueueEntry,
+  PendingCompletionWorkerMeta,
   SessionDetail,
   SessionReplayResponse,
   SessionVerificationResponse,
@@ -338,6 +341,7 @@ export const useSessionStore = defineStore("session", {
     tools: [] as ToolDescriptor[],
     selectedAgentKey: "coordinator",
     selectedModeKey: "default",
+    pendingModeKeySelection: "",
     isBootstrapping: false,
     isSending: false,
     resolvingApprovalIds: [] as string[],
@@ -388,7 +392,9 @@ export const useSessionStore = defineStore("session", {
       return (approvalId: string) => state.resolvingApprovalIds.includes(approvalId);
     },
     workerDispatches(state): WorkerDispatchRecord[] {
-      const value = state.session?.metadata?.worker_dispatches;
+      const value =
+        state.session?.metadata?.worker_dispatches ??
+        state.session?.last_snapshot?.graph_state?.worker_dispatches;
       if (!Array.isArray(value)) {
         return [];
       }
@@ -400,6 +406,46 @@ export const useSessionStore = defineStore("session", {
         return null;
       }
       return value as WorkerFailureGuard;
+    },
+    codeReviewReportMeta(state): CodeReviewReportMeta | null {
+      const value = state.session?.metadata?.code_review_report;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      return value as CodeReviewReportMeta;
+    },
+    pendingCompletionWorkerMeta(state): PendingCompletionWorkerMeta | null {
+      const value = state.session?.metadata?.pending_completion_worker;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      return value as PendingCompletionWorkerMeta;
+    },
+    codeReviewDebateProgressMeta(state): CodeReviewDebateProgressMeta | null {
+      const value =
+        state.session?.metadata?.code_review_debate_progress ??
+        state.session?.last_snapshot?.graph_state?.code_review_debate_progress;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      return value as CodeReviewDebateProgressMeta;
+    },
+    codeReviewWorkerStats() {
+      const workerDispatches = this.workerDispatches;
+      const reviewerDispatches = workerDispatches.filter((item) => !item.is_completion_worker);
+      const completionDispatch = workerDispatches.find((item) => item.is_completion_worker) ?? null;
+      const runningCount = reviewerDispatches.filter((item) => item.status === "running").length;
+      const waitingApprovalCount = reviewerDispatches.filter((item) => item.status === "waiting_approval").length;
+      const completedCount = reviewerDispatches.filter((item) => item.status === "completed").length;
+      const failedCount = reviewerDispatches.filter((item) => item.status === "failed").length;
+      return {
+        reviewer_count: reviewerDispatches.length,
+        running_count: runningCount,
+        waiting_approval_count: waitingApprovalCount,
+        completed_count: completedCount,
+        failed_count: failedCount,
+        completion_dispatch: completionDispatch,
+      };
     },
     latestSnapshotGraphState(state): Record<string, unknown> {
       const value = state.session?.last_snapshot?.graph_state;
@@ -510,6 +556,7 @@ export const useSessionStore = defineStore("session", {
       }
     },
     applySession(session: SessionDetail) {
+      const previousSessionId = this.session?.id || "";
       const mergedMessages = mergeSessionMessages(
         session.messages,
         this.messages,
@@ -518,7 +565,18 @@ export const useSessionStore = defineStore("session", {
       this.session = session;
       this.messages = mergedMessages;
       this.selectedAgentKey = session.selected_agent ?? this.selectedAgentKey;
-      this.selectedModeKey = session.mode_key || this.selectedModeKey;
+      const sessionModeKey = String(session.mode_key || "").trim();
+      if (previousSessionId && previousSessionId !== session.id) {
+        this.pendingModeKeySelection = "";
+      }
+      if (this.pendingModeKeySelection) {
+        this.selectedModeKey = this.pendingModeKeySelection;
+        if (sessionModeKey === this.pendingModeKeySelection) {
+          this.pendingModeKeySelection = "";
+        }
+        return;
+      }
+      this.selectedModeKey = sessionModeKey || this.selectedModeKey;
     },
     connectEvents() {
       if (!this.session) {
@@ -626,6 +684,28 @@ export const useSessionStore = defineStore("session", {
         return;
       }
       this.selectedModeKey = normalized;
+      this.pendingModeKeySelection = normalized;
+      if (!this.session) {
+        return;
+      }
+      void this.persistSessionPreferences({ mode_key: normalized });
+    },
+    async persistSessionPreferences(payload: {
+      mode_key?: string | null;
+      preferred_model?: string | null;
+      selected_agent?: string | null;
+      metadata?: Record<string, unknown> | null;
+    }) {
+      if (!this.session) {
+        return;
+      }
+      this.error = "";
+      try {
+        const session = await api.updateSession(this.session.id, payload);
+        this.applySession(session);
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : "Failed to update session preferences.";
+      }
     },
     async sendMessage(content: string) {
       if (!this.session || !content.trim()) {

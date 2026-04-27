@@ -38,6 +38,7 @@ from src.schemas.session import (
     SessionVerificationResponse,
     ToolApprovalRequest,
     ToolApprovalStatus,
+    UpdateSessionRequest,
 )
 
 
@@ -107,6 +108,48 @@ class SessionService:
         if session is None:
             raise KeyError(session_id)
         return await self._to_detail(session)
+
+    async def update_session(self, session_id: str, payload: UpdateSessionRequest) -> SessionDetail:
+        session = await self._require_session(session_id)
+        mode_changed = False
+        metadata_changed = False
+
+        if payload.mode_key is not None:
+            mode = self._mode_registry.resolve(payload.mode_key)
+            if session.mode_key != mode.key:
+                session.mode_key = mode.key
+                mode_changed = True
+            if payload.selected_agent is None:
+                session.selected_agent = mode.default_agent_key
+
+        if payload.selected_agent is not None:
+            session.selected_agent = payload.selected_agent
+
+        if payload.preferred_model is not None:
+            session.preferred_model = payload.preferred_model
+
+        if payload.metadata is not None:
+            session.metadata.update(payload.metadata)
+            metadata_changed = True
+
+        await self._store.save_session(session)
+        await self._store.append_event(
+            session_id,
+            self._make_event(
+                session_id,
+                "session.preferences_updated",
+                {
+                    "message": "Session execution preferences were updated.",
+                    "mode_key": session.mode_key,
+                    "selected_agent": session.selected_agent or "",
+                    "preferred_model": session.preferred_model or "",
+                    "mode_changed": mode_changed,
+                    "metadata_changed": metadata_changed,
+                },
+            ),
+        )
+        refreshed = await self._require_session(session_id)
+        return await self._to_detail(refreshed)
 
     async def list_events(self, session_id: str) -> list[ExecutionEvent]:
         await self._require_session(session_id)
@@ -1095,6 +1138,10 @@ class SessionService:
         latest_session = await self._require_session(session_id)
         latest_queue_entries = self._get_pending_input_queue(latest_session)
         latest_control = self._ensure_control_metadata(latest_session)
+        session.metadata = {
+            **dict(latest_session.metadata),
+            **dict(session.metadata),
+        }
         self._set_pending_input_queue(session, latest_queue_entries)
         session.status = self._session_status_from_runtime_result(runtime_result)
         control = self._ensure_control_metadata(session)

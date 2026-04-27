@@ -14,6 +14,7 @@ import type {
   ModelConfigPublic,
   ModelConfigUpdateRequest,
   SessionDetail,
+  SessionSummary,
   SessionReplayResponse,
   ToolArtifactRecord,
   ToolApprovalRequest,
@@ -187,8 +188,25 @@ export const api = {
       }),
     });
   },
+  listSessions(): Promise<SessionSummary[]> {
+    return request("/api/v1/sessions");
+  },
   getSession(sessionId: string): Promise<SessionDetail> {
     return request(`/api/v1/sessions/${sessionId}`);
+  },
+  updateSession(
+    sessionId: string,
+    payload: {
+      mode_key?: string | null;
+      preferred_model?: string | null;
+      selected_agent?: string | null;
+      metadata?: Record<string, unknown> | null;
+    },
+  ): Promise<SessionDetail> {
+    return request(`/api/v1/sessions/${sessionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
   },
   listApprovals(sessionId: string): Promise<ToolApprovalRequest[]> {
     return request(`/api/v1/sessions/${sessionId}/approvals`);

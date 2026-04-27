@@ -4,6 +4,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
+from src.infrastructure.storage_utils import make_json_safe
 from src.runtime.execution_logging import truncate_text
 from src.schemas.observation import ObservationCategory, ObservationRecord, ObservationScope
 
@@ -127,10 +128,16 @@ class ObservationRuntimeService:
         if summary:
             content_parts.append(f"summary={summary}")
         if output:
-            output_excerpt = truncate_text(json.dumps(output, ensure_ascii=True, default=str), 600)
+            output_excerpt = truncate_text(
+                json.dumps(make_json_safe(output), ensure_ascii=False),
+                600,
+            )
             content_parts.append(f"output={output_excerpt}")
         if context_bundle:
-            context_excerpt = truncate_text(json.dumps(context_bundle, ensure_ascii=True, default=str), 240)
+            context_excerpt = truncate_text(
+                json.dumps(make_json_safe(context_bundle), ensure_ascii=False),
+                240,
+            )
             content_parts.append(f"context={context_excerpt}")
         return "\n".join(content_parts)
 

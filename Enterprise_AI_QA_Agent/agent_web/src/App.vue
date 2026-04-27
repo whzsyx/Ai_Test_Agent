@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import CodeReviewProgressPanel from "./components/chat/CodeReviewProgressPanel.vue";
 import EventConsolePanel from "./components/chat/EventConsolePanel.vue";
 import SnapshotTracePanel from "./components/chat/SnapshotTracePanel.vue";
 import ToolActivityPanel from "./components/chat/ToolActivityPanel.vue";
@@ -38,6 +39,7 @@ const runtimeConsoleTabs = [
   { key: "snapshot", label: "快照追踪" },
   { key: "jobs", label: "工具任务" },
   { key: "verification", label: "验证结果" },
+  { key: "review_progress", label: "审批进程" },
 ] as const;
 
 const runtimeLines = computed(() => {
@@ -166,6 +168,7 @@ onBeforeUnmount(() => {
               </div>
               <EventConsolePanel v-else-if="runtimeConsoleTab === 'events'" />
               <ToolActivityPanel v-else-if="runtimeConsoleTab === 'tools'" />
+              <CodeReviewProgressPanel v-else-if="runtimeConsoleTab === 'review_progress'" />
               <SnapshotTracePanel v-else-if="runtimeConsoleTab === 'snapshot'" />
               <ToolJobPanel v-else-if="runtimeConsoleTab === 'jobs'" />
               <VerificationPanel v-else-if="runtimeConsoleTab === 'verification'" />

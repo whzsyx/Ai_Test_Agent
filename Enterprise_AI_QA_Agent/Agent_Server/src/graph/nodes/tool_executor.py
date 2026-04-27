@@ -7,6 +7,7 @@ from src.application.permissions.permission_service import PermissionService
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.runtime.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
 from src.graph.state import AgentGraphState
+from src.infrastructure.storage_utils import make_json_safe
 from src.registry.tools import ToolRegistry
 from src.runtime.execution_logging import append_graph_event
 from src.schemas.tool_runtime import ModelToolCall, ToolExecutionRecord
@@ -370,7 +371,7 @@ def build_tool_message(record: ToolExecutionRecord) -> dict[str, Any]:
         "role": "tool",
         "tool_call_id": record.call_id,
         "name": record.tool_key,
-        "content": json.dumps(payload, ensure_ascii=False),
+        "content": json.dumps(make_json_safe(payload), ensure_ascii=False),
     }
 
 

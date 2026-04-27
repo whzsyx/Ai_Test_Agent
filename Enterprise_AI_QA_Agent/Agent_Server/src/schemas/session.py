@@ -159,6 +159,13 @@ class CreateSessionRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class UpdateSessionRequest(BaseModel):
+    mode_key: str | None = None
+    preferred_model: str | None = None
+    selected_agent: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class InputAttachment(BaseModel):
     kind: str = "file"
     name: str

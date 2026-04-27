@@ -1,179 +1,282 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 
-const activeTab = ref('all');
-const activeDropdown = ref<string | null>(null);
+import { api } from "../services/api";
+import type { SessionDetail, SessionSummary, WorkerDispatchRecord } from "../types";
 
-const tabs = [
-  { id: 'all', label: '全部任务' },
-  { id: 'running', label: '运行中 (1)' },
-  { id: 'queued', label: '排队中 (1)' },
-  { id: 'completed', label: '已完成 (2)' }
-];
+type TaskTab = "all" | "running" | "completed" | "failed";
 
-function toggleDropdown(id: string) {
-  if (activeDropdown.value === id) {
-    activeDropdown.value = null;
-  } else {
-    activeDropdown.value = id;
+interface TaskRow {
+  session: SessionDetail;
+  workerDispatches: WorkerDispatchRecord[];
+  isBackgroundChild: boolean;
+  parentSessionId: string;
+}
+
+const router = useRouter();
+
+const loading = ref(false);
+const error = ref("");
+const activeTab = ref<TaskTab>("all");
+const search = ref("");
+const rows = ref<TaskRow[]>([]);
+
+const filteredRows = computed(() => {
+  const query = search.value.trim().toLowerCase();
+  return rows.value.filter((row) => {
+    if (activeTab.value === "running" && !["running", "waiting_approval"].includes(row.session.status)) {
+      return false;
+    }
+    if (activeTab.value === "completed" && row.session.status !== "completed") {
+      return false;
+    }
+    if (activeTab.value === "failed" && row.session.status !== "failed") {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    return [
+      row.session.id,
+      row.session.title,
+      row.session.mode_key,
+      row.session.selected_agent || "",
+      row.parentSessionId,
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+});
+
+const tabs = computed(() => {
+  const all = rows.value.length;
+  const running = rows.value.filter((row) =>
+    ["running", "waiting_approval"].includes(row.session.status),
+  ).length;
+  const completed = rows.value.filter((row) => row.session.status === "completed").length;
+  const failed = rows.value.filter((row) => row.session.status === "failed").length;
+  return [
+    { id: "all" as TaskTab, label: `All (${all})` },
+    { id: "running" as TaskTab, label: `Running (${running})` },
+    { id: "completed" as TaskTab, label: `Completed (${completed})` },
+    { id: "failed" as TaskTab, label: `Failed (${failed})` },
+  ];
+});
+
+function workerDispatchesFromSession(session: SessionDetail): WorkerDispatchRecord[] {
+  const rawValue = session.metadata?.worker_dispatches;
+  if (!Array.isArray(rawValue)) {
+    return [];
+  }
+  return rawValue.filter(
+    (item): item is WorkerDispatchRecord =>
+      typeof item === "object" && item !== null,
+  );
+}
+
+function parentSessionIdFromSession(session: SessionDetail): string {
+  return String(session.metadata?.parent_session_id || "").trim();
+}
+
+function statusLabel(status: string): string {
+  if (status === "waiting_approval") return "Waiting Approval";
+  if (status === "completed") return "Completed";
+  if (status === "failed") return "Failed";
+  if (status === "running") return "Running";
+  if (status === "interrupted") return "Interrupted";
+  return "Idle";
+}
+
+function modeLabel(row: TaskRow): string {
+  if (row.session.mode_key === "code_review") {
+    return "Code Review";
+  }
+  if (row.isBackgroundChild) {
+    return "Background Worker";
+  }
+  return String(row.session.mode_key || "default");
+}
+
+function taskKind(row: TaskRow): string {
+  return row.isBackgroundChild ? "Child Session" : "Parent Session";
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function workerStats(row: TaskRow): string {
+  if (!row.workerDispatches.length) {
+    return row.isBackgroundChild ? "No child workers" : "No worker dispatches";
+  }
+  const running = row.workerDispatches.filter((item) =>
+    ["running", "waiting_approval"].includes(String(item.status || "").trim()),
+  ).length;
+  const failed = row.workerDispatches.filter((item) => String(item.status || "").trim() === "failed").length;
+  const completed = row.workerDispatches.length - running - failed;
+  return `${completed} completed / ${running} running / ${failed} failed`;
+}
+
+function openReport(row: TaskRow) {
+  void router.push("/reports");
+}
+
+async function loadTasks() {
+  loading.value = true;
+  error.value = "";
+  try {
+    const summaries = await api.listSessions();
+    const candidateSummaries = summaries
+      .filter(
+        (item: SessionSummary) =>
+          item.mode_key === "code_review" || item.session_mode === "background_task",
+      )
+      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+      .slice(0, 24);
+
+    const details = await Promise.all(
+      candidateSummaries.map((item) => api.getSession(item.id)),
+    );
+
+    rows.value = details.map((session) => {
+      const parentSessionId = parentSessionIdFromSession(session);
+      return {
+        session,
+        workerDispatches: workerDispatchesFromSession(session),
+        isBackgroundChild: session.session_mode === "background_task",
+        parentSessionId,
+      };
+    });
+  } catch (loadError) {
+    error.value = loadError instanceof Error ? loadError.message : "Failed to load tasks.";
+  } finally {
+    loading.value = false;
   }
 }
 
-// Click outside to close dropdowns (simplified for demo)
-function closeDropdowns() {
-  activeDropdown.value = null;
-}
+onMounted(() => {
+  void loadTasks();
+});
 </script>
 
 <template>
-  <section class="view-page task-page" @click="closeDropdowns">
+  <section class="view-page task-page">
     <header class="page-head">
       <div class="head-content">
         <h2>Task Pool</h2>
-        <p class="head-desc">任务池与执行队列，支持批量管理与实时状态监控。</p>
+        <p class="head-desc">
+          Real background sessions and code review runs from the current workspace.
+        </p>
       </div>
       <div class="head-actions">
         <div class="search-box">
           <i class="fa-solid fa-search"></i>
-          <input type="text" placeholder="Search tasks by ID or name..." />
+          <input v-model="search" type="text" placeholder="Search by session, title, mode..." />
         </div>
-        <button class="secondary-btn"><i class="fa-solid fa-stop"></i> 停止所有</button>
-        <button class="primary-btn"><i class="fa-solid fa-play"></i> 运行选中</button>
+        <button class="primary-btn" :disabled="loading" @click="loadTasks">
+          <i class="fa-solid fa-rotate-right"></i>
+          Refresh
+        </button>
       </div>
     </header>
 
-    <div class="task-layout">
-      <!-- 过滤器与统计 -->
+    <div v-if="error" class="empty-state error-state">
+      <strong>Failed to load task pool.</strong>
+      <p>{{ error }}</p>
+    </div>
+
+    <div v-else class="task-layout">
       <div class="task-toolbar">
         <div class="task-tabs">
-          <button 
-            v-for="tab in tabs" 
+          <button
+            v-for="tab in tabs"
             :key="tab.id"
-            class="tab-btn" 
+            class="tab-btn"
             :class="{ active: activeTab === tab.id }"
             @click="activeTab = tab.id"
           >
             {{ tab.label }}
           </button>
         </div>
-        
+
         <div class="task-filters">
-          <select class="filter-select">
-            <option value="all">所有测试类型</option>
-            <option value="single">单量执行</option>
-            <option value="batch">批量执行</option>
-            <option value="api">接口安全测试</option>
-          </select>
-          <select class="filter-select">
-            <option value="all">所有模型</option>
-            <option value="deepseek">DeepSeek-V3</option>
-            <option value="gpt4o">GPT-4o</option>
-          </select>
+          <span class="filter-pill">Latest {{ rows.length }} sessions</span>
+          <span class="filter-pill">Mode: code_review + background_task</span>
         </div>
       </div>
 
-      <!-- 任务列表 -->
-      <div class="table-container">
+      <div v-if="loading && !rows.length" class="empty-state table-empty">
+        <strong>Loading task sessions...</strong>
+        <p>The dashboard is syncing recent task sessions.</p>
+      </div>
+
+      <div v-else-if="!filteredRows.length" class="empty-state table-empty">
+        <strong>No matching tasks.</strong>
+        <p>Try another filter or start a code review task first.</p>
+      </div>
+
+      <div v-else class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <th class="col-checkbox"><input type="checkbox" /></th>
-              <th class="col-id">Case ID</th>
-              <th class="col-name">任务名称 (Title)</th>
-              <th class="col-type">测试类型</th>
-              <th class="col-model">Agent / 模型</th>
-              <th class="col-status">当前状态</th>
-              <th class="col-actions align-right">操作</th>
+              <th class="col-id">Session</th>
+              <th class="col-name">Title</th>
+              <th class="col-type">Task Kind</th>
+              <th class="col-model">Agent / Mode</th>
+              <th class="col-status">Status</th>
+              <th class="col-stats">Worker Stats</th>
+              <th class="col-actions align-right">Action</th>
             </tr>
           </thead>
           <tbody>
-            <tr class="row-active">
-              <td class="col-checkbox"><input type="checkbox" /></td>
-              <td class="col-id mono strong">CASE-1024</td>
-              <td class="col-name strong">验证标准登录流程 (正常账号)</td>
-              <td class="col-type"><span class="badge badge-gray">单量执行</span></td>
-              <td class="col-model mono">DeepSeek-V3</td>
+            <tr
+              v-for="row in filteredRows"
+              :key="row.session.id"
+              :class="{
+                'row-active': row.session.status === 'running' || row.session.status === 'waiting_approval',
+                'row-error': row.session.status === 'failed',
+              }"
+            >
+              <td class="col-id mono strong">
+                {{ row.session.id.slice(0, 8) }}
+                <div v-if="row.parentSessionId" class="sub-meta">parent={{ row.parentSessionId.slice(0, 8) }}</div>
+              </td>
+              <td class="col-name">
+                <div class="strong">{{ row.session.title }}</div>
+                <div class="sub-meta">{{ formatDateTime(row.session.updated_at) }}</div>
+              </td>
+              <td class="col-type">
+                <span class="badge badge-gray">{{ taskKind(row) }}</span>
+              </td>
+              <td class="col-model">
+                <div class="mono">{{ row.session.selected_agent || "-" }}</div>
+                <div class="sub-meta">{{ modeLabel(row) }}</div>
+              </td>
               <td class="col-status">
-                <span class="status-indicator status-running">
-                  <span class="pulse-dot"></span> 浏览器操作中
+                <span class="status-indicator" :class="`status-${row.session.status}`">
+                  <span v-if="row.session.status === 'running' || row.session.status === 'waiting_approval'" class="pulse-dot"></span>
+                  <i
+                    v-else
+                    class="fa-solid"
+                    :class="row.session.status === 'completed' ? 'fa-check' : row.session.status === 'failed' ? 'fa-xmark' : 'fa-clock'"
+                  ></i>
+                  {{ statusLabel(row.session.status) }}
                 </span>
               </td>
-              <td class="col-actions align-right">
-                <button class="action-btn danger" title="停止任务"><i class="fa-solid fa-stop"></i></button>
-              </td>
-            </tr>
-            
-            <tr>
-              <td class="col-checkbox"><input type="checkbox" /></td>
-              <td class="col-id mono strong">CASE-1025</td>
-              <td class="col-name strong">登录异常输入边界 Fuzzing</td>
-              <td class="col-type"><span class="badge badge-gray">批量执行</span></td>
-              <td class="col-model mono text-muted">-</td>
-              <td class="col-status">
-                <span class="status-indicator status-queued">
-                  <i class="fa-regular fa-clock"></i> 排队中
-                </span>
+              <td class="col-stats">
+                <div>{{ workerStats(row) }}</div>
+                <div class="sub-meta">{{ row.workerDispatches.length }} dispatch records</div>
               </td>
               <td class="col-actions align-right">
-                <div class="dropdown-wrapper" @click.stop>
-                  <button class="action-btn" title="更多选项" @click="toggleDropdown('task-2')"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                  <div class="dropdown-menu" :class="{ show: activeDropdown === 'task-2' }">
-                    <button class="dropdown-item"><i class="fa-regular fa-copy"></i> 克隆任务</button>
-                    <button class="dropdown-item"><i class="fa-solid fa-code"></i> 查看配置详情</button>
-                    <div class="dropdown-divider"></div>
-                    <button class="dropdown-item danger"><i class="fa-regular fa-trash-can"></i> 删除任务</button>
-                  </div>
-                </div>
-              </td>
-            </tr>
-            
-            <tr>
-              <td class="col-checkbox"><input type="checkbox" /></td>
-              <td class="col-id mono strong">API-902</td>
-              <td class="col-name strong">越权漏洞探测 (/api/admin/users)</td>
-              <td class="col-type"><span class="badge badge-gray">接口安全测试</span></td>
-              <td class="col-model mono">GPT-4o</td>
-              <td class="col-status">
-                <span class="status-indicator status-success">
-                  <i class="fa-solid fa-check"></i> 已完成
-                </span>
-              </td>
-              <td class="col-actions align-right">
-                <div class="dropdown-wrapper" @click.stop>
-                  <button class="action-btn" title="更多选项" @click="toggleDropdown('task-3')"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                  <div class="dropdown-menu" :class="{ show: activeDropdown === 'task-3' }">
-                    <button class="dropdown-item"><i class="fa-solid fa-rotate-right"></i> 重新运行</button>
-                    <button class="dropdown-item"><i class="fa-regular fa-copy"></i> 克隆任务</button>
-                    <button class="dropdown-item"><i class="fa-solid fa-code"></i> 查看配置详情</button>
-                    <div class="dropdown-divider"></div>
-                    <button class="dropdown-item danger"><i class="fa-regular fa-trash-can"></i> 删除任务</button>
-                  </div>
-                </div>
-              </td>
-            </tr>
-            
-            <tr class="row-error">
-              <td class="col-checkbox"><input type="checkbox" /></td>
-              <td class="col-id mono strong">CASE-1021</td>
-              <td class="col-name strong">密码重置流程测试</td>
-              <td class="col-type"><span class="badge badge-gray">单量执行</span></td>
-              <td class="col-model mono">DeepSeek-V3</td>
-              <td class="col-status">
-                <span class="status-indicator status-error">
-                  <i class="fa-solid fa-xmark"></i> 验证失败
-                </span>
-              </td>
-              <td class="col-actions align-right">
-                <div class="dropdown-wrapper" @click.stop>
-                  <button class="action-btn" title="更多选项" @click="toggleDropdown('task-4')"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                  <div class="dropdown-menu" :class="{ show: activeDropdown === 'task-4' }">
-                    <button class="dropdown-item"><i class="fa-solid fa-rotate-right"></i> 重新运行</button>
-                    <button class="dropdown-item"><i class="fa-regular fa-copy"></i> 克隆任务</button>
-                    <button class="dropdown-item"><i class="fa-solid fa-code"></i> 查看配置详情</button>
-                    <div class="dropdown-divider"></div>
-                    <button class="dropdown-item danger"><i class="fa-regular fa-trash-can"></i> 删除任务</button>
-                  </div>
-                </div>
+                <button class="action-btn" title="Open reports" @click="openReport(row)">
+                  <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                </button>
               </td>
             </tr>
           </tbody>
@@ -241,14 +344,7 @@ function closeDropdowns() {
   background: var(--surface);
   color: var(--text);
   font-size: 14px;
-  width: 240px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.search-box input:focus {
-  outline: none;
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  width: 280px;
 }
 
 .task-layout {
@@ -289,39 +385,29 @@ function closeDropdowns() {
   color: var(--muted);
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.tab-btn:hover {
-  color: var(--text);
 }
 
 .tab-btn.active {
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .task-filters {
   display: flex;
-  gap: 12px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.filter-select {
-  height: 32px;
-  padding: 0 32px 0 12px;
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E") no-repeat right 8px center/16px;
-  appearance: none;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.filter-select:focus {
-  outline: none;
-  border-color: var(--blue);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .table-container {
@@ -357,10 +443,6 @@ function closeDropdowns() {
   vertical-align: middle;
 }
 
-.data-table tbody tr {
-  transition: background-color 0.2s ease;
-}
-
 .data-table tbody tr:hover {
   background: var(--surface-soft);
 }
@@ -373,21 +455,43 @@ function closeDropdowns() {
   background: rgba(239, 68, 68, 0.02);
 }
 
-/* Columns */
-.col-checkbox { width: 48px; text-align: center; }
-.col-id { width: 140px; }
-.col-name { min-width: 280px; }
-.col-type { width: 160px; }
-.col-model { width: 160px; }
-.col-status { width: 180px; }
-.col-actions { width: 100px; white-space: nowrap; }
+.col-id {
+  width: 140px;
+}
 
-.align-right { text-align: right; }
-.mono { font-family: var(--font-mono, monospace); }
-.strong { font-weight: 600; }
-.text-muted { color: var(--muted); }
+.col-name {
+  min-width: 280px;
+}
 
-/* Badges & Status */
+.col-type,
+.col-model,
+.col-status,
+.col-stats {
+  width: 180px;
+}
+
+.col-actions {
+  width: 80px;
+}
+
+.align-right {
+  text-align: right;
+}
+
+.mono {
+  font-family: var(--font-mono, monospace);
+}
+
+.strong {
+  font-weight: 600;
+}
+
+.sub-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .badge {
   display: inline-block;
   padding: 4px 10px;
@@ -410,10 +514,23 @@ function closeDropdowns() {
   font-weight: 600;
 }
 
-.status-running { color: #2563eb; }
-.status-queued { color: #6b7280; }
-.status-success { color: #16a34a; }
-.status-error { color: #dc2626; }
+.status-running,
+.status-waiting_approval {
+  color: #2563eb;
+}
+
+.status-completed {
+  color: #16a34a;
+}
+
+.status-failed {
+  color: #dc2626;
+}
+
+.status-idle,
+.status-interrupted {
+  color: #6b7280;
+}
 
 .pulse-dot {
   width: 8px;
@@ -424,12 +541,9 @@ function closeDropdowns() {
 }
 
 .pulse-dot::after {
-  content: '';
+  content: "";
   position: absolute;
-  top: -4px;
-  left: -4px;
-  right: -4px;
-  bottom: -4px;
+  inset: -4px;
   border-radius: 50%;
   border: 2px solid #3b82f6;
   animation: pulse 1.5s infinite cubic-bezier(0.4, 0, 0.2, 1);
@@ -437,84 +551,14 @@ function closeDropdowns() {
 }
 
 @keyframes pulse {
-  0% { transform: scale(0.5); opacity: 1; }
-  100% { transform: scale(1.5); opacity: 0; }
-}
-
-/* Actions */
-.dropdown-wrapper {
-  position: relative;
-  display: inline-block;
-}
-
-.dropdown-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  width: 160px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 10px 24px rgba(0,0,0,0.1);
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  z-index: 100;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-8px);
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.dropdown-menu.show {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-.dropdown-item {
-  width: 100%;
-  text-align: left;
-  padding: 8px 12px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: background-color 0.2s;
-}
-
-.dropdown-item i {
-  color: var(--muted);
-  font-size: 14px;
-  width: 16px;
-  text-align: center;
-}
-
-.dropdown-item:hover {
-  background: var(--surface-muted);
-}
-
-.dropdown-item.danger {
-  color: #dc2626;
-}
-
-.dropdown-item.danger i {
-  color: #dc2626;
-}
-
-.dropdown-item.danger:hover {
-  background: rgba(239, 68, 68, 0.05);
-}
-
-.dropdown-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 4px 0;
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
 }
 
 .action-btn {
@@ -528,7 +572,6 @@ function closeDropdowns() {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.2s ease;
 }
 
 .action-btn:hover {
@@ -536,8 +579,37 @@ function closeDropdowns() {
   color: var(--text);
 }
 
-.action-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
+.empty-state {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 240px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--muted);
+  margin: 8px;
+}
+
+.table-empty {
+  margin: 20px;
+}
+
+.error-state {
   color: #dc2626;
+}
+
+@media (max-width: 960px) {
+  .page-head,
+  .task-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .search-box input {
+    width: 100%;
+  }
 }
 </style>
