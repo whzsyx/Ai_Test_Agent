@@ -4,6 +4,7 @@ import { computed, ref } from "vue";
 import { api } from "../../services/api";
 import { useSessionStore } from "../../stores/session";
 import type { ChatMessage, SessionDetail, ToolApprovalRequest, WorkerDispatchRecord } from "../../types";
+import { formatServerDateTime } from "../../utils/datetime";
 
 const sessionStore = useSessionStore();
 
@@ -92,9 +93,7 @@ function shortId(value: string | undefined) {
 function formatTime(value: string | undefined) {
   const normalized = String(value || "").trim();
   if (!normalized) return "未更新";
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return normalized;
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatServerDateTime(normalized, normalized);
 }
 
 function approvalHeadline(approval: ToolApprovalRequest) {
@@ -273,7 +272,7 @@ function closeTaskDetail() {
         v-else-if="pendingCompletionWorker?.description && !workerStats.completion_dispatch"
         class="review-progress-reason"
       >
-        总结 Agent 已排队，等待所有辩论轮次结束后自动启动：{{ pendingCompletionWorker.description }}
+        总结 Agent 已排队，等待主持人预算内的辩论阶段全部完成后自动启动：{{ pendingCompletionWorker.description }}
       </p>
       <div v-else class="settings-empty">当前还没有报告摘要。</div>
     </section>
@@ -419,18 +418,8 @@ function closeTaskDetail() {
 
 .review-progress-card--tasks,
 .review-progress-card--approvals {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.review-progress-card--tasks {
-  min-height: 560px;
-  max-height: 560px;
-}
-
-.review-progress-card--approvals {
-  min-height: 360px;
-  max-height: 560px;
+  display: flex;
+  flex-direction: column;
 }
 
 .review-progress-section-head,
@@ -458,19 +447,14 @@ function closeTaskDetail() {
 }
 
 .review-progress-scroll {
-  max-height: 460px;
+  max-height: min(460px, 58vh);
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
 }
 
-.review-progress-card--tasks .review-progress-scroll,
-.review-progress-card--approvals .review-progress-scroll {
-  max-height: 100%;
-}
-
 .review-progress-scroll--compact {
-  max-height: 260px;
+  max-height: min(260px, 36vh);
 }
 
 .review-progress-item {

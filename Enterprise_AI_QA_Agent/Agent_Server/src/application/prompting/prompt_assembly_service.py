@@ -234,6 +234,10 @@ class PromptAssemblyService:
         denied_tools = list(state.get("denied_tool_keys") or [])
         plan_steps = list(state.get("plan_steps") or [])
         context_bundle = dict(state.get("context_bundle") or {})
+        attachments = [
+            item for item in (context_bundle.get("attachments") or [])
+            if isinstance(item, dict)
+        ]
         attachment_count = int(len(context_bundle.get("attachments") or []))
         input_envelope = dict(context_bundle.get("input_envelope") or {})
         input_routing = dict(context_bundle.get("input_routing") or {})
@@ -302,6 +306,36 @@ class PromptAssemblyService:
                 metadata={"context_keys": sorted(context_bundle.keys())},
             ),
         ]
+        if attachments:
+            attachment_lines = []
+            for index, item in enumerate(attachments[:6], start=1):
+                name = str(item.get("name") or f"attachment-{index}").strip()
+                kind = str(item.get("kind") or "file").strip()
+                content_type = str(item.get("content_type") or "unknown").strip()
+                uri = str(item.get("uri") or "").strip()
+                excerpt = " ".join(str(item.get("text_excerpt") or "").split())
+                if len(excerpt) > 400:
+                    excerpt = excerpt[:397] + "..."
+                line = (
+                    f"- #{index} {name}\n"
+                    f"  kind: {kind}\n"
+                    f"  content_type: {content_type}\n"
+                    f"  uri: {uri or 'none'}\n"
+                    f"  excerpt: {excerpt or 'none'}"
+                )
+                attachment_lines.append(line)
+            sections.append(
+                PromptSection(
+                    key="attachments",
+                    title="Attachments",
+                    source="context_builder.attachments",
+                    channel="runtime_message",
+                    cache_scope="dynamic",
+                    priority=60,
+                    content="\n".join(attachment_lines),
+                    metadata={"attachment_count": len(attachments)},
+                ),
+            )
         return sections
 
     def _render_system_prompt(self, sections: Sequence[PromptSection]) -> str:

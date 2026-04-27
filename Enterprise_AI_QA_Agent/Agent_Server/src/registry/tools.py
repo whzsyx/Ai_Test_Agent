@@ -740,16 +740,9 @@ class ToolRegistry:
                                 "minimum": 2,
                                 "maximum": 5,
                             },
-                            "cross_review_rounds": {
-                                "type": "integer",
-                                "description": "Deprecated low-level override for cross-review rebuttal rounds. Prefer debate_time_budget_minutes so the moderator can derive rounds automatically.",
-                                "minimum": 1,
-                                "maximum": 4,
-                                "default": 2,
-                            },
                             "debate_time_budget_minutes": {
                                 "type": "integer",
-                                "description": "Optional moderator time budget for the whole debate. The coordinator derives actual rebuttal rounds from project size and model context, capped at 60 minutes.",
+                                "description": "Optional moderator time budget for the whole debate. The coordinator derives the debate pace from project size and model context, capped at 60 minutes.",
                                 "minimum": 5,
                                 "maximum": 60,
                                 "default": 20,

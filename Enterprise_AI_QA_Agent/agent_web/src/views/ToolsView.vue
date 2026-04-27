@@ -160,6 +160,10 @@ function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+function openApiDocUpload() {
+  window.dispatchEvent(new CustomEvent("qa-agent:open-api-doc-upload"));
+}
 </script>
 
 <template>
@@ -179,7 +183,7 @@ function fileToBase64(file: File): Promise<string> {
           </button>
         </template>
         <template v-else-if="activeTab === 'apidocs'">
-          <button class="primary-btn"><i class="fa-solid fa-plus"></i> 添加文档源</button>
+          <button class="primary-btn" @click="openApiDocUpload"><i class="fa-solid fa-plus"></i> 添加文档源</button>
         </template>
       </div>
     </div>
@@ -768,4 +772,3 @@ function fileToBase64(file: File): Promise<string> {
   }
 }
 </style>
-

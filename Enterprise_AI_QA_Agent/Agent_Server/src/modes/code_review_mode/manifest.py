@@ -3,8 +3,8 @@ from __future__ import annotations
 MODE_MANIFEST = {
     "key": "code_review",
     "name": "代码审批模式",
-    "summary": "面向项目级代码审批、辩论式风险识别与结构化审批报告输出。",
-    "description": "代码审批模式内置代码审批团、分轮辩论和总结 Agent，聚焦项目范围、差异影响、风险、可行措施与审批结论。",
+    "summary": "面向项目级代码审批、时间预算驱动的辩论式风险识别与结构化审批报告输出。",
+    "description": "代码审批模式内置代码审批团和总结 Agent，由主持人根据项目规模与模型上下文分配辩论时间预算，聚焦项目范围、差异影响、风险、可行措施与审批结论。",
     "category": "testing",
     "is_test_mode": True,
     "default_agent_key": "code-review-agent",

@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 
 import type { ExecutionEvent, PendingInputQueueEntry } from "../../types";
 import { useSessionStore } from "../../stores/session";
+import { formatServerTime } from "../../utils/datetime";
 
 const sessionStore = useSessionStore();
 const eventsExpanded = ref(false);
@@ -210,7 +211,7 @@ function eventToneLabel(event: ExecutionEvent) {
         >
           <div class="event-console-queue-head">
             <strong>{{ queueEntryTitle(item) }}</strong>
-            <span>{{ new Date(item.created_at).toLocaleTimeString("zh-CN", { hour12: false }) }}</span>
+            <span>{{ formatServerTime(item.created_at) }}</span>
           </div>
           <div class="event-console-queue-meta">
             <span class="registry-tag queue">{{ queueBehaviorLabel(item.queue_behavior) }}</span>
@@ -244,7 +245,7 @@ function eventToneLabel(event: ExecutionEvent) {
                 {{ item.context_eligible ? "可回填" : "仅展示" }}
               </span>
             </div>
-            <span>{{ new Date(item.created_at).toLocaleTimeString("zh-CN", { hour12: false }) }}</span>
+            <span>{{ formatServerTime(item.created_at) }}</span>
           </div>
           <p>{{ item.content }}</p>
         </article>
@@ -271,7 +272,7 @@ function eventToneLabel(event: ExecutionEvent) {
             <strong>{{ event.type }}</strong>
             <span class="registry-tag" :class="eventToneClass(event)">{{ eventToneLabel(event) }}</span>
           </div>
-          <span>{{ new Date(event.timestamp).toLocaleTimeString("zh-CN", { hour12: false }) }}</span>
+          <span>{{ formatServerTime(event.timestamp) }}</span>
         </div>
         <p>{{ eventMessage(event) }}</p>
       </article>

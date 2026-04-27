@@ -1837,6 +1837,30 @@ class ToolRuntimeService:
             maximum=60,
             default=0,
         )
+        legacy_round_request = _clamp_int(
+            arguments.get("cross_review_rounds"),
+            minimum=1,
+            maximum=4,
+            default=0,
+        )
+        if legacy_round_request <= 0:
+            legacy_round_request = _clamp_int(
+                arguments.get("debate_round_count"),
+                minimum=1,
+                maximum=4,
+                default=0,
+            )
+        if requested_budget <= 0 and legacy_round_request > 0:
+            # Backward compatibility for older callers that still drive the
+            # debate by round count. We translate the legacy round request into
+            # a moderator time budget, then continue through the same
+            # time-budget path as newer callers.
+            requested_budget = {
+                1: 15,
+                2: 28,
+                3: 42,
+                4: 55,
+            }.get(legacy_round_request, 28)
         tree_summary = bootstrap.get("tree_summary") if isinstance(bootstrap.get("tree_summary"), dict) else {}
         diff_summary = bootstrap.get("diff_summary") if isinstance(bootstrap.get("diff_summary"), dict) else {}
 

@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 
 import { api } from "../services/api";
 import type { SessionDetail, SessionSummary, WorkerDispatchRecord } from "../types";
+import { formatServerDateTime, serverDateTimestamp } from "../utils/datetime";
 
 type TaskTab = "all" | "running" | "completed" | "failed";
 
@@ -58,10 +59,10 @@ const tabs = computed(() => {
   const completed = rows.value.filter((row) => row.session.status === "completed").length;
   const failed = rows.value.filter((row) => row.session.status === "failed").length;
   return [
-    { id: "all" as TaskTab, label: `All (${all})` },
-    { id: "running" as TaskTab, label: `Running (${running})` },
-    { id: "completed" as TaskTab, label: `Completed (${completed})` },
-    { id: "failed" as TaskTab, label: `Failed (${failed})` },
+    { id: "all" as TaskTab, label: `全部（${all}）` },
+    { id: "running" as TaskTab, label: `运行中（${running}）` },
+    { id: "completed" as TaskTab, label: `已完成（${completed}）` },
+    { id: "failed" as TaskTab, label: `失败（${failed}）` },
   ];
 });
 
@@ -81,46 +82,42 @@ function parentSessionIdFromSession(session: SessionDetail): string {
 }
 
 function statusLabel(status: string): string {
-  if (status === "waiting_approval") return "Waiting Approval";
-  if (status === "completed") return "Completed";
-  if (status === "failed") return "Failed";
-  if (status === "running") return "Running";
-  if (status === "interrupted") return "Interrupted";
-  return "Idle";
+  if (status === "waiting_approval") return "待审批";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "running") return "运行中";
+  if (status === "interrupted") return "已中断";
+  return "空闲";
 }
 
 function modeLabel(row: TaskRow): string {
   if (row.session.mode_key === "code_review") {
-    return "Code Review";
+    return "代码审批";
   }
   if (row.isBackgroundChild) {
-    return "Background Worker";
+    return "后台子任务";
   }
-  return String(row.session.mode_key || "default");
+  return String(row.session.mode_key || "默认模式");
 }
 
 function taskKind(row: TaskRow): string {
-  return row.isBackgroundChild ? "Child Session" : "Parent Session";
+  return row.isBackgroundChild ? "子会话" : "父会话";
 }
 
 function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatServerDateTime(value, value);
 }
 
 function workerStats(row: TaskRow): string {
   if (!row.workerDispatches.length) {
-    return row.isBackgroundChild ? "No child workers" : "No worker dispatches";
+    return row.isBackgroundChild ? "暂无子任务记录" : "暂无派发记录";
   }
   const running = row.workerDispatches.filter((item) =>
     ["running", "waiting_approval"].includes(String(item.status || "").trim()),
   ).length;
   const failed = row.workerDispatches.filter((item) => String(item.status || "").trim() === "failed").length;
   const completed = row.workerDispatches.length - running - failed;
-  return `${completed} completed / ${running} running / ${failed} failed`;
+  return `已完成 ${completed} / 运行中 ${running} / 失败 ${failed}`;
 }
 
 function openReport(row: TaskRow) {
@@ -137,7 +134,7 @@ async function loadTasks() {
         (item: SessionSummary) =>
           item.mode_key === "code_review" || item.session_mode === "background_task",
       )
-      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+      .sort((a, b) => serverDateTimestamp(b.updated_at) - serverDateTimestamp(a.updated_at))
       .slice(0, 24);
 
     const details = await Promise.all(
@@ -154,7 +151,7 @@ async function loadTasks() {
       };
     });
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : "Failed to load tasks.";
+    error.value = loadError instanceof Error ? loadError.message : "加载任务列表失败。";
   } finally {
     loading.value = false;
   }
@@ -169,25 +166,25 @@ onMounted(() => {
   <section class="view-page task-page">
     <header class="page-head">
       <div class="head-content">
-        <h2>Task Pool</h2>
+        <h2>任务池</h2>
         <p class="head-desc">
-          Real background sessions and code review runs from the current workspace.
+          展示当前工作区的真实后台会话与代码审批任务。
         </p>
       </div>
       <div class="head-actions">
         <div class="search-box">
           <i class="fa-solid fa-search"></i>
-          <input v-model="search" type="text" placeholder="Search by session, title, mode..." />
+          <input v-model="search" type="text" placeholder="按会话 ID、标题、模式搜索..." />
         </div>
         <button class="primary-btn" :disabled="loading" @click="loadTasks">
           <i class="fa-solid fa-rotate-right"></i>
-          Refresh
+          刷新
         </button>
       </div>
     </header>
 
     <div v-if="error" class="empty-state error-state">
-      <strong>Failed to load task pool.</strong>
+      <strong>任务池加载失败。</strong>
       <p>{{ error }}</p>
     </div>
 
@@ -206,32 +203,32 @@ onMounted(() => {
         </div>
 
         <div class="task-filters">
-          <span class="filter-pill">Latest {{ rows.length }} sessions</span>
-          <span class="filter-pill">Mode: code_review + background_task</span>
+          <span class="filter-pill">最近 {{ rows.length }} 条会话</span>
+          <span class="filter-pill">模式：code_review + background_task</span>
         </div>
       </div>
 
       <div v-if="loading && !rows.length" class="empty-state table-empty">
-        <strong>Loading task sessions...</strong>
-        <p>The dashboard is syncing recent task sessions.</p>
+        <strong>正在加载任务会话...</strong>
+        <p>工作台正在同步最近的任务数据。</p>
       </div>
 
       <div v-else-if="!filteredRows.length" class="empty-state table-empty">
-        <strong>No matching tasks.</strong>
-        <p>Try another filter or start a code review task first.</p>
+        <strong>没有匹配的任务。</strong>
+        <p>请尝试其他筛选条件，或先发起一次代码审批任务。</p>
       </div>
 
       <div v-else class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <th class="col-id">Session</th>
-              <th class="col-name">Title</th>
-              <th class="col-type">Task Kind</th>
-              <th class="col-model">Agent / Mode</th>
-              <th class="col-status">Status</th>
-              <th class="col-stats">Worker Stats</th>
-              <th class="col-actions align-right">Action</th>
+              <th class="col-id">会话</th>
+              <th class="col-name">标题</th>
+              <th class="col-type">任务类型</th>
+              <th class="col-model">Agent / 模式</th>
+              <th class="col-status">状态</th>
+              <th class="col-stats">执行统计</th>
+              <th class="col-actions align-right">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -245,7 +242,7 @@ onMounted(() => {
             >
               <td class="col-id mono strong">
                 {{ row.session.id.slice(0, 8) }}
-                <div v-if="row.parentSessionId" class="sub-meta">parent={{ row.parentSessionId.slice(0, 8) }}</div>
+                <div v-if="row.parentSessionId" class="sub-meta">父会话={{ row.parentSessionId.slice(0, 8) }}</div>
               </td>
               <td class="col-name">
                 <div class="strong">{{ row.session.title }}</div>
@@ -271,10 +268,10 @@ onMounted(() => {
               </td>
               <td class="col-stats">
                 <div>{{ workerStats(row) }}</div>
-                <div class="sub-meta">{{ row.workerDispatches.length }} dispatch records</div>
+                <div class="sub-meta">{{ row.workerDispatches.length }} 条派发记录</div>
               </td>
               <td class="col-actions align-right">
-                <button class="action-btn" title="Open reports" @click="openReport(row)">
+                <button class="action-btn" title="打开报告页" @click="openReport(row)">
                   <i class="fa-solid fa-arrow-up-right-from-square"></i>
                 </button>
               </td>

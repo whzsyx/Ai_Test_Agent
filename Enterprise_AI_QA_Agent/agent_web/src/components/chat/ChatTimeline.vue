@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import type { ChatMessage } from "../../types";
+import { formatServerDateTime } from "../../utils/datetime";
 
 const props = defineProps<{
   messages: ChatMessage[];
@@ -578,7 +579,7 @@ function escapeHtml(content: string) {
       <div class="conversation-entry-meta">
         <span>{{ labelForMessage(message) }}</span>
         <span>
-          {{ new Date(message.created_at).toLocaleString("zh-CN") }}
+          {{ formatServerDateTime(message.created_at) }}
           <template v-if="deliveryLabel(message)">
             - {{ deliveryLabel(message) }}
           </template>

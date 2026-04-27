@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import { useSessionStore } from "../../stores/session";
+import { formatServerTime } from "../../utils/datetime";
 
 const sessionStore = useSessionStore();
 
@@ -46,7 +47,7 @@ const rows = computed(() => {
       <span class="registry-tag light">
         {{
           snapshot?.created_at
-            ? new Date(snapshot.created_at).toLocaleTimeString("zh-CN", { hour12: false })
+            ? formatServerTime(snapshot.created_at, "鏆傛棤蹇収")
             : "暂无快照"
         }}
       </span>

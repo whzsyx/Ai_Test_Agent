@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import { useSessionStore } from "../../stores/session";
+import { serverDateTimestamp } from "../../utils/datetime";
 
 const sessionStore = useSessionStore();
 
@@ -9,7 +10,7 @@ const jobs = computed(() => sessionStore.recentToolJobs);
 const artifacts = computed(() =>
   sessionStore.sessionArtifacts
     .slice()
-    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .sort((a, b) => serverDateTimestamp(b.created_at) - serverDateTimestamp(a.created_at))
     .slice(0, 6),
 );
 

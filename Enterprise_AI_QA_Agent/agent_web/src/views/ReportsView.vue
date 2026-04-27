@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import { api } from "../services/api";
+import { formatServerDateTime, serverDateTimestamp } from "../utils/datetime";
 import type {
   SessionDetail,
   SessionSummary,
@@ -19,6 +20,17 @@ interface ReportEntry {
   reportSession: SessionDetail | null;
   reportArtifacts: ToolArtifactRecord[];
 }
+
+interface ReportsCachePayload {
+  cachedAt: string;
+  selectedSessionId: string;
+  reports: ReportEntry[];
+}
+
+const REPORTS_CACHE_KEY = "enterprise-ai-qa:reports-cache";
+const REPORTS_CACHE_TTL_MS = 2 * 60 * 1000;
+
+let reportsMemoryCache: ReportsCachePayload | null = null;
 
 const loading = ref(false);
 const error = ref("");
@@ -113,11 +125,11 @@ function reportSessionIdFromEntry(entry: {
 }
 
 function gradeForSession(entry: ReportEntry): string {
-  if (entry.session.status === "failed") return "C";
-  if (entry.session.status === "running" || entry.session.status === "waiting_approval") return "In Progress";
-  if (entry.verifications.some((item) => item.status === "failed")) return "B";
-  if (entry.verifications.some((item) => item.status === "partial")) return "B";
-  return "A";
+  if (entry.session.status === "failed") return "较差";
+  if (entry.session.status === "running" || entry.session.status === "waiting_approval") return "进行中";
+  if (entry.verifications.some((item) => item.status === "failed")) return "需关注";
+  if (entry.verifications.some((item) => item.status === "partial")) return "需关注";
+  return "良好";
 }
 
 function gradeTone(grade: string): string {
@@ -127,34 +139,105 @@ function gradeTone(grade: string): string {
 }
 
 function statusLabel(status: string): string {
-  if (status === "waiting_approval") return "Waiting Approval";
-  if (status === "completed") return "Completed";
-  if (status === "failed") return "Failed";
-  if (status === "running") return "Running";
-  if (status === "interrupted") return "Interrupted";
-  return "Idle";
+  if (status === "waiting_approval") return "待审批";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "running") return "运行中";
+  if (status === "interrupted") return "已中断";
+  return "空闲";
 }
 
 function artifactLabel(artifact: ToolArtifactRecord): string {
-  return artifact.label || artifact.artifact_type || "artifact";
+  return artifact.label || artifact.artifact_type || "产物";
 }
 
 function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatServerDateTime(value, value);
 }
 
-async function loadReports() {
+function normalizeSelectedSessionId(nextReports: ReportEntry[], preferredId = ""): string {
+  const preferred = String(preferredId || "").trim();
+  if (!nextReports.length) {
+    return "";
+  }
+  if (preferred && nextReports.some((item) => item.session.id === preferred)) {
+    return preferred;
+  }
+  return nextReports[0]?.session.id || "";
+}
+
+function isReportsCacheFresh(payload: ReportsCachePayload | null): boolean {
+  if (!payload) {
+    return false;
+  }
+  const cachedAt = Date.parse(String(payload.cachedAt || ""));
+  if (Number.isNaN(cachedAt)) {
+    return false;
+  }
+  return Date.now() - cachedAt <= REPORTS_CACHE_TTL_MS;
+}
+
+function readReportsCache(): ReportsCachePayload | null {
+  if (reportsMemoryCache) {
+    return reportsMemoryCache;
+  }
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(REPORTS_CACHE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as ReportsCachePayload;
+    if (!parsed || !Array.isArray(parsed.reports)) {
+      return null;
+    }
+    reportsMemoryCache = parsed;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeReportsCache(nextReports: ReportEntry[], nextSelectedSessionId: string) {
+  const payload: ReportsCachePayload = {
+    cachedAt: new Date().toISOString(),
+    selectedSessionId: normalizeSelectedSessionId(nextReports, nextSelectedSessionId),
+    reports: nextReports,
+  };
+  reportsMemoryCache = payload;
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(REPORTS_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota / availability errors and keep memory cache only.
+  }
+}
+
+function hydrateReportsFromCache(payload: ReportsCachePayload) {
+  reports.value = payload.reports;
+  selectedSessionId.value = normalizeSelectedSessionId(payload.reports, payload.selectedSessionId);
+}
+
+async function loadReports(forceRefresh = false) {
+  const cached = forceRefresh ? null : readReportsCache();
+  if (cached) {
+    hydrateReportsFromCache(cached);
+    if (isReportsCacheFresh(cached)) {
+      return;
+    }
+  }
+
   loading.value = true;
   error.value = "";
   try {
     const summaries = await api.listSessions();
     const relevantSummaries = summaries
       .filter((item: SessionSummary) => item.mode_key === "code_review")
-      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+      .sort((a, b) => serverDateTimestamp(b.updated_at) - serverDateTimestamp(a.updated_at))
       .slice(0, 12);
 
     const details = await Promise.all(
@@ -208,9 +291,10 @@ async function loadReports() {
     );
 
     reports.value = fullEntries;
-    selectedSessionId.value = fullEntries[0]?.session.id || "";
+    selectedSessionId.value = normalizeSelectedSessionId(fullEntries, selectedSessionId.value);
+    writeReportsCache(fullEntries, selectedSessionId.value);
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : "Failed to load reports.";
+    error.value = loadError instanceof Error ? loadError.message : "加载报告失败。";
   } finally {
     loading.value = false;
   }
@@ -225,38 +309,38 @@ onMounted(() => {
   <section class="view-page report-page">
     <header class="page-head">
       <div class="head-content">
-        <h2>Reports</h2>
+        <h2>报告中心</h2>
         <p class="head-desc">
-          Live code review sessions, debate summaries, and report artifacts.
+          查看代码审批会话、辩论总结和最终报告产物。
         </p>
       </div>
       <div class="head-actions">
-        <button class="primary-btn" :disabled="loading" @click="loadReports">
+        <button class="primary-btn" :disabled="loading" @click="loadReports(true)">
           <i class="fa-solid fa-rotate-right"></i>
-          Refresh
+          刷新
         </button>
       </div>
     </header>
 
     <div v-if="error" class="empty-state error-state">
-      <strong>Failed to load reports.</strong>
+      <strong>报告加载失败。</strong>
       <p>{{ error }}</p>
     </div>
 
     <div v-else-if="loading && !reports.length" class="empty-state">
-      <strong>Loading reports...</strong>
-      <p>The workbench is collecting recent code review sessions.</p>
+      <strong>正在加载报告...</strong>
+      <p>工作台正在汇总最近的代码审批会话。</p>
     </div>
 
     <div v-else-if="!reports.length" class="empty-state">
-      <strong>No code review reports yet.</strong>
-      <p>Start a code review run and the completed report sessions will appear here.</p>
+      <strong>暂时还没有代码审批报告。</strong>
+      <p>发起一次代码审批后，已完成的报告会显示在这里。</p>
     </div>
 
     <div v-else class="report-layout">
       <aside class="report-sidebar">
         <div class="sidebar-header">
-          <h3>Code Review Runs</h3>
+          <h3>代码审批批次</h3>
         </div>
         <div class="batch-list">
           <article
@@ -279,11 +363,11 @@ onMounted(() => {
             <div class="batch-stats">
               <span class="stat pass">
                 <i class="fa-solid fa-layer-group"></i>
-                {{ entry.workerDispatches.length }} workers
+                {{ entry.workerDispatches.length }} 个任务
               </span>
               <span class="stat fail">
                 <i class="fa-solid fa-shield-halved"></i>
-                {{ entry.verifications.length }} verifications
+                {{ entry.verifications.length }} 条校验
               </span>
             </div>
           </article>
@@ -307,27 +391,27 @@ onMounted(() => {
 
         <div class="report-kpis">
           <article class="kpi-card">
-            <span class="kpi-label">Workers</span>
+            <span class="kpi-label">审查任务</span>
             <strong>{{ selectedWorkerSummary.total }}</strong>
             <p>
-              {{ selectedWorkerSummary.completed }} completed /
-              {{ selectedWorkerSummary.running }} running /
-              {{ selectedWorkerSummary.failed }} failed
+              已完成 {{ selectedWorkerSummary.completed }} /
+              运行中 {{ selectedWorkerSummary.running }} /
+              失败 {{ selectedWorkerSummary.failed }}
             </p>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">Artifacts</span>
+            <span class="kpi-label">报告产物</span>
             <strong>{{ selectedReport.reportArtifacts.length + selectedReport.artifacts.length }}</strong>
-            <p>Combined parent and summary-session artifacts.</p>
+            <p>合并展示父会话和总结会话的产物。</p>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">Report Session</span>
-            <strong>{{ selectedReport.reportSession ? "Ready" : "Pending" }}</strong>
+            <span class="kpi-label">报告会话</span>
+            <strong>{{ selectedReport.reportSession ? "已就绪" : "待生成" }}</strong>
             <p>
               {{
                 selectedReport.reportSession
                   ? `#${selectedReport.reportSession.id.slice(0, 8)}`
-                  : "Summary agent has not finished yet."
+                  : "总结 Agent 尚未完成。"
               }}
             </p>
           </article>
@@ -336,21 +420,21 @@ onMounted(() => {
         <div class="detail-content">
           <section class="content-section">
             <div class="section-header">
-              <h4>Summary</h4>
+              <h4>摘要</h4>
               <span class="subtitle mono">code_review_report</span>
             </div>
             <div class="summary-card">
               <p v-if="selectedReportBody" class="summary-body">{{ selectedReportBody }}</p>
               <p v-else class="summary-body muted">
-                No inline report body is available yet. The report session may still be running.
+                暂无内联报告正文，报告会话可能仍在运行中。
               </p>
             </div>
           </section>
 
           <section class="content-section">
             <div class="section-header">
-              <h4>Workers</h4>
-              <span class="subtitle mono">reviewer debate sessions</span>
+              <h4>审查任务</h4>
+              <span class="subtitle mono">评审辩论会话</span>
             </div>
             <div class="worker-grid">
               <article
@@ -377,8 +461,8 @@ onMounted(() => {
 
           <section class="content-section">
             <div class="section-header">
-              <h4>Artifacts</h4>
-              <span class="subtitle mono">stored report outputs</span>
+              <h4>报告产物</h4>
+              <span class="subtitle mono">已存储的报告输出</span>
             </div>
             <div class="artifact-list">
               <article
@@ -400,8 +484,8 @@ onMounted(() => {
 
           <section class="content-section">
             <div class="section-header">
-              <h4>Verifications</h4>
-              <span class="subtitle mono">session verification results</span>
+              <h4>校验结果</h4>
+              <span class="subtitle mono">会话校验结果</span>
             </div>
             <div v-if="selectedReport.verifications.length" class="verification-list">
               <article
@@ -419,7 +503,7 @@ onMounted(() => {
               </article>
             </div>
             <div v-else class="summary-card">
-              <p class="summary-body muted">No verification results were recorded for this session.</p>
+              <p class="summary-body muted">当前会话还没有记录校验结果。</p>
             </div>
           </section>
         </div>

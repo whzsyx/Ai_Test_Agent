@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.api.routes.api_docs import router as api_docs_router
 from src.api.routes.health import router as health_router
 from src.api.routes.knowledge import router as knowledge_router
 from src.api.routes.registry import router as registry_router
@@ -21,6 +22,7 @@ from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
 from src.application.model_adapters import build_default_adapter_registry
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.documents.api_docs_service import ApiDocsService
 from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
 from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
@@ -77,6 +79,10 @@ async def lifespan(app: FastAPI):
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
     mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
     artifact_storage_service = ArtifactStorageService(settings=settings)
+    api_docs_service = ApiDocsService(
+        settings=settings,
+        artifact_storage_service=artifact_storage_service,
+    )
     memory_store = PostgresVectorMemoryStore(settings=settings)
     memory_runtime_service = MemoryRuntimeService(
         memory_store=memory_store,
@@ -152,6 +158,7 @@ async def lifespan(app: FastAPI):
     app.state.skill_runtime_service = skill_runtime_service
     app.state.mcp_runtime_service = mcp_runtime_service
     app.state.artifact_storage_service = artifact_storage_service
+    app.state.api_docs_service = api_docs_service
     app.state.memory_store = memory_store
     app.state.memory_runtime_service = memory_runtime_service
     app.state.session_backend = settings.session_backend
@@ -228,6 +235,7 @@ app.add_middleware(
 app.include_router(health_router, prefix=settings.api_v1_prefix)
 app.include_router(knowledge_router, prefix=settings.api_v1_prefix)
 app.include_router(registry_router, prefix=settings.api_v1_prefix)
+app.include_router(api_docs_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
 

@@ -657,3 +657,40 @@ export interface KnowledgeProjectDeleteResponse {
   deleted_counts: Record<string, number>;
   message: string;
 }
+
+export interface InputAttachment {
+  kind: string;
+  name: string;
+  uri?: string | null;
+  content_type?: string | null;
+  text_excerpt?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ApiDocRecord {
+  id: string;
+  title: string;
+  filename: string;
+  source: string;
+  format_label: string;
+  content_type: string;
+  size_bytes: number;
+  storage_uri: string;
+  bucket?: string | null;
+  object_name?: string | null;
+  endpoint_count?: number | null;
+  preview_available: boolean;
+  preview_truncated: boolean;
+  preview_text?: string | null;
+  preview_error?: string | null;
+  uploaded_at: string;
+  updated_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ApiDocUploadRequest {
+  filename: string;
+  content_base64: string;
+  source?: string;
+  title?: string | null;
+}

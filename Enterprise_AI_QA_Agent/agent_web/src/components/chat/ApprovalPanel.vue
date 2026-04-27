@@ -3,6 +3,7 @@ import { computed } from "vue";
 
 import type { ToolApprovalRequest } from "../../types";
 import { useSessionStore } from "../../stores/session";
+import { formatServerTime } from "../../utils/datetime";
 
 const sessionStore = useSessionStore();
 
@@ -55,7 +56,7 @@ function approvalKindLabel(approval: ToolApprovalRequest) {
 
 function approvalMetaLine(approval: ToolApprovalRequest) {
   const agentLabel = formatAgentLabel(approval.metadata?.selected_agent_key);
-  const timeLabel = new Date(approval.created_at).toLocaleTimeString("zh-CN", { hour12: false });
+  const timeLabel = formatServerTime(approval.created_at);
   return `${agentLabel} · ${timeLabel}`;
 }
 

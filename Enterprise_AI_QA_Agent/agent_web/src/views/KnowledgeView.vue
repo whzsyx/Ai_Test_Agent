@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { api } from "../services/api";
+import { formatServerDateTime } from "../utils/datetime";
 import type {
   KnowledgeGraphEdge,
   KnowledgeGraphNode,
@@ -415,7 +416,7 @@ function formatTime(value?: string | null) {
   if (!value) {
     return "--";
   }
-  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+  return formatServerDateTime(value, "--");
 }
 
 function truncateText(value: unknown, max = 72) {

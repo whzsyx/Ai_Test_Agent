@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 import mimetypes
 from copy import deepcopy
 from pathlib import Path
@@ -38,6 +39,52 @@ class ArtifactStorageService:
             tool_key=tool_key,
             cache=cache,
         )
+
+    async def store_uploaded_bytes(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        object_prefix: str,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            raise RuntimeError("Artifact storage backend is not enabled.")
+
+        safe_prefix = "/".join(self._safe_segment(part) for part in object_prefix.split("/") if part.strip())
+        safe_name = self._safe_segment(filename or "upload.bin")
+        object_name = f"{safe_prefix}/{safe_name}" if safe_prefix else safe_name
+        resolved_content_type = content_type or self._content_type(Path(filename))
+        client = self._minio_client()
+        self._ensure_bucket(client)
+        buffer = BytesIO(content)
+        client.put_object(
+            self._settings.minio_bucket,
+            object_name,
+            buffer,
+            length=len(content),
+            content_type=resolved_content_type,
+        )
+        minio_uri = f"minio://{self._settings.minio_bucket}/{object_name}"
+        return {
+            "path": minio_uri,
+            "uri": minio_uri,
+            "storage_backend": "minio",
+            "bucket": self._settings.minio_bucket,
+            "object_name": object_name,
+            "content_type": resolved_content_type,
+            "original_filename": filename,
+            "size_bytes": len(content),
+        }
+
+    async def delete_object_uri(self, uri: str) -> None:
+        if not self.enabled or not uri.startswith("minio://"):
+            return
+        bucket, object_name = self._parse_minio_uri(uri)
+        client = self._minio_client()
+        if not client.bucket_exists(bucket):
+            return
+        client.remove_object(bucket, object_name)
 
     def _rewrite_artifact_paths(
         self,
@@ -196,3 +243,10 @@ class ArtifactStorageService:
             path.unlink(missing_ok=True)
         except OSError:
             return
+
+    def _parse_minio_uri(self, uri: str) -> tuple[str, str]:
+        raw = uri.removeprefix("minio://")
+        bucket, _, object_name = raw.partition("/")
+        if not bucket or not object_name:
+            raise ValueError(f"Invalid MinIO URI: {uri}")
+        return bucket, object_name

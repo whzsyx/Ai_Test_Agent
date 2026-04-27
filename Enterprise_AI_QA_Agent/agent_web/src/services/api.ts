@@ -1,5 +1,7 @@
 import type {
   AgentDescriptor,
+  ApiDocRecord,
+  ApiDocUploadRequest,
   ConversationResponse,
   EmailConfigPublic,
   EmailConfigCreateRequest,
@@ -14,6 +16,7 @@ import type {
   ModelConfigPublic,
   ModelConfigUpdateRequest,
   SessionDetail,
+  InputAttachment,
   SessionSummary,
   SessionReplayResponse,
   ToolArtifactRecord,
@@ -229,13 +232,32 @@ export const api = {
     sessionId: string,
     content: string,
     modeKey?: string,
+    attachments: InputAttachment[] = [],
   ): Promise<ConversationResponse> {
     return request(`/api/v1/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify({
         content,
         mode_key: modeKey || null,
+        attachments,
       }),
+    });
+  },
+  listApiDocs(): Promise<ApiDocRecord[]> {
+    return request("/api/v1/registry/api-docs");
+  },
+  getApiDoc(docId: string): Promise<ApiDocRecord> {
+    return request(`/api/v1/registry/api-docs/${encodeURIComponent(docId)}`);
+  },
+  uploadApiDoc(payload: ApiDocUploadRequest): Promise<ApiDocRecord> {
+    return request("/api/v1/registry/api-docs/upload", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteApiDoc(docId: string): Promise<{ ok: boolean; deleted_id: string }> {
+    return request(`/api/v1/registry/api-docs/${encodeURIComponent(docId)}`, {
+      method: "DELETE",
     });
   },
   interruptSession(sessionId: string, reason?: string): Promise<SessionDetail> {

@@ -1065,12 +1065,12 @@ class CoordinatorRuntimeService:
             }
             worker.prompt = (
                 f"{worker.prompt}\n\n"
-                f"Peer findings bundle from round {source_round_index}:\n"
+                f"第 {source_round_index} 轮同伴结论汇总：\n"
                 f"{peer_bundle}\n\n"
-                "Execution constraints:\n"
-                "- Debate the peer findings in this bundle before opening new files.\n"
-                "- Only read additional files if you need one precise piece of evidence to support or refute a claim.\n"
-                "- Explicitly reference peer finding ids or reviewer names in your rebuttal.\n"
+                "执行约束：\n"
+                "- 先围绕这份同伴结论汇总展开攻防，再决定是否需要补充读取文件。\n"
+                "- 只有在你需要一条精确证据来支持或反驳某条结论时，才允许额外读取文件。\n"
+                "- 在反驳或支持时，请明确引用 peer finding id 或评审官名称。\n"
             )
 
             child_session = await self._session_service.create_session(

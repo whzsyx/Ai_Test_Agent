@@ -1,12 +1,14 @@
 import { defineStore } from "pinia";
 
 import { api } from "../services/api";
+import { serverDateTimestamp } from "../utils/datetime";
 import type {
   AgentDescriptor,
   ChatMessage,
   CodeReviewDebateProgressMeta,
   CodeReviewReportMeta,
   ExecutionEvent,
+  InputAttachment,
   ModeDescriptor,
   PendingInputQueueEntry,
   PendingCompletionWorkerMeta,
@@ -470,7 +472,10 @@ export const useSessionStore = defineStore("session", {
       return typeof value === "string" ? value : "";
     },
     recentToolJobs(state): ToolJobRecord[] {
-      return state.toolJobs.slice().sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, 8);
+      return state.toolJobs
+        .slice()
+        .sort((a, b) => serverDateTimestamp(b.updated_at) - serverDateTimestamp(a.updated_at))
+        .slice(0, 8);
     },
     transcriptSummary(state): TranscriptSummaryView {
       const fromReplay = state.replayMeta?.metadata?.transcript_summary;
@@ -707,12 +712,12 @@ export const useSessionStore = defineStore("session", {
         this.error = error instanceof Error ? error.message : "Failed to update session preferences.";
       }
     },
-    async sendMessage(content: string) {
-      if (!this.session || !content.trim()) {
+    async sendMessage(content: string, attachments: InputAttachment[] = []) {
+      const trimmedContent = content.trim();
+      if (!this.session || (!trimmedContent && attachments.length === 0)) {
         return;
       }
 
-      const trimmedContent = content.trim();
       const optimisticMessage: ChatMessage = {
         id: `temp-user-${Date.now()}`,
         role: "user",
@@ -720,6 +725,8 @@ export const useSessionStore = defineStore("session", {
         created_at: new Date().toISOString(),
         metadata: {
           delivery_status: "pending",
+          attachment_count: attachments.length,
+          attachments,
         },
       };
       const optimisticAssistantMessage = createOptimisticAssistantMessage();
@@ -732,6 +739,7 @@ export const useSessionStore = defineStore("session", {
           this.session.id,
           trimmedContent,
           this.selectedModeKey,
+          attachments,
         );
         this.applySession(response.session);
         this.activity = [...response.events.slice().reverse(), ...this.activity].slice(0, 50);

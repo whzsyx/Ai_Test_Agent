@@ -146,7 +146,7 @@ class AgentRegistry:
                     key="code-review-agent",
                     name="Code Review Agent",
                     role="coordinator",
-                    summary="Coordinate code review debate rounds, launch reviewer agents, and produce approval-ready output.",
+                    summary="Coordinate time-budgeted code review debates, launch reviewer agents, and produce approval-ready output.",
                     description="Dedicated mode coordinator for code review workflows. It should launch the code-review-orchestrator first, then supervise reviewer debate progress instead of reading repository files directly.",
                     supported_tools=[
                         "code-review-orchestrator",
