@@ -35,6 +35,7 @@ from src.schemas.session import (
     SessionReplayResponse,
     SessionStatus,
     SessionSummary,
+    SessionSummaryPage,
     SessionVerificationResponse,
     ToolApprovalRequest,
     ToolApprovalStatus,
@@ -70,6 +71,29 @@ class SessionService:
     async def list_sessions(self) -> list[SessionSummary]:
         sessions = await self._store.list_sessions()
         return [await self._to_summary(item) for item in sessions]
+
+    async def list_sessions_page(
+        self,
+        limit: int = 10,
+        offset: int = 0,
+        mode_key: str | None = None,
+    ) -> SessionSummaryPage:
+        normalized_limit = max(1, min(int(limit or 10), 100))
+        normalized_offset = max(int(offset or 0), 0)
+        normalized_mode_key = str(mode_key or "").strip() or None
+        sessions = await self._store.list_sessions(
+            limit=normalized_limit + 1,
+            offset=normalized_offset,
+            mode_key=normalized_mode_key,
+        )
+        has_more = len(sessions) > normalized_limit
+        visible = sessions[:normalized_limit]
+        return SessionSummaryPage(
+            items=[await self._to_summary(item) for item in visible],
+            limit=normalized_limit,
+            offset=normalized_offset,
+            has_more=has_more,
+        )
 
     async def create_session(self, payload: CreateSessionRequest) -> SessionDetail:
         now = datetime.utcnow()

@@ -37,8 +37,13 @@ class PostgresSessionStore:
     async def get_session(self, session_id: str) -> SessionRecord | None:
         return await asyncio.to_thread(self._get_session_sync, session_id, True)
 
-    async def list_sessions(self) -> list[SessionRecord]:
-        return await asyncio.to_thread(self._list_sessions_sync)
+    async def list_sessions(
+        self,
+        limit: int | None = None,
+        offset: int = 0,
+        mode_key: str | None = None,
+    ) -> list[SessionRecord]:
+        return await asyncio.to_thread(self._list_sessions_sync, limit, offset, mode_key)
 
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         await asyncio.to_thread(self._append_event_sync, session_id, event)
@@ -273,15 +278,29 @@ class PostgresSessionStore:
                     messages = [_message_from_row(item) for item in (cur.fetchall() or [])]
         return _session_from_row(row, messages)
 
-    def _list_sessions_sync(self) -> list[SessionRecord]:
+    def _list_sessions_sync(
+        self,
+        limit: int | None = None,
+        offset: int = 0,
+        mode_key: str | None = None,
+    ) -> list[SessionRecord]:
+        query = f"""
+            SELECT * FROM {self._settings.postgres_session_table}
+            {"WHERE mode_key = %s" if mode_key else ""}
+            ORDER BY updated_at DESC
+        """
+        params: list[object] = []
+        if mode_key:
+            params.append(mode_key)
+        if limit is not None:
+            query += " LIMIT %s OFFSET %s"
+            params = [*params, max(int(limit or 0), 0), max(int(offset or 0), 0)]
         with postgres_connect(self._settings) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT * FROM {self._settings.postgres_session_table}
-                    ORDER BY updated_at DESC
-                    """
-                )
+                if params:
+                    cur.execute(query, params)
+                else:
+                    cur.execute(query)
                 rows = cur.fetchall() or []
         return [_session_from_row(item, []) for item in rows]
 

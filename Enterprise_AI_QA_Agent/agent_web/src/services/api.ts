@@ -19,6 +19,7 @@ import type {
   InputAttachment,
   UploadedAttachmentRecord,
   SessionSummary,
+  SessionSummaryPage,
   SessionReplayResponse,
   ToolArtifactRecord,
   ToolApprovalRequest,
@@ -194,6 +195,16 @@ export const api = {
   },
   listSessions(): Promise<SessionSummary[]> {
     return request("/api/v1/sessions");
+  },
+  listSessionsPage(limit = 10, offset = 0, modeKey?: string): Promise<SessionSummaryPage> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    if (modeKey) {
+      params.set("mode_key", modeKey);
+    }
+    return request(`/api/v1/sessions?${params.toString()}`);
   },
   getSession(sessionId: string): Promise<SessionDetail> {
     return request(`/api/v1/sessions/${sessionId}`);

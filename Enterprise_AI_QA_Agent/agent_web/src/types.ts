@@ -438,6 +438,13 @@ export interface SessionSummary {
   updated_at: string;
 }
 
+export interface SessionSummaryPage {
+  items: SessionSummary[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export interface SessionDetail {
   id: string;
   title: string;

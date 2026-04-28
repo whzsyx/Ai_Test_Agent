@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useMessage } from "naive-ui";
 
 import { api } from "../../../services/api";
-import { formatServerDateTime } from "../../../utils/datetime";
 import type { ApiDocRecord } from "../../../types";
+import { formatServerDateTime } from "../../../utils/datetime";
+
+const toast = useMessage();
 
 const docs = ref<ApiDocRecord[]>([]);
 const loading = ref(false);
 const error = ref("");
-const message = ref("");
 const selectedDoc = ref<ApiDocRecord | null>(null);
 const previewOpen = ref(false);
 const previewLoading = ref(false);
 const deletingId = ref("");
 const uploadOpen = ref(false);
 const uploadLoading = ref(false);
-const uploadError = ref("");
-const uploadMessage = ref("");
 const uploadFile = ref<File | null>(null);
 const uploadTitle = ref("");
 
@@ -36,8 +36,6 @@ function handleOpenUpload() {
   uploadOpen.value = true;
   uploadFile.value = null;
   uploadTitle.value = "";
-  uploadError.value = "";
-  uploadMessage.value = "";
 }
 
 function handleExternalOpenUpload() {
@@ -46,6 +44,11 @@ function handleExternalOpenUpload() {
 
 function closeUpload() {
   uploadOpen.value = false;
+}
+
+function closePreview() {
+  previewOpen.value = false;
+  selectedDoc.value = null;
 }
 
 function onUploadFileChange(event: Event) {
@@ -79,12 +82,11 @@ async function loadDocs() {
 
 async function submitUpload() {
   if (!uploadFile.value) {
-    uploadError.value = "请选择要上传的文档文件";
+    toast.error("请选择要上传的文档文件");
     return;
   }
+
   uploadLoading.value = true;
-  uploadError.value = "";
-  uploadMessage.value = "";
   try {
     const contentBase64 = await fileToBase64(uploadFile.value);
     await api.uploadApiDoc({
@@ -93,13 +95,15 @@ async function submitUpload() {
       source: "tools_api_docs",
       title: uploadTitle.value.trim() || null,
     });
-    uploadMessage.value = "文档已上传到 MinIO，并已加入 API 文档管理。";
+    toast.success("文档已上传到 MinIO，并已加入 API 接口文档管理", {
+      duration: 2200,
+    });
     await loadDocs();
     setTimeout(() => {
       closeUpload();
     }, 400);
   } catch (err) {
-    uploadError.value = err instanceof Error ? err.message : "上传 API 文档失败";
+    toast.error(err instanceof Error ? err.message : "上传 API 文档失败");
   } finally {
     uploadLoading.value = false;
   }
@@ -112,34 +116,33 @@ async function openPreview(docId: string) {
   try {
     selectedDoc.value = await api.getApiDoc(docId);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "加载文档详情失败";
+    const detail = err instanceof Error ? err.message : "加载文档详情失败";
+    error.value = detail;
     selectedDoc.value = null;
+    toast.error(detail);
   } finally {
     previewLoading.value = false;
   }
-}
-
-function closePreview() {
-  previewOpen.value = false;
-  selectedDoc.value = null;
 }
 
 async function deleteDoc(doc: ApiDocRecord) {
   if (deletingId.value) {
     return;
   }
+
   deletingId.value = doc.id;
   error.value = "";
-  message.value = "";
   try {
     await api.deleteApiDoc(doc.id);
     docs.value = docs.value.filter((item) => item.id !== doc.id);
     if (selectedDoc.value?.id === doc.id) {
       closePreview();
     }
-    message.value = `已删除文档：${doc.title}`;
+    toast.success(`已删除文档：${doc.title}`, { duration: 2200 });
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "删除文档失败";
+    const detail = err instanceof Error ? err.message : "删除文档失败";
+    error.value = detail;
+    toast.error(detail);
   } finally {
     deletingId.value = "";
   }
@@ -160,16 +163,21 @@ onBeforeUnmount(() => {
     <div class="pane-header">
       <div>
         <h3 class="section-title">API 接口文档</h3>
-        <p class="head-desc">统一管理通过“添加文档源”上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档。</p>
+        <p class="head-desc">
+          统一管理通过“添加文档源”上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档。
+        </p>
       </div>
     </div>
-
-    <div v-if="error" class="api-doc-notice error">{{ error }}</div>
-    <div v-else-if="message" class="api-doc-notice success">{{ message }}</div>
 
     <div v-if="loading && !hasDocs" class="api-doc-empty">
       <i class="fa-solid fa-spinner fa-spin"></i>
       <span>正在加载 API 文档列表...</span>
+    </div>
+
+    <div v-else-if="error && !hasDocs" class="api-doc-empty api-doc-empty--error">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <strong>加载失败</strong>
+      <span>{{ error }}</span>
     </div>
 
     <div v-else-if="!hasDocs" class="api-doc-empty">
@@ -211,7 +219,7 @@ onBeforeUnmount(() => {
           <div class="api-doc-meta">
             <div class="meta-item">
               <i class="fa-solid fa-database"></i>
-              <span>MinIO · {{ formatBytes(doc.size_bytes) }}</span>
+              <span>MinIO 存储 · {{ formatBytes(doc.size_bytes) }}</span>
             </div>
             <div class="meta-item" v-if="doc.endpoint_count !== null && doc.endpoint_count !== undefined">
               <i class="fa-solid fa-link"></i>
@@ -248,13 +256,13 @@ onBeforeUnmount(() => {
             <div><strong>MinIO URI：</strong>{{ selectedDoc.storage_uri }}</div>
           </div>
 
-          <div v-if="selectedDoc.preview_error" class="api-doc-notice error">{{ selectedDoc.preview_error }}</div>
+          <div v-if="selectedDoc.preview_error" class="preview-inline-error">{{ selectedDoc.preview_error }}</div>
           <div v-else class="preview-code-shell">
             <div class="preview-toolbar">
               <span>文件内容</span>
               <span v-if="selectedDoc.preview_truncated">已截断显示前 20000 个字符</span>
             </div>
-            <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂无可预览内容。" }}</code></pre>
+            <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂时无可预览内容。" }}</code></pre>
           </div>
         </template>
       </section>
@@ -281,9 +289,6 @@ onBeforeUnmount(() => {
           文档标题（可选）
           <input v-model="uploadTitle" placeholder="例如：用户中心 OpenAPI v2">
         </label>
-
-        <div v-if="uploadError" class="api-doc-notice error">{{ uploadError }}</div>
-        <div v-else-if="uploadMessage" class="api-doc-notice success">{{ uploadMessage }}</div>
 
         <div class="modal-actions">
           <button class="secondary-btn" @click="closeUpload">取消</button>
@@ -320,23 +325,6 @@ onBeforeUnmount(() => {
   color: var(--muted);
 }
 
-.api-doc-notice {
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  font-size: 13px;
-}
-
-.api-doc-notice.success {
-  background: rgba(16, 185, 129, 0.1);
-  color: #047857;
-}
-
-.api-doc-notice.error {
-  background: rgba(239, 68, 68, 0.1);
-  color: #b91c1c;
-}
-
 .api-doc-empty {
   display: grid;
   place-items: center;
@@ -347,6 +335,12 @@ onBeforeUnmount(() => {
   background: rgba(248, 250, 252, 0.6);
   color: var(--muted);
   text-align: center;
+}
+
+.api-doc-empty--error {
+  border-color: rgba(239, 68, 68, 0.22);
+  background: rgba(254, 242, 242, 0.8);
+  color: #991b1b;
 }
 
 .api-doc-empty i {
@@ -508,11 +502,33 @@ onBeforeUnmount(() => {
 .tools-modal {
   width: min(960px, 100%);
   max-height: min(88vh, 900px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.42) transparent;
+  scrollbar-gutter: stable;
   border-radius: 24px;
   background: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+}
+
+.tools-modal::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tools-modal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tools-modal::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.34);
+}
+
+.tools-modal::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.52);
 }
 
 .tools-modal-head {
@@ -545,6 +561,15 @@ onBeforeUnmount(() => {
   color: #475569;
 }
 
+.preview-inline-error {
+  margin: 20px 28px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+  font-size: 13px;
+}
+
 .preview-code-shell {
   margin: 20px 28px 0;
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -568,13 +593,34 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 18px;
   max-height: 56vh;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 13px;
   line-height: 1.72;
   color: #0f172a;
   font-family: "Consolas", "SFMono-Regular", monospace;
+}
+
+.preview-code::-webkit-scrollbar {
+  width: 8px;
+}
+
+.preview-code::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.preview-code::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.32);
+}
+
+.preview-code::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.48);
 }
 
 .upload-drop {

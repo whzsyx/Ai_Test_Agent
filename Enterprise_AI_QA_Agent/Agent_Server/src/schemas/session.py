@@ -133,6 +133,13 @@ class SessionSummary(BaseModel):
     updated_at: datetime
 
 
+class SessionSummaryPage(BaseModel):
+    items: list[SessionSummary] = Field(default_factory=list)
+    limit: int
+    offset: int
+    has_more: bool = False
+
+
 class SessionDetail(SessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
     event_count: int = 0

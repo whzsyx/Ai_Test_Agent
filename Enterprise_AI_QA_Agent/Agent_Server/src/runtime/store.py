@@ -13,7 +13,12 @@ class SessionStore(Protocol):
     async def initialize(self) -> None: ...
     async def save_session(self, session: SessionRecord) -> SessionRecord: ...
     async def get_session(self, session_id: str) -> SessionRecord | None: ...
-    async def list_sessions(self) -> list[SessionRecord]: ...
+    async def list_sessions(
+        self,
+        limit: int | None = None,
+        offset: int = 0,
+        mode_key: str | None = None,
+    ) -> list[SessionRecord]: ...
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None: ...
     async def list_events(self, session_id: str) -> list[ExecutionEvent]: ...
     def get_queue(self, session_id: str) -> asyncio.Queue[ExecutionEvent]: ...
@@ -52,8 +57,22 @@ class InMemorySessionStore:
     async def get_session(self, session_id: str) -> SessionRecord | None:
         return self._sessions.get(session_id)
 
-    async def list_sessions(self) -> list[SessionRecord]:
-        return sorted(self._sessions.values(), key=lambda item: item.updated_at, reverse=True)
+    async def list_sessions(
+        self,
+        limit: int | None = None,
+        offset: int = 0,
+        mode_key: str | None = None,
+    ) -> list[SessionRecord]:
+        sessions = sorted(self._sessions.values(), key=lambda item: item.updated_at, reverse=True)
+        if mode_key:
+            sessions = [item for item in sessions if item.mode_key == mode_key]
+        start = max(int(offset or 0), 0)
+        if limit is None:
+            return sessions[start:]
+        size = max(int(limit or 0), 0)
+        if size <= 0:
+            return []
+        return sessions[start : start + size]
 
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         session = self._sessions.get(session_id)

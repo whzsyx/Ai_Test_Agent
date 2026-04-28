@@ -22,8 +22,19 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 @router.get("")
-async def list_sessions(request: Request):
-    return await request.app.state.session_service.list_sessions()
+async def list_sessions(
+    request: Request,
+    limit: int | None = None,
+    offset: int = 0,
+    mode_key: str | None = None,
+):
+    if limit is None:
+        return await request.app.state.session_service.list_sessions()
+    return await request.app.state.session_service.list_sessions_page(
+        limit=limit,
+        offset=offset,
+        mode_key=mode_key,
+    )
 
 
 @router.post("")
