@@ -32,3 +32,21 @@ class ApiDocUploadRequest(BaseModel):
     source: str = "manual_upload"
     title: str | None = None
 
+
+class AttachmentUploadRequest(BaseModel):
+    filename: str
+    content_base64: str
+    source: str = "chat_attachment"
+
+
+class UploadedAttachmentRecord(BaseModel):
+    id: str
+    filename: str
+    content_type: str = "application/octet-stream"
+    size_bytes: int = 0
+    storage_uri: str
+    preview_text: str | None = None
+    preview_truncated: bool = False
+    preview_error: str | None = None
+    uploaded_at: datetime
+    metadata: dict[str, object] = Field(default_factory=dict)

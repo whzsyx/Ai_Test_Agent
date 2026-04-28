@@ -24,6 +24,7 @@ class AgentRegistry:
                         "workflow-router",
                         "subagent-dispatch",
                         "knowledge-rag",
+                        "attachment-reader",
                         "session-history",
                         "session-timeline",
                         "observation-search",
@@ -46,6 +47,7 @@ class AgentRegistry:
                     summary="Break requirements into test coverage, assertions, and risks.",
                     description="Transforms user intent into executable QA plans, test cases, and verification boundaries.",
                     supported_tools=[
+                        "attachment-reader",
                         "session-history",
                         "session-timeline",
                         "observation-search",
@@ -129,6 +131,7 @@ class AgentRegistry:
                     description="Produces final findings, summaries, and delivery-ready reports.",
                     supported_tools=[
                         "report-writer",
+                        "attachment-reader",
                         "knowledge-rag",
                         "session-history",
                         "session-timeline",

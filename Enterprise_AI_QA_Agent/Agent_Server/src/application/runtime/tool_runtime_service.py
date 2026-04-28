@@ -108,6 +108,7 @@ class ToolRuntimeService:
             "workflow-router": self._run_workflow_router,
             "subagent-dispatch": self._run_subagent_dispatch,
             "knowledge-rag": self._run_knowledge_rag,
+            "attachment-reader": self._run_attachment_reader,
             "session-history": self._run_session_history,
             "session-timeline": self._run_session_timeline,
             "observation-search": self._run_observation_search,
@@ -439,6 +440,118 @@ class ToolRuntimeService:
                 "case_count": len(cases),
                 "requirement_count": len(requirements),
                 "acceptance_criteria_count": len(acceptance_criteria),
+            },
+        }
+
+    async def _run_attachment_reader(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        store = self._require_session_store()
+        session = await store.get_session(context.session_id)
+        if session is None:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Session '{context.session_id}' was not found.",
+                "error": "session_not_found",
+            }
+
+        attachments = self._collect_available_attachments(context, session)
+        if not attachments:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": "No uploaded attachments are available in the current turn or recent user message.",
+                "error": "attachment_not_found",
+            }
+
+        target = self._select_attachment_for_read(arguments, attachments)
+        if target is None:
+            requested_name = str(arguments.get("name") or arguments.get("attachment_id") or arguments.get("uri") or "").strip()
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"No attachment matched '{requested_name or 'current attachment'}'.",
+                "available_attachments": [self._attachment_summary(item) for item in attachments],
+                "error": "attachment_not_found",
+            }
+
+        max_chars = _clamp_int(arguments.get("max_chars"), minimum=200, maximum=50000, default=12000)
+        prefer_excerpt = bool(arguments.get("prefer_excerpt", False))
+        excerpt = " ".join(str(target.get("text_excerpt") or "").split())
+        excerpt_text, excerpt_truncated = _truncate_text(excerpt, max_chars) if excerpt else ("", False)
+        uri = str(target.get("uri") or "").strip()
+        content_type = str(target.get("content_type") or target.get("metadata", {}).get("content_type") or "").strip()
+
+        resolved_content = ""
+        resolved_from = "excerpt"
+        preview_truncated = excerpt_truncated or bool(target.get("metadata", {}).get("preview_truncated"))
+        size_bytes = target.get("metadata", {}).get("size_bytes")
+
+        if not prefer_excerpt and uri.startswith("minio://") and self._artifact_storage_service is not None:
+            try:
+                storage_result = await self._artifact_storage_service.read_object_uri(uri)
+                decoded_content, decode_error = self._decode_attachment_bytes(
+                    content=storage_result["content"],
+                    content_type=str(storage_result.get("content_type") or content_type),
+                    filename=str(target.get("name") or ""),
+                    max_chars=max_chars,
+                )
+                size_bytes = storage_result.get("size_bytes", size_bytes)
+                if decoded_content:
+                    resolved_content = decoded_content
+                    resolved_from = "minio"
+                    preview_truncated = len(storage_result["content"]) > len(decoded_content.encode("utf-8", errors="ignore"))
+                elif excerpt_text:
+                    resolved_content = excerpt_text
+                    resolved_from = "excerpt_fallback"
+                else:
+                    return {
+                        "status": "failed",
+                        "ok": False,
+                        "summary": f"Attachment '{target.get('name')}' is stored but could not be decoded as readable text.",
+                        "attachment": self._attachment_summary(target),
+                        "error": decode_error or "attachment_not_readable",
+                    }
+            except Exception as exc:
+                if excerpt_text:
+                    resolved_content = excerpt_text
+                    resolved_from = "excerpt_fallback"
+                else:
+                    return {
+                        "status": "failed",
+                        "ok": False,
+                        "summary": f"Failed to read attachment '{target.get('name')}' from object storage: {exc}",
+                        "attachment": self._attachment_summary(target),
+                        "error": "attachment_storage_read_failed",
+                    }
+        else:
+            resolved_content = excerpt_text
+
+        if not resolved_content:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Attachment '{target.get('name')}' does not contain readable text content yet.",
+                "attachment": self._attachment_summary(target),
+                "error": "attachment_empty",
+            }
+
+        attachment_summary = self._attachment_summary(target)
+        attachment_summary["size_bytes"] = size_bytes
+        return {
+            "summary": f"Read attachment '{target.get('name')}' from {resolved_from}.",
+            "attachment": attachment_summary,
+            "content": resolved_content,
+            "content_format": self._attachment_content_format(str(target.get('name') or ""), content_type),
+            "resolved_from": resolved_from,
+            "preview_truncated": preview_truncated,
+            "available_attachments": [self._attachment_summary(item) for item in attachments],
+            "metrics": {
+                "attachment_count": len(attachments),
+                "content_chars": len(resolved_content),
             },
         }
 
@@ -2650,6 +2763,118 @@ class ToolRuntimeService:
             normalized["error"] = normalized.get("summary")
         normalized.setdefault("trace_id", context.trace_id)
         return normalized
+
+    def _collect_available_attachments(self, context: ToolExecutionContext, session) -> list[dict[str, Any]]:
+        attachments: list[dict[str, Any]] = []
+        for item in context.context_bundle.get("attachments") or []:
+            if isinstance(item, dict):
+                attachments.append(dict(item))
+        if attachments:
+            return attachments
+
+        for message in reversed(getattr(session, "messages", []) or []):
+            role = getattr(message.role, "value", str(message.role))
+            if role != "user":
+                continue
+            metadata = dict(getattr(message, "metadata", {}) or {})
+            for item in metadata.get("attachments") or []:
+                if isinstance(item, dict):
+                    attachments.append(dict(item))
+            if attachments:
+                return attachments
+        return attachments
+
+    def _select_attachment_for_read(
+        self,
+        arguments: dict[str, Any],
+        attachments: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        requested_id = str(arguments.get("attachment_id") or "").strip()
+        requested_uri = str(arguments.get("uri") or "").strip()
+        requested_name = str(arguments.get("name") or "").strip().lower()
+
+        def matches(item: dict[str, Any]) -> bool:
+            metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+            attachment_id = str(metadata.get("attachment_id") or item.get("id") or "").strip()
+            item_uri = str(item.get("uri") or "").strip()
+            item_name = str(item.get("name") or "").strip().lower()
+            if requested_id and attachment_id == requested_id:
+                return True
+            if requested_uri and item_uri == requested_uri:
+                return True
+            if requested_name and item_name == requested_name:
+                return True
+            return False
+
+        for item in attachments:
+            if matches(item):
+                return item
+        return attachments[0] if attachments else None
+
+    def _attachment_summary(self, item: dict[str, Any]) -> dict[str, Any]:
+        metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+        return {
+            "attachment_id": str(metadata.get("attachment_id") or item.get("id") or "").strip(),
+            "name": str(item.get("name") or "").strip(),
+            "uri": str(item.get("uri") or "").strip(),
+            "content_type": str(item.get("content_type") or "").strip(),
+            "source": str(metadata.get("source") or "").strip(),
+            "uploaded_at": str(metadata.get("uploaded_at") or "").strip(),
+            "size_bytes": metadata.get("size_bytes"),
+        }
+
+    def _decode_attachment_bytes(
+        self,
+        *,
+        content: bytes,
+        content_type: str,
+        filename: str,
+        max_chars: int,
+    ) -> tuple[str, str]:
+        if not content:
+            return "", "empty_attachment"
+
+        text_like = (
+            content_type.startswith("text/")
+            or content_type in {
+                "application/json",
+                "application/xml",
+                "application/javascript",
+                "application/x-yaml",
+                "application/yaml",
+            }
+            or Path(filename).suffix.lower() in {".md", ".txt", ".json", ".yaml", ".yml", ".xml", ".csv", ".log", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".vue", ".html", ".css"}
+        )
+        if not text_like:
+            return "", "binary_attachment"
+
+        for encoding in ("utf-8", "utf-8-sig", "gb18030", "gbk", "latin-1"):
+            try:
+                decoded = content.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                decoded = ""
+        if not decoded:
+            return "", "attachment_decode_failed"
+        normalized = decoded.replace("\r\n", "\n").strip()
+        truncated, _ = _truncate_text(normalized, max_chars)
+        return truncated, ""
+
+    def _attachment_content_format(self, filename: str, content_type: str) -> str:
+        suffix = Path(filename).suffix.lower()
+        if suffix == ".md":
+            return "markdown"
+        if suffix in {".json"} or content_type == "application/json":
+            return "json"
+        if suffix in {".yaml", ".yml"}:
+            return "yaml"
+        if suffix in {".html", ".htm"}:
+            return "html"
+        if suffix in {".csv"}:
+            return "csv"
+        if suffix in {".xml"}:
+            return "xml"
+        return "text"
 
     def _session_overview(self, session) -> dict[str, Any]:
         return {

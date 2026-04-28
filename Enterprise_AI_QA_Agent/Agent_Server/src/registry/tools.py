@@ -104,6 +104,45 @@ class ToolRegistry:
                 ),
                 handler_key="knowledge-rag",
             ),
+            "attachment-reader": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="attachment-reader",
+                    name="Attachment Reader",
+                    description="Read the current turn's uploaded attachment from object storage and return its text content, preview, and metadata.",
+                    category="knowledge",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "attachment_id": {
+                                "type": "string",
+                                "description": "Optional attachment identifier from attachment metadata.",
+                            },
+                            "uri": {
+                                "type": "string",
+                                "description": "Optional object storage URI such as minio://bucket/object.",
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "Optional attachment filename to match against the current turn.",
+                            },
+                            "max_chars": {
+                                "type": "integer",
+                                "description": "Maximum number of decoded characters to return.",
+                                "default": 12000,
+                            },
+                            "prefer_excerpt": {
+                                "type": "boolean",
+                                "description": "When true, return the stored excerpt without fetching full object bytes unless needed.",
+                                "default": False,
+                            },
+                        },
+                    },
+                    output_schema={"attachment": "object", "content": "string"},
+                    tags=["attachment", "file", "minio", "retrieval"],
+                ),
+                handler_key="attachment-reader",
+            ),
             "session-history": ToolModule(
                 descriptor=ToolDescriptor(
                     key="session-history",

@@ -694,3 +694,16 @@ export interface ApiDocUploadRequest {
   source?: string;
   title?: string | null;
 }
+
+export interface UploadedAttachmentRecord {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  storage_uri: string;
+  preview_text?: string | null;
+  preview_truncated: boolean;
+  preview_error?: string | null;
+  uploaded_at: string;
+  metadata: Record<string, unknown>;
+}

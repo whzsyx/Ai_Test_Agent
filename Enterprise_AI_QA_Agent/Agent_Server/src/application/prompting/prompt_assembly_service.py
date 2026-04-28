@@ -93,7 +93,9 @@ class PromptAssemblyService:
                 priority=40,
                 content=(
                     "When a registered tool can improve accuracy or collect evidence, call the tool instead of only describing what it would do.\n"
-                    "If the user asks about prior questions, conversation history, session counts, or wants a session report, prefer the session history tools over reconstructing history from memory alone."
+                    "Only prefer session history tools when the user explicitly asks about prior questions, conversation history, session counts, runtime progress, or wants a session report.\n"
+                    "If the current turn includes attachments, do not switch to session-history analysis unless the user clearly asks about the session itself.\n"
+                    "If the user asks to read, parse, analyze, summarize, inspect, or 'look at' an attachment, call `attachment-reader` before considering CLI, filesystem, or session-history tools."
                 ),
             ),
         ]
@@ -259,6 +261,23 @@ class PromptAssemblyService:
                 cache_scope="ephemeral",
                 priority=20,
                 content=str(state.get("normalized_input") or "").strip() or "(same as user request)",
+            ),
+            PromptSection(
+                key="attachment_intent",
+                title="Attachment Intent",
+                source="prompt_assembly.runtime",
+                channel="runtime_message",
+                cache_scope="dynamic",
+                priority=25,
+                content=(
+                    "If this turn includes attachments, treat them as the default target of requests such as "
+                    "'parse this', 'analyze this', 'summarize this', 'look at this', or similar vague references.\n"
+                    "When attachments are present, first call `attachment-reader` or analyze the attachment excerpts and content cues already in context.\n"
+                    "Do not attempt to locate the file via CLI, workspace filesystem search, or MCP directory listing unless the user explicitly asks for a workspace file.\n"
+                    "Do not answer with session status, timeline, or generic capabilities unless the user explicitly asks about the session, runtime progress, or platform abilities."
+                    if attachment_count > 0
+                    else "No attachments are included in this turn."
+                ),
             ),
             PromptSection(
                 key="execution_plan",

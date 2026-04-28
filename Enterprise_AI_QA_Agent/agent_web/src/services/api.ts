@@ -17,6 +17,7 @@ import type {
   ModelConfigUpdateRequest,
   SessionDetail,
   InputAttachment,
+  UploadedAttachmentRecord,
   SessionSummary,
   SessionReplayResponse,
   ToolArtifactRecord,
@@ -251,6 +252,16 @@ export const api = {
   },
   uploadApiDoc(payload: ApiDocUploadRequest): Promise<ApiDocRecord> {
     return request("/api/v1/registry/api-docs/upload", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  uploadAttachment(payload: {
+    filename: string;
+    content_base64: string;
+    source?: string;
+  }): Promise<UploadedAttachmentRecord> {
+    return request("/api/v1/registry/attachments/upload", {
       method: "POST",
       body: JSON.stringify(payload),
     });

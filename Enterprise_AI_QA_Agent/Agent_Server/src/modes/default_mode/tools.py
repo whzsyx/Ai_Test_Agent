@@ -4,6 +4,7 @@ DEFAULT_MODE_TOOL_KEYS = [
     "workflow-router",
     "subagent-dispatch",
     "knowledge-rag",
+    "attachment-reader",
     "session-history",
     "session-timeline",
     "observation-search",

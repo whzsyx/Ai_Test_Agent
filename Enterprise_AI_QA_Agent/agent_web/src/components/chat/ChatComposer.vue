@@ -1,23 +1,36 @@
 <script setup lang="ts">
 import type { KeyboardEvent } from "vue";
 import { computed, ref } from "vue";
-import { NDropdown } from "naive-ui";
+import { NDropdown, useMessage } from "naive-ui";
 
 import { api } from "../../services/api";
 import { useSessionStore } from "../../stores/session";
-import type { ApiDocRecord, InputAttachment } from "../../types";
+import type { InputAttachment, UploadedAttachmentRecord } from "../../types";
 
 const props = defineProps<{
   docked?: boolean;
 }>();
 
+const message = useMessage();
 const sessionStore = useSessionStore();
 const draft = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 const uploading = ref(false);
-const uploadMessage = ref("");
-const uploadError = ref("");
 const pendingAttachments = ref<InputAttachment[]>([]);
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const MAX_FILES_COUNT = 5;
+const ALLOWED_FILE_TYPES = [
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/markdown",
+  "application/json",
+  "image/png",
+];
+
+const ALLOWED_EXTENSIONS = [".doc", ".docx", ".xls", ".xlsx", ".md", ".json", ".png"];
 
 const dockedPlaceholder = "给御策天检发送消息，按 Enter 快速发送，Shift+Enter 换行";
 const heroPlaceholder = "例如：帮我测试后台管理系统的登录功能，覆盖各种异常输入和边界情况";
@@ -39,17 +52,16 @@ function handleModeSelect(key: string | number) {
 }
 
 function openFilePicker() {
-  if (uploading.value) {
-    return;
+  if (!uploading.value) {
+    fileInput.value?.click();
   }
-  fileInput.value?.click();
 }
 
 function removeAttachment(index: number) {
   pendingAttachments.value.splice(index, 1);
 }
 
-function toInputAttachment(doc: ApiDocRecord): InputAttachment {
+function toInputAttachment(doc: UploadedAttachmentRecord): InputAttachment {
   return {
     kind: "file",
     name: doc.filename,
@@ -57,10 +69,9 @@ function toInputAttachment(doc: ApiDocRecord): InputAttachment {
     content_type: doc.content_type,
     text_excerpt: doc.preview_text ? doc.preview_text.slice(0, 1200) : null,
     metadata: {
-      api_doc_id: doc.id,
-      title: doc.title,
-      source: doc.source,
-      format_label: doc.format_label,
+      attachment_id: doc.id,
+      source: String(doc.metadata?.source || "chat_attachment"),
+      format_label: "会话附件",
       uploaded_at: doc.uploaded_at,
       preview_truncated: doc.preview_truncated,
       size_bytes: doc.size_bytes,
@@ -88,15 +99,48 @@ async function handleFileChange(event: Event) {
     return;
   }
 
-  uploading.value = true;
-  uploadMessage.value = "";
-  uploadError.value = "";
+  if (pendingAttachments.value.length + files.length > MAX_FILES_COUNT) {
+    message.warning(`最多只能上传 ${MAX_FILES_COUNT} 个文件，当前已选 ${pendingAttachments.value.length} 个。`);
+    return;
+  }
 
+  const invalidFiles: string[] = [];
+  const oversizedFiles: string[] = [];
+  const validFiles: File[] = [];
+
+  for (const file of files) {
+    if (file.size > MAX_FILE_SIZE) {
+      oversizedFiles.push(`${file.name} (${formatAttachmentSize(file.size)})`);
+      continue;
+    }
+
+    const extension = `.${file.name.split(".").pop()?.toLowerCase() || ""}`;
+    const isValidType =
+      ALLOWED_FILE_TYPES.includes(file.type) || ALLOWED_EXTENSIONS.includes(extension);
+    if (!isValidType) {
+      invalidFiles.push(file.name);
+      continue;
+    }
+
+    validFiles.push(file);
+  }
+
+  if (oversizedFiles.length) {
+    message.error(`以下文件超过 ${formatAttachmentSize(MAX_FILE_SIZE)} 限制：${oversizedFiles.join("，")}`);
+  }
+  if (invalidFiles.length) {
+    message.error(`以下文件类型暂不支持：${invalidFiles.join("，")}`);
+  }
+  if (!validFiles.length) {
+    return;
+  }
+
+  uploading.value = true;
   try {
-    const uploadedDocs: ApiDocRecord[] = [];
-    for (const file of files) {
+    const uploadedDocs: UploadedAttachmentRecord[] = [];
+    for (const file of validFiles) {
       const contentBase64 = await fileToBase64(file);
-      const uploaded = await api.uploadApiDoc({
+      const uploaded = await api.uploadAttachment({
         filename: file.name,
         content_base64: contentBase64,
         source: "chat_attachment",
@@ -104,22 +148,21 @@ async function handleFileChange(event: Event) {
       uploadedDocs.push(uploaded);
     }
 
-    const nextAttachments = uploadedDocs.map(toInputAttachment);
     const existingUris = new Set(
       pendingAttachments.value.map((item) => String(item.uri || "")),
     );
-    for (const attachment of nextAttachments) {
+    for (const attachment of uploadedDocs.map(toInputAttachment)) {
       const uri = String(attachment.uri || "");
-      if (!uri || !existingUris.has(uri)) {
-        pendingAttachments.value.push(attachment);
-        if (uri) {
-          existingUris.add(uri);
-        }
+      if (!uri || existingUris.has(uri)) {
+        continue;
       }
+      pendingAttachments.value.push(attachment);
+      existingUris.add(uri);
     }
-    uploadMessage.value = `已上传 ${uploadedDocs.length} 个文件，可在“API 接口文档”中统一管理。`;
+
+    message.success(`已上传 ${uploadedDocs.length} 个文件`, { duration: 2000 });
   } catch (error) {
-    uploadError.value = error instanceof Error ? error.message : "上传文件失败";
+    message.error(error instanceof Error ? error.message : "上传文件失败");
   } finally {
     uploading.value = false;
   }
@@ -129,24 +172,30 @@ async function handleSubmit() {
   if (sessionStore.isBusy || !sessionStore.session) {
     return;
   }
+
   const content = draft.value;
-  const attachments = pendingAttachments.value.map((item) => ({ ...item, metadata: { ...item.metadata } }));
+  const attachments = JSON.parse(JSON.stringify(pendingAttachments.value)) as InputAttachment[];
   if (!content.trim() && attachments.length === 0) {
     return;
   }
 
   draft.value = "";
   pendingAttachments.value = [];
-  uploadMessage.value = "";
-  uploadError.value = "";
-  await sessionStore.sendMessage(content, attachments);
+
+  try {
+    await sessionStore.sendMessage(content, attachments);
+  } catch (error) {
+    draft.value = content;
+    pendingAttachments.value = attachments;
+    console.error("发送消息失败", error);
+    message.error(error instanceof Error ? error.message : "发送消息失败");
+  }
 }
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
     return;
   }
-
   event.preventDefault();
   void handleSubmit();
 }
@@ -157,7 +206,7 @@ function formatAttachmentSize(value: unknown) {
     return "";
   }
   if (size >= 1024 * 1024) {
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} KB`.replace("KB", "MB");
   }
   if (size >= 1024) {
     return `${Math.round(size / 1024)} KB`;
@@ -168,13 +217,6 @@ function formatAttachmentSize(value: unknown) {
 
 <template>
   <div class="home-composer" :class="{ 'home-composer-docked': docked }">
-    <textarea
-      v-model="draft"
-      class="home-textarea"
-      :placeholder="placeholder"
-      @keydown="handleKeydown"
-    />
-
     <div v-if="pendingAttachments.length" class="home-attachments">
       <div
         v-for="(attachment, index) in pendingAttachments"
@@ -186,7 +228,7 @@ function formatAttachmentSize(value: unknown) {
           <div class="home-attachment-copy">
             <strong>{{ attachment.name }}</strong>
             <span>
-              {{ String(attachment.metadata?.format_label || "文档附件") }}
+              {{ String(attachment.metadata?.format_label || "会话附件") }}
               <template v-if="formatAttachmentSize(attachment.metadata?.size_bytes)">
                 · {{ formatAttachmentSize(attachment.metadata?.size_bytes) }}
               </template>
@@ -204,6 +246,13 @@ function formatAttachmentSize(value: unknown) {
       </div>
     </div>
 
+    <textarea
+      v-model="draft"
+      class="home-textarea"
+      :placeholder="placeholder"
+      @keydown="handleKeydown"
+    />
+
     <div class="home-composer-footer">
       <div class="home-toolbar">
         <button class="home-tool-btn" type="button" :disabled="uploading" @click="openFilePicker">
@@ -215,6 +264,7 @@ function formatAttachmentSize(value: unknown) {
           class="home-file-input"
           type="file"
           multiple
+          :accept="ALLOWED_EXTENSIONS.join(',')"
           @change="handleFileChange"
         >
         <n-dropdown trigger="click" placement="top-start" :options="modeOptions" @select="handleModeSelect">
@@ -230,17 +280,14 @@ function formatAttachmentSize(value: unknown) {
         <button
           class="home-send-btn"
           :disabled="sessionStore.isBusy || !sessionStore.session || (!draft.trim() && pendingAttachments.length === 0)"
-          @click="handleSubmit"
           :title="buttonTitle"
           type="button"
+          @click="handleSubmit"
         >
           <i class="fa-solid" :class="sessionStore.isBusy ? 'fa-spinner fa-spin' : 'fa-arrow-up'"></i>
         </button>
       </div>
     </div>
-
-    <div v-if="uploadError" class="home-upload-notice home-upload-notice-error">{{ uploadError }}</div>
-    <div v-else-if="uploadMessage" class="home-upload-notice home-upload-notice-success">{{ uploadMessage }}</div>
   </div>
 </template>
 
@@ -252,27 +299,28 @@ function formatAttachmentSize(value: unknown) {
 .home-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin: 0 20px 14px;
+  gap: 6px;
+  padding: 12px 20px 8px;
+  margin: 0;
 }
 
 .home-attachment-chip {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-width: 240px;
-  max-width: 360px;
-  padding: 10px 12px;
+  gap: 6px;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 10px;
   border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 14px;
+  border-radius: 12px;
   background: rgba(248, 250, 252, 0.96);
 }
 
 .home-attachment-main {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -298,14 +346,14 @@ function formatAttachmentSize(value: unknown) {
 }
 
 .home-attachment-copy span {
-  margin-top: 2px;
-  font-size: 12px;
+  margin-top: 1px;
+  font-size: 11px;
   color: #64748b;
 }
 
 .home-attachment-remove {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -317,22 +365,5 @@ function formatAttachmentSize(value: unknown) {
 .home-attachment-remove:hover {
   background: rgba(15, 23, 42, 0.06);
   color: #0f172a;
-}
-
-.home-upload-notice {
-  margin: 12px 20px 0;
-  padding: 10px 12px;
-  border-radius: 12px;
-  font-size: 13px;
-}
-
-.home-upload-notice-success {
-  background: rgba(16, 185, 129, 0.08);
-  color: #047857;
-}
-
-.home-upload-notice-error {
-  background: rgba(239, 68, 68, 0.1);
-  color: #b91c1c;
 }
 </style>

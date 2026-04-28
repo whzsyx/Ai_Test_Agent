@@ -22,8 +22,14 @@ def build_prompt_assembler_node(
             item.model_dump(mode="python") for item in assembly.runtime_message_sections
         ]
         state["system_prompt"] = assembly.system_prompt
-        if not state["runtime_messages"]:
-            state["runtime_messages"] = assembly.runtime_messages
+        existing_runtime_messages = list(state.get("runtime_messages") or [])
+        if assembly.runtime_messages:
+            state["runtime_messages"] = [
+                *existing_runtime_messages,
+                *assembly.runtime_messages,
+            ]
+        elif not existing_runtime_messages:
+            state["runtime_messages"] = []
         append_graph_event(
             state,
             "graph.prompt_assembled",

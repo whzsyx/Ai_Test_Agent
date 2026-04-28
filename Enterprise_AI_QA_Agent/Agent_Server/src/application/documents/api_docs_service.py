@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.core.config import Settings
-from src.schemas.api_docs import ApiDocRecord
+from src.schemas.api_docs import ApiDocRecord, UploadedAttachmentRecord
 
 
 class ApiDocsService:
@@ -86,6 +86,42 @@ class ApiDocsService:
             catalog.append(record.model_dump(mode="json"))
             self._save_catalog(catalog)
         return record
+
+    async def upload_attachment(
+        self,
+        *,
+        filename: str,
+        content_base64: str,
+        source: str = "chat_attachment",
+    ) -> UploadedAttachmentRecord:
+        content = self._decode_base64(content_base64)
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        preview_text, preview_truncated, preview_error = self._build_preview(filename, content, content_type)
+        attachment_id = str(uuid4())
+        now = datetime.now(timezone.utc)
+        storage_result = await self._artifact_storage_service.store_uploaded_bytes(
+            content=content,
+            filename=filename,
+            object_prefix=f"attachments/{attachment_id}",
+            content_type=content_type,
+        )
+        return UploadedAttachmentRecord(
+            id=attachment_id,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(content),
+            storage_uri=str(storage_result["uri"]),
+            preview_text=preview_text,
+            preview_truncated=preview_truncated,
+            preview_error=preview_error,
+            uploaded_at=now,
+            metadata={
+                "source": source,
+                "storage_backend": storage_result.get("storage_backend", "minio"),
+                "bucket": storage_result.get("bucket", ""),
+                "object_name": storage_result.get("object_name", ""),
+            },
+        )
 
     async def delete_document(self, doc_id: str) -> dict[str, Any]:
         async with self._lock:
@@ -220,4 +256,3 @@ class ApiDocsService:
             if str(item.get("id") or "") == doc_id:
                 return item
         raise ValueError(f"未找到 API 文档：{doc_id}")
-

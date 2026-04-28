@@ -588,6 +588,11 @@ class SessionService:
                     if execution_request.routing_decision
                     else ""
                 ),
+                "has_attachments": bool(execution_request.attachments),
+                "attachment_names": [item.name for item in execution_request.attachments[:5]],
+                "attachments": [
+                    item.model_dump(mode="python") for item in execution_request.attachments
+                ],
                 "input_summary": execution_request.input_summary,
                 **payload.metadata,
             }

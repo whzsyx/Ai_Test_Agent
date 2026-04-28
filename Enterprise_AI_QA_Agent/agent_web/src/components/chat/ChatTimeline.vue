@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-import type { ChatMessage } from "../../types";
+import type { ChatMessage, InputAttachment } from "../../types";
 import { formatServerDateTime } from "../../utils/datetime";
 
 const props = defineProps<{
@@ -217,6 +217,39 @@ function labelForMessage(message: ChatMessage) {
   if (role === "tool") return "Tool Output";
   if (role === "system") return "System";
   return "Event";
+}
+
+function attachmentsForMessage(message: ChatMessage): InputAttachment[] {
+  const attachments = message.metadata?.attachments;
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+  return attachments.filter(
+    (item): item is InputAttachment =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof (item as InputAttachment).name === "string",
+  );
+}
+
+function formatAttachmentSize(value: unknown) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "";
+  }
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (size >= 1024) {
+    return `${Math.round(size / 1024)} KB`;
+  }
+  return `${size} B`;
+}
+
+function attachmentSecondaryText(attachment: InputAttachment) {
+  const formatLabel = String(attachment.metadata?.format_label || "会话附件");
+  const sizeLabel = formatAttachmentSize(attachment.metadata?.size_bytes);
+  return sizeLabel ? `${formatLabel} · ${sizeLabel}` : formatLabel;
 }
 
 function deliveryLabel(message: ChatMessage) {
@@ -627,8 +660,86 @@ function escapeHtml(content: string) {
         ]"
         v-html="renderAssistantMarkdown(message.content)"
       />
-      <pre v-else class="conversation-entry-content">{{ message.content }}</pre>
+      <div v-else class="conversation-entry-stack">
+        <div v-if="attachmentsForMessage(message).length" class="conversation-entry-attachments">
+          <div
+            v-for="(attachment, index) in attachmentsForMessage(message)"
+            :key="`${message.id}-${attachment.uri || attachment.name}-${index}`"
+            class="conversation-entry-attachment"
+          >
+            <div class="conversation-entry-attachment-icon">
+              <i class="fa-solid fa-file-lines"></i>
+            </div>
+            <div class="conversation-entry-attachment-copy">
+              <strong>{{ attachment.name }}</strong>
+              <span>{{ attachmentSecondaryText(attachment) }}</span>
+            </div>
+          </div>
+        </div>
+        <pre class="conversation-entry-content">{{ message.content }}</pre>
+      </div>
     </article>
     <div ref="endRef" class="conversation-end-sentinel" aria-hidden="true"></div>
   </div>
 </template>
+
+<style scoped>
+.conversation-entry-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.conversation-entry-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conversation-entry-attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+  max-width: min(360px, 100%);
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.conversation-entry-attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+.conversation-entry-attachment-copy {
+  min-width: 0;
+}
+
+.conversation-entry-attachment-copy strong,
+.conversation-entry-attachment-copy span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-entry-attachment-copy strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.conversation-entry-attachment-copy span {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+}
+</style>

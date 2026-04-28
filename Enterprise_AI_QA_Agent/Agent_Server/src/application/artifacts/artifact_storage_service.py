@@ -86,6 +86,32 @@ class ArtifactStorageService:
             return
         client.remove_object(bucket, object_name)
 
+    async def read_object_uri(self, uri: str) -> dict[str, Any]:
+        if not self.enabled:
+            raise RuntimeError("Artifact storage backend is not enabled.")
+        if not uri.startswith("minio://"):
+            raise ValueError(f"Unsupported artifact URI: {uri}")
+
+        bucket, object_name = self._parse_minio_uri(uri)
+        client = self._minio_client()
+        response = client.get_object(bucket, object_name)
+        try:
+            content = response.read()
+            stat = client.stat_object(bucket, object_name)
+        finally:
+            response.close()
+            response.release_conn()
+
+        return {
+            "uri": uri,
+            "bucket": bucket,
+            "object_name": object_name,
+            "content": content,
+            "content_type": getattr(stat, "content_type", None) or self._content_type(Path(object_name)),
+            "size_bytes": getattr(stat, "size", len(content)),
+            "etag": getattr(stat, "etag", ""),
+        }
+
     def _rewrite_artifact_paths(
         self,
         value: Any,

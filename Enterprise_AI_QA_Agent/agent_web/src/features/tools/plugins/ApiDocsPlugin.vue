@@ -160,7 +160,7 @@ onBeforeUnmount(() => {
     <div class="pane-header">
       <div>
         <h3 class="section-title">API 接口文档</h3>
-        <p class="head-desc">统一管理通过聊天附件或工具页上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档。</p>
+        <p class="head-desc">统一管理通过“添加文档源”上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档。</p>
       </div>
     </div>
 
@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
     <div v-else-if="!hasDocs" class="api-doc-empty">
       <i class="fa-solid fa-file-circle-plus"></i>
       <strong>还没有上传任何 API 文档</strong>
-      <span>你可以从聊天框的 Attachments 按钮上传，也可以在这里直接添加文档源。</span>
+      <span>这里展示的是明确加入“API 接口文档管理”的文件；聊天框 Attachments 上传的会话附件不会默认出现在这里。</span>
     </div>
 
     <div v-else class="api-docs-list">

@@ -14,6 +14,7 @@ MODE_MANIFEST = {
         "workflow-router",
         "subagent-dispatch",
         "knowledge-rag",
+        "attachment-reader",
         "session-history",
         "session-timeline",
         "observation-search",
