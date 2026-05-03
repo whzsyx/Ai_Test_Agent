@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { NMessageProvider } from "naive-ui";
+import { NDialogProvider, NMessageProvider } from "naive-ui";
 
 import CodeReviewProgressPanel from "./components/chat/CodeReviewProgressPanel.vue";
 import EventConsolePanel from "./components/chat/EventConsolePanel.vue";
@@ -123,42 +123,63 @@ onBeforeUnmount(() => {
 
 <template>
   <n-message-provider>
-    <div class="prototype-shell">
-      <AppSidebar />
-      <main class="prototype-main">
-        <AppTopBar :label="pageLabel" :system-status="appStore.systemStatus" />
-        <div class="prototype-content">
-          <RouterView />
-        </div>
-        <section v-if="showRuntimeConsole" :class="['log-panel', { expanded: logExpanded }]">
-          <header class="log-panel-head" @click="logExpanded = !logExpanded">
-            <div class="log-panel-title">
-              &gt;_ Runtime Event Console
-              <span class="log-badge">{{ runtimeBadge }}</span>
-            </div>
-            <div
-              v-if="isHomeRoute && sessionStore.session"
-              class="runtime-console-tabs runtime-console-tabs-inline"
-              @click.stop
-            >
-              <button
-                v-for="tab in runtimeConsoleTabs"
-                :key="tab.key"
-                type="button"
-                class="runtime-console-tab"
-                :class="{ active: runtimeConsoleTab === tab.key }"
-                @click.stop="runtimeConsoleTab = tab.key"
+    <n-dialog-provider>
+      <div class="prototype-shell">
+        <AppSidebar />
+        <main class="prototype-main">
+          <AppTopBar :label="pageLabel" :system-status="appStore.systemStatus" />
+          <div class="prototype-content">
+            <RouterView />
+          </div>
+          <section v-if="showRuntimeConsole" :class="['log-panel', { expanded: logExpanded }]">
+            <header class="log-panel-head" @click="logExpanded = !logExpanded">
+              <div class="log-panel-title">
+                &gt;_ Runtime Event Console
+                <span class="log-badge">{{ runtimeBadge }}</span>
+              </div>
+              <div
+                v-if="isHomeRoute && sessionStore.session"
+                class="runtime-console-tabs runtime-console-tabs-inline"
+                @click.stop
               >
-                {{ tab.label }}
-              </button>
-            </div>
-            <i :class="['fa-solid', logExpanded ? 'fa-chevron-down' : 'fa-chevron-up', 'log-panel-toggle']"></i>
-          </header>
+                <button
+                  v-for="tab in runtimeConsoleTabs"
+                  :key="tab.key"
+                  type="button"
+                  class="runtime-console-tab"
+                  :class="{ active: runtimeConsoleTab === tab.key }"
+                  @click.stop="runtimeConsoleTab = tab.key"
+                >
+                  {{ tab.label }}
+                </button>
+              </div>
+              <i :class="['fa-solid', logExpanded ? 'fa-chevron-down' : 'fa-chevron-up', 'log-panel-toggle']"></i>
+            </header>
 
-          <div v-if="logExpanded" class="log-panel-body">
-            <template v-if="isHomeRoute && sessionStore.session">
-              <div class="runtime-console-content">
-                <div v-if="runtimeConsoleTab === 'logs'" class="runtime-console-raw-log">
+            <div v-if="logExpanded" class="log-panel-body">
+              <template v-if="isHomeRoute && sessionStore.session">
+                <div class="runtime-console-content">
+                  <div v-if="runtimeConsoleTab === 'logs'" class="runtime-console-raw-log">
+                    <div v-for="(line, index) in runtimeLines" :key="`${index}-${line}`">
+                      {{ line }}
+                    </div>
+                    <div class="log-cursor-line">
+                      <span class="system-chip">system</span>
+                      runtime-console-ready
+                      <span class="cursor-blink"></span>
+                    </div>
+                  </div>
+                  <EventConsolePanel v-else-if="runtimeConsoleTab === 'events'" />
+                  <ToolActivityPanel v-else-if="runtimeConsoleTab === 'tools'" />
+                  <CodeReviewProgressPanel v-else-if="runtimeConsoleTab === 'review_progress'" />
+                  <SnapshotTracePanel v-else-if="runtimeConsoleTab === 'snapshot'" />
+                  <ToolJobPanel v-else-if="runtimeConsoleTab === 'jobs'" />
+                  <VerificationPanel v-else-if="runtimeConsoleTab === 'verification'" />
+                </div>
+              </template>
+
+              <template v-else>
+                <div class="runtime-console-raw-log">
                   <div v-for="(line, index) in runtimeLines" :key="`${index}-${line}`">
                     {{ line }}
                   </div>
@@ -168,30 +189,11 @@ onBeforeUnmount(() => {
                     <span class="cursor-blink"></span>
                   </div>
                 </div>
-                <EventConsolePanel v-else-if="runtimeConsoleTab === 'events'" />
-                <ToolActivityPanel v-else-if="runtimeConsoleTab === 'tools'" />
-                <CodeReviewProgressPanel v-else-if="runtimeConsoleTab === 'review_progress'" />
-                <SnapshotTracePanel v-else-if="runtimeConsoleTab === 'snapshot'" />
-                <ToolJobPanel v-else-if="runtimeConsoleTab === 'jobs'" />
-                <VerificationPanel v-else-if="runtimeConsoleTab === 'verification'" />
-              </div>
-            </template>
-
-            <template v-else>
-              <div class="runtime-console-raw-log">
-                <div v-for="(line, index) in runtimeLines" :key="`${index}-${line}`">
-                  {{ line }}
-                </div>
-                <div class="log-cursor-line">
-                  <span class="system-chip">system</span>
-                  runtime-console-ready
-                  <span class="cursor-blink"></span>
-                </div>
-              </div>
-            </template>
-          </div>
-        </section>
-      </main>
-    </div>
+              </template>
+            </div>
+          </section>
+        </main>
+      </div>
+    </n-dialog-provider>
   </n-message-provider>
 </template>

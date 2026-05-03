@@ -239,6 +239,8 @@ class KnowledgeGraphService:
             "BELONGS_TO": "element_belongs_to_entity",
             "TRIGGERS_NAVIGATION": "element_triggers_navigation",
             "REVEALS": "element_reveals_element",
+            "INTERACTED_WITH": "page_interacted_with_element",
+            "NAVIGATES_TO": "page_navigates_to_page",
         }
         return mapping.get(normalized, normalized.lower())
 

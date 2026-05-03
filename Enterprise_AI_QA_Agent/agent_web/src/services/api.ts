@@ -245,6 +245,8 @@ export const api = {
     content: string,
     modeKey?: string,
     attachments: InputAttachment[] = [],
+    context?: Record<string, unknown>,
+    metadata?: Record<string, unknown>,
   ): Promise<ConversationResponse> {
     return request(`/api/v1/sessions/${sessionId}/messages`, {
       method: "POST",
@@ -252,6 +254,8 @@ export const api = {
         content,
         mode_key: modeKey || null,
         attachments,
+        context: context || {},
+        metadata: metadata || {},
       }),
     });
   },

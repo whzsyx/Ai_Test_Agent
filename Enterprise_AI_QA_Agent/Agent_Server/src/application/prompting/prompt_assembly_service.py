@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from src.modes.ui_automation_mode.prompt_contract import UI_AUTOMATION_PROMPT_CONTRACT
 from src.schemas.prompting import PromptAssemblyResult, PromptSection
 
 
@@ -139,6 +140,17 @@ class PromptAssemblyService:
                         "- Use `browser-control` only for explicit single playwright-cli style inspection commands such as semantic-snapshot, snapshot, screenshot, eval, or close.\n"
                         "- Avoid state-changing automation unless the user explicitly asks for a browser action outside exploration."
                     ),
+                )
+            )
+        elif selected_agent_key == "ui-automation-agent":
+            sections.append(
+                PromptSection(
+                    key="ui_automation_contract",
+                    title="UI Automation Contract",
+                    source="prompt_assembly.ui_automation",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=UI_AUTOMATION_PROMPT_CONTRACT,
                 )
             )
 

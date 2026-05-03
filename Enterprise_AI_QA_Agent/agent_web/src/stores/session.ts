@@ -1,4 +1,4 @@
-import { defineStore } from "pinia";
+﻿import { defineStore } from "pinia";
 
 import { api } from "../services/api";
 import { serverDateTimestamp } from "../utils/datetime";
@@ -712,7 +712,15 @@ export const useSessionStore = defineStore("session", {
         this.error = error instanceof Error ? error.message : "Failed to update session preferences.";
       }
     },
-    async sendMessage(content: string, attachments: InputAttachment[] = []) {
+    async sendMessage(
+      content: string,
+      attachments: InputAttachment[] = [],
+      options: {
+        context?: Record<string, unknown>;
+        metadata?: Record<string, unknown>;
+        modeKey?: string;
+      } = {},
+    ) {
       const trimmedContent = content.trim();
       if (!this.session || (!trimmedContent && attachments.length === 0)) {
         return;
@@ -738,8 +746,10 @@ export const useSessionStore = defineStore("session", {
         const response = await api.sendMessage(
           this.session.id,
           trimmedContent,
-          this.selectedModeKey,
+          options.modeKey || this.selectedModeKey,
           attachments,
+          options.context,
+          options.metadata,
         );
         this.applySession(response.session);
         this.activity = [...response.events.slice().reverse(), ...this.activity].slice(0, 50);

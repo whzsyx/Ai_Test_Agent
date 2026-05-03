@@ -135,6 +135,7 @@ class UIExplorationService:
         try:
             return await self._ui_graph_store.write_exploration_graph(
                 app_map.get("graph") or {},
+                app_map=app_map,
                 session_id=context.session_id,
                 turn_id=context.turn_id,
                 trace_id=context.trace_id,

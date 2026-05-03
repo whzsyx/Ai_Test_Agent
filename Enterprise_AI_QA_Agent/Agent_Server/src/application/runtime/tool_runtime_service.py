@@ -33,6 +33,7 @@ from src.application.context.transcript_hygiene_service import TranscriptHygiene
 from src.application.testing.ui_exploration_service import UIExplorationService
 from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
+from src.modes.ui_automation_mode.runtime import UIAutomationModeRuntime
 from src.runtime.store import SessionStore
 from src.schemas.agent import ToolDescriptor
 from src.schemas.model_config import ModelConfigRecord
@@ -104,6 +105,10 @@ class ToolRuntimeService:
             if settings is not None
             else None
         )
+        self._ui_automation_mode_runtime = UIAutomationModeRuntime(
+            memory_runtime_service=memory_runtime_service,
+            ui_exploration_service=self._ui_exploration_service,
+        )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
             "subagent-dispatch": self._run_subagent_dispatch,
@@ -143,6 +148,9 @@ class ToolRuntimeService:
 
     def set_memory_runtime_service(self, memory_runtime_service: MemoryRuntimeService) -> None:
         self._memory_runtime_service = memory_runtime_service
+        self._ui_automation_mode_runtime.set_memory_runtime_service(memory_runtime_service)
+        if self._ui_exploration_service is not None:
+            self._ui_exploration_service._memory_runtime_service = memory_runtime_service
 
     def set_tool_job_service(self, tool_job_service: ToolJobService) -> None:
         self._tool_job_service = tool_job_service
@@ -1727,17 +1735,7 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        target_url = str(arguments.get("target_url") or "").strip()
-        objective = str(arguments.get("objective") or context.user_message).strip()
-        return {
-            "status": "partial",
-            "summary": "UI automation mode scaffold is registered. Dedicated execution flow can now be attached to this entry tool.",
-            "target_url": target_url,
-            "objective": objective,
-            "steps": [],
-            "artifacts": [],
-            "next_steps": ["Bind this tool to page exploration, scripted actions, and UI verification policies."],
-        }
+        return await self._ui_automation_mode_runtime.handle(arguments, context)
 
     async def _run_api_test_runner(
         self,

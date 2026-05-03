@@ -313,3 +313,6 @@ data/
 .pytest_cli_runtime/
 scripts/
 ui-main/
+.hermes_runtime/
+page.png
+系统设计与开发文档.md

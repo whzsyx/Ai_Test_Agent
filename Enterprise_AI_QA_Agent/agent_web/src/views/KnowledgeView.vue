@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { NButton, NModal } from "naive-ui";
 
 import { api } from "../services/api";
 import { formatServerDateTime } from "../utils/datetime";
@@ -26,6 +27,8 @@ const activeKind = ref<NodeKindFilter>("all");
 const activeNodeId = ref("");
 const detailDrawerOpen = ref(false);
 const deletingProject = ref(false);
+const deleteDialogOpen = ref(false);
+const dialog = { warning: (_options: unknown) => undefined };
 
 const canvasViewportRef = ref<SVGSVGElement | null>(null);
 const canvasCardRef = ref<HTMLElement | null>(null);
@@ -374,11 +377,84 @@ async function loadGraph(projectScope: string) {
   }
 }
 
+function openDeleteProjectDialog() {
+  const scope = selectedProjectScope.value.trim();
+  if (!scope || deletingProject.value) {
+    return;
+  }
+  deleteDialogOpen.value = true;
+}
+
+function cancelDeleteProjectDialog() {
+  if (deletingProject.value) {
+    return;
+  }
+  deleteDialogOpen.value = false;
+}
+
+async function confirmDeleteProjectDialog() {
+  const scope = selectedProjectScope.value.trim();
+  if (!scope || deletingProject.value) {
+    return;
+  }
+
+  deletingProject.value = true;
+  errorMessage.value = "";
+  try {
+    await api.deleteKnowledgeProject(scope);
+    const nextScope =
+      projects.value.find((item) => item.project_scope !== scope)?.project_scope ?? "";
+    graph.value = null;
+    activeNodeId.value = "";
+    detailDrawerOpen.value = false;
+    selectedProjectScope.value = "";
+    deleteDialogOpen.value = false;
+    await loadProjects();
+    if (nextScope) {
+      selectedProjectScope.value = nextScope;
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Failed to delete project graph";
+  } finally {
+    deletingProject.value = false;
+  }
+}
+
 async function deleteSelectedProject() {
   const scope = selectedProjectScope.value.trim();
   if (!scope || deletingProject.value) {
     return;
   }
+  dialog.warning({
+    title: "确认删除项目图谱",
+    content: `确认删除项目图谱“${scope}”吗？这个操作会删除该项目下的页面、元素、实体和关系。`,
+    positiveText: "确定",
+    negativeText: "取消",
+    maskClosable: false,
+    onPositiveClick: async () => {
+      deletingProject.value = true;
+      errorMessage.value = "";
+      try {
+        await api.deleteKnowledgeProject(scope);
+        const nextScope =
+          projects.value.find((item) => item.project_scope !== scope)?.project_scope ?? "";
+        graph.value = null;
+        activeNodeId.value = "";
+        detailDrawerOpen.value = false;
+        selectedProjectScope.value = "";
+        await loadProjects();
+        if (nextScope) {
+          selectedProjectScope.value = nextScope;
+        }
+      } catch (error) {
+        errorMessage.value = error instanceof Error ? error.message : "Failed to delete project graph";
+        throw error;
+      } finally {
+        deletingProject.value = false;
+      }
+    },
+  });
+  return;
   const confirmed = window.confirm(`确认删除项目图谱 "${scope}" 吗？这个操作会删除该项目下的页面、元素、实体和关系。`);
   if (!confirmed) {
     return;
@@ -544,7 +620,7 @@ function syncFullscreenState() {
               type="button"
               title="删除当前项目"
               :disabled="!selectedProjectScope || deletingProject"
-              @click="deleteSelectedProject"
+              @click="openDeleteProjectDialog"
             >
               <i class="fa-solid fa-trash"></i>
             </button>
@@ -760,6 +836,30 @@ function syncFullscreenState() {
         <div v-else class="empty-state">从左侧选择一个节点，我们就能查看它的关系和属性。</div>
       </aside>
     </transition>
+
+    <NModal
+      :show="deleteDialogOpen"
+      preset="card"
+      class="knowledge-delete-modal"
+      :style="{ width: 'min(460px, calc(100vw - 32px))' }"
+      :mask-closable="!deletingProject"
+      :closable="false"
+      @update:show="(value) => { if (!value) cancelDeleteProjectDialog(); }"
+    >
+      <div class="delete-modal-head">
+        <div class="delete-modal-title">确认删除项目图谱</div>
+      </div>
+      <div class="delete-modal-body">
+        <p>
+          确认删除项目图谱“<strong>{{ selectedProjectScope }}</strong>”吗？
+        </p>
+        <p>这个操作会删除该项目下的页面、元素、实体和关系。</p>
+      </div>
+      <div class="delete-modal-actions">
+        <NButton class="delete-modal-cancel" quaternary :disabled="deletingProject" @click="cancelDeleteProjectDialog">取消</NButton>
+        <NButton class="delete-modal-confirm" :loading="deletingProject" @click="confirmDeleteProjectDialog">确定</NButton>
+      </div>
+    </NModal>
   </section>
 </template>
 
@@ -932,6 +1032,83 @@ function syncFullscreenState() {
   opacity: 0.45;
   cursor: not-allowed;
   filter: grayscale(1);
+}
+
+:deep(.knowledge-delete-modal) {
+  width: min(460px, calc(100vw - 32px));
+}
+
+:deep(.knowledge-delete-modal .n-card) {
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+}
+
+:deep(.knowledge-delete-modal .n-card__content) {
+  padding: 22px 24px 20px;
+}
+
+.delete-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.delete-modal-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.delete-modal-body {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.delete-modal-body p {
+  margin: 0;
+}
+
+.delete-modal-body p + p {
+  margin-top: 6px;
+}
+
+.delete-modal-body strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.delete-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.delete-modal-cancel:deep(.n-button) {
+  color: var(--text);
+}
+
+.delete-modal-cancel:deep(.n-button__border) {
+  border-color: var(--border);
+}
+
+.delete-modal-cancel:deep(.n-button__state-border) {
+  border-color: var(--border-strong);
+}
+
+.delete-modal-confirm:deep(.n-button) {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.delete-modal-confirm:deep(.n-button__border),
+.delete-modal-confirm:deep(.n-button__state-border) {
+  border-color: var(--accent);
 }
 
 .project-meta {
