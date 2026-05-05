@@ -10,6 +10,7 @@ import httpx
 from src.application.model_adapters import AdapterRegistry, build_default_adapter_registry
 from src.application.model_adapters.base import ProviderAdapter
 from src.application.models.model_compatibility import ModelCompatibilityLayer
+from src.application.models.oauth_token_service import OAuthTokenService
 from src.core.config import Settings
 from src.registry.models import ModelRegistry
 from src.runtime.execution_logging import summarize_messages, truncate_text
@@ -30,11 +31,13 @@ class ModelRuntimeService:
         model_registry: ModelRegistry,
         settings: Settings,
         adapter_registry: AdapterRegistry | None = None,
+        oauth_token_service: OAuthTokenService | None = None,
     ) -> None:
         self._model_registry = model_registry
         self._settings = settings
         self._adapter_registry = adapter_registry or build_default_adapter_registry()
         self._compatibility = ModelCompatibilityLayer(adapter_registry=self._adapter_registry)
+        self._oauth_token_service = oauth_token_service
 
     async def invoke(
         self,
@@ -56,7 +59,17 @@ class ModelRuntimeService:
                 response_summary={"mode": "missing_active_model", "model_key": model_key},
                 raw_response={"mode": "missing_active_model", "model_key": model_key},
             )
-        api_key = self._resolve_api_key(config)
+        try:
+            api_key = await self._resolve_auth_token(config)
+        except Exception as exc:
+            return ModelInvocationResult(
+                text=(
+                    f"Model '{config.name}' authentication failed: {exc}"
+                ),
+                request_payload=self._summarize_request(config, request),
+                response_summary={"mode": "auth_error", "model_key": config.key},
+                raw_response={"mode": "auth_error", "model_key": config.key},
+            )
 
         if not api_key:
             return ModelInvocationResult(
@@ -71,6 +84,22 @@ class ModelRuntimeService:
 
         adapter = self._adapter_registry.resolve(config)
         return await self._invoke_with_adapter(adapter, config, api_key, request)
+
+    async def _resolve_auth_token(self, config: ModelConfigRecord) -> str | None:
+        """Return the bearer token to use for this model config.
+
+        For oauth2 auth_type the token is obtained (and cached) via the
+        OAuthTokenService. For api_key auth_type the existing static key
+        resolution path is used.
+        """
+        if config.auth_type == "oauth2":
+            if self._oauth_token_service is None:
+                raise RuntimeError(
+                    "OAuthTokenService is not configured. "
+                    "Inject an OAuthTokenService instance into ModelRuntimeService."
+                )
+            return await self._oauth_token_service.get_token(config)
+        return self._resolve_api_key(config)
 
     def _resolve_api_key(self, config: ModelConfigRecord) -> str | None:
         if config.api_key:

@@ -2,6 +2,7 @@ import type {
   AgentDescriptor,
   ApiDocRecord,
   ApiDocUploadRequest,
+  ApiDocUpdateRequest,
   ConversationResponse,
   EmailConfigPublic,
   EmailConfigCreateRequest,
@@ -178,6 +179,28 @@ export const api = {
       method: "DELETE",
     });
   },
+  listOAuthProviders(): Promise<{ providers: import("../types").OAuthProviderProfile[] }> {
+    return request("/api/v1/oauth/providers");
+  },
+  startOAuthFlow(payload: import("../types").OAuthStartRequest): Promise<import("../types").OAuthStartResponse> {
+    return request("/api/v1/oauth/start", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getOAuthStatus(state: string): Promise<import("../types").OAuthStatusResponse> {
+    return request(`/api/v1/oauth/status/${encodeURIComponent(state)}`);
+  },
+  listOAuthModels(
+    provider: string,
+    state?: string | null,
+    base_url?: string | null,
+  ): Promise<import("../types").OAuthModelsResponse> {
+    const params = new URLSearchParams({ provider });
+    if (state) params.set("state", state);
+    if (base_url) params.set("base_url", base_url);
+    return request(`/api/v1/oauth/models?${params.toString()}`);
+  },
   listEmailConfigs(): Promise<EmailConfigPublic[]> {
     return request("/api/v1/settings/email");
   },
@@ -295,6 +318,12 @@ export const api = {
   uploadApiDoc(payload: ApiDocUploadRequest): Promise<ApiDocRecord> {
     return request("/api/v1/registry/api-docs/upload", {
       method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateApiDoc(docId: string, payload: ApiDocUpdateRequest): Promise<ApiDocRecord> {
+    return request(`/api/v1/registry/api-docs/${encodeURIComponent(docId)}`, {
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
   },

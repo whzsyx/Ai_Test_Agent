@@ -40,7 +40,7 @@ async def activate_model_config(model_name: str, request: Request):
 @router.post("/models/{model_name}/test-connection")
 async def test_model_config_connection(model_name: str, request: Request):
     try:
-        return request.app.state.settings_service.test_model_config_connection(model_name)
+        return await request.app.state.settings_service.test_model_config_connection(model_name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found.") from exc
 

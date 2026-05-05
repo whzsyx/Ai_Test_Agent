@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from src.schemas.email_config import EmailConfigPublic
-from src.schemas.model_config import ModelCapabilitiesOverride, ModelConfigPublic, ModelTransport
+from src.schemas.model_config import ModelAuthType, ModelCapabilitiesOverride, ModelConfigPublic, ModelTransport
 
 
 class ModelConfigUpdateRequest(BaseModel):
@@ -15,6 +15,9 @@ class ModelConfigUpdateRequest(BaseModel):
     is_active: bool = False
     use_provider_defaults: bool | None = None
     capability_overrides: ModelCapabilitiesOverride = Field(default_factory=ModelCapabilitiesOverride)
+    auth_type: ModelAuthType = "api_key"
+    oauth_provider: str | None = None
+    oauth_refresh_token: str | None = None
 
 
 class ModelConfigEditRequest(BaseModel):
@@ -26,6 +29,9 @@ class ModelConfigEditRequest(BaseModel):
     is_active: bool = False
     use_provider_defaults: bool | None = None
     capability_overrides: ModelCapabilitiesOverride = Field(default_factory=ModelCapabilitiesOverride)
+    auth_type: ModelAuthType = "api_key"
+    oauth_provider: str | None = None
+    oauth_refresh_token: str | None = None
 
 
 class ModelConfigActionResponse(BaseModel):

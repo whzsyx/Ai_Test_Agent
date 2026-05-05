@@ -14,13 +14,26 @@ const error = ref("");
 const selectedDoc = ref<ApiDocRecord | null>(null);
 const previewOpen = ref(false);
 const previewLoading = ref(false);
+const savingMetadata = ref(false);
 const deletingId = ref("");
 const uploadOpen = ref(false);
 const uploadLoading = ref(false);
 const uploadFile = ref<File | null>(null);
 const uploadTitle = ref("");
+const uploadProjectName = ref("");
+const editTitle = ref("");
+const editProjectName = ref("");
 
 const hasDocs = computed(() => docs.value.length > 0);
+const projectNameSuggestions = computed(() =>
+  Array.from(
+    new Set(
+      docs.value
+        .map((doc) => doc.project_name?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).sort((a, b) => a.localeCompare(b, "zh-CN")),
+);
 
 function formatBytes(value: number) {
   if (value >= 1024 * 1024) {
@@ -32,10 +45,36 @@ function formatBytes(value: number) {
   return `${value} B`;
 }
 
-function handleOpenUpload() {
-  uploadOpen.value = true;
+function resetUploadForm() {
   uploadFile.value = null;
   uploadTitle.value = "";
+  uploadProjectName.value = "";
+}
+
+function resetPreviewForm() {
+  editTitle.value = "";
+  editProjectName.value = "";
+}
+
+function syncPreviewForm(doc: ApiDocRecord | null) {
+  editTitle.value = doc?.title || "";
+  editProjectName.value = doc?.project_name || "";
+}
+
+function upsertDoc(doc: ApiDocRecord) {
+  const index = docs.value.findIndex((item) => item.id === doc.id);
+  if (index >= 0) {
+    const next = [...docs.value];
+    next[index] = doc;
+    docs.value = next;
+    return;
+  }
+  docs.value = [doc, ...docs.value];
+}
+
+function handleOpenUpload() {
+  uploadOpen.value = true;
+  resetUploadForm();
 }
 
 function handleExternalOpenUpload() {
@@ -44,11 +83,13 @@ function handleExternalOpenUpload() {
 
 function closeUpload() {
   uploadOpen.value = false;
+  resetUploadForm();
 }
 
 function closePreview() {
   previewOpen.value = false;
   selectedDoc.value = null;
+  resetPreviewForm();
 }
 
 function onUploadFileChange(event: Event) {
@@ -82,26 +123,28 @@ async function loadDocs() {
 
 async function submitUpload() {
   if (!uploadFile.value) {
-    toast.error("请选择要上传的文档文件");
+    toast.error("请选择要上传的 API 文档文件");
     return;
   }
 
   uploadLoading.value = true;
   try {
     const contentBase64 = await fileToBase64(uploadFile.value);
-    await api.uploadApiDoc({
+    const created = await api.uploadApiDoc({
       filename: uploadFile.value.name,
       content_base64: contentBase64,
       source: "tools_api_docs",
       title: uploadTitle.value.trim() || null,
+      project_name: uploadProjectName.value.trim() || null,
     });
-    toast.success("文档已上传到 MinIO，并已加入 API 接口文档管理", {
+    upsertDoc(created);
+    await loadDocs();
+    toast.success("API 文档已上传并加入文档管理", {
       duration: 2200,
     });
-    await loadDocs();
     setTimeout(() => {
       closeUpload();
-    }, 400);
+    }, 300);
   } catch (err) {
     toast.error(err instanceof Error ? err.message : "上传 API 文档失败");
   } finally {
@@ -115,13 +158,40 @@ async function openPreview(docId: string) {
   error.value = "";
   try {
     selectedDoc.value = await api.getApiDoc(docId);
+    syncPreviewForm(selectedDoc.value);
   } catch (err) {
     const detail = err instanceof Error ? err.message : "加载文档详情失败";
     error.value = detail;
     selectedDoc.value = null;
+    resetPreviewForm();
     toast.error(detail);
   } finally {
     previewLoading.value = false;
+  }
+}
+
+async function saveDocMetadata() {
+  if (!selectedDoc.value || savingMetadata.value) {
+    return;
+  }
+
+  savingMetadata.value = true;
+  error.value = "";
+  try {
+    const updated = await api.updateApiDoc(selectedDoc.value.id, {
+      title: editTitle.value.trim() || null,
+      project_name: editProjectName.value.trim() || null,
+    });
+    selectedDoc.value = updated;
+    syncPreviewForm(updated);
+    upsertDoc(updated);
+    toast.success("API 文档信息已更新", { duration: 2200 });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "更新 API 文档失败";
+    error.value = detail;
+    toast.error(detail);
+  } finally {
+    savingMetadata.value = false;
   }
 }
 
@@ -164,7 +234,7 @@ onBeforeUnmount(() => {
       <div>
         <h3 class="section-title">API 接口文档</h3>
         <p class="head-desc">
-          统一管理通过“添加文档源”上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档。
+          统一管理通过“添加文档源”上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档，并为后续接口测试模式维护所属项目。
         </p>
       </div>
     </div>
@@ -183,7 +253,7 @@ onBeforeUnmount(() => {
     <div v-else-if="!hasDocs" class="api-doc-empty">
       <i class="fa-solid fa-file-circle-plus"></i>
       <strong>还没有上传任何 API 文档</strong>
-      <span>这里展示的是明确加入“API 接口文档管理”的文件；聊天框 Attachments 上传的会话附件不会默认出现在这里。</span>
+      <span>这里展示的是明确加入“API 接口文档管理”的文件，聊天框 Attachments 上传的会话附件不会默认出现在这里。</span>
     </div>
 
     <div v-else class="api-docs-list">
@@ -193,7 +263,7 @@ onBeforeUnmount(() => {
             <i class="fa-solid" :class="doc.format_label.includes('Postman') ? 'fa-rocket' : 'fa-file-code'"></i>
           </div>
           <div class="api-doc-actions">
-            <button class="icon-btn" title="查看内容" @click="openPreview(doc.id)">
+            <button class="icon-btn" title="查看文档详情" @click="openPreview(doc.id)">
               <i class="fa-regular fa-eye"></i>
             </button>
             <button
@@ -217,6 +287,10 @@ onBeforeUnmount(() => {
           <p>{{ doc.filename }}</p>
 
           <div class="api-doc-meta">
+            <div class="meta-item">
+              <i class="fa-solid fa-diagram-project"></i>
+              <span>{{ doc.project_name || "未设置所属项目" }}</span>
+            </div>
             <div class="meta-item">
               <i class="fa-solid fa-database"></i>
               <span>MinIO 存储 · {{ formatBytes(doc.size_bytes) }}</span>
@@ -246,10 +320,35 @@ onBeforeUnmount(() => {
 
         <div v-if="previewLoading" class="api-doc-empty">
           <i class="fa-solid fa-spinner fa-spin"></i>
-          <span>正在加载文档内容...</span>
+          <span>正在加载文档详情...</span>
         </div>
         <template v-else-if="selectedDoc">
+          <div class="preview-form-grid">
+            <label class="upload-field">
+              文档标题
+              <input v-model="editTitle" placeholder="例如：用户中心 OpenAPI v2">
+            </label>
+            <label class="upload-field">
+              所属项目
+              <input
+                v-model="editProjectName"
+                list="api-doc-project-suggestions"
+                placeholder="例如：mall-order-service"
+              >
+              <small v-if="projectNameSuggestions.length" class="upload-hint">
+                可直接输入新项目名，也可复用已有项目：{{ projectNameSuggestions.join(" / ") }}
+              </small>
+            </label>
+          </div>
+
+          <div class="preview-meta-actions">
+            <button class="primary-btn" :disabled="savingMetadata" @click="saveDocMetadata">
+              {{ savingMetadata ? "保存中..." : "保存文档信息" }}
+            </button>
+          </div>
+
           <div class="preview-meta-grid">
+            <div><strong>所属项目：</strong>{{ selectedDoc.project_name || "未设置" }}</div>
             <div><strong>内容类型：</strong>{{ selectedDoc.content_type }}</div>
             <div><strong>上传来源：</strong>{{ selectedDoc.source }}</div>
             <div><strong>更新时间：</strong>{{ formatServerDateTime(selectedDoc.updated_at) }}</div>
@@ -262,7 +361,7 @@ onBeforeUnmount(() => {
               <span>文件内容</span>
               <span v-if="selectedDoc.preview_truncated">已截断显示前 20000 个字符</span>
             </div>
-            <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂时无可预览内容。" }}</code></pre>
+            <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂时没有可预览内容。" }}</code></pre>
           </div>
         </template>
       </section>
@@ -289,6 +388,26 @@ onBeforeUnmount(() => {
           文档标题（可选）
           <input v-model="uploadTitle" placeholder="例如：用户中心 OpenAPI v2">
         </label>
+
+        <label class="upload-field">
+          所属项目（建议填写）
+          <input
+            v-model="uploadProjectName"
+            list="api-doc-project-suggestions"
+            placeholder="例如：mall-order-service"
+          >
+          <small v-if="projectNameSuggestions.length" class="upload-hint">
+            可直接输入新项目名，也可从已有项目中选择
+          </small>
+        </label>
+
+        <datalist id="api-doc-project-suggestions">
+          <option
+            v-for="projectName in projectNameSuggestions"
+            :key="projectName"
+            :value="projectName"
+          />
+        </datalist>
 
         <div class="modal-actions">
           <button class="secondary-btn" @click="closeUpload">取消</button>
@@ -357,7 +476,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   width: 320px;
-  min-height: 290px;
+  min-height: 310px;
   padding: 20px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -554,6 +673,19 @@ onBeforeUnmount(() => {
   padding-bottom: 24px;
 }
 
+.preview-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+  padding-right: 28px;
+}
+
+.preview-meta-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 28px 0;
+}
+
 .preview-meta-grid {
   display: grid;
   gap: 10px;
@@ -668,11 +800,28 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
+.upload-hint {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
   padding: 20px 28px 0;
+}
+
+@media (max-width: 760px) {
+  .api-doc-card {
+    width: 100%;
+  }
+
+  .preview-form-grid {
+    grid-template-columns: 1fr;
+    padding-right: 0;
+  }
 }
 
 @keyframes fadeIn {

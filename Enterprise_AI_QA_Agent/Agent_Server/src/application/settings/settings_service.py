@@ -9,6 +9,7 @@ import httpx
 
 from src.application.model_adapters import AdapterRegistry, build_default_adapter_registry
 from src.application.models.model_compatibility import ModelCompatibilityLayer
+from src.application.models.oauth_token_service import OAuthTokenService
 from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
@@ -34,12 +35,17 @@ class SettingsService:
         model_config_store: MySQLModelConfigStore,
         email_config_store: MySQLEmailConfigStore,
         adapter_registry: AdapterRegistry | None = None,
+        oauth_token_service: OAuthTokenService | None = None,
     ) -> None:
         self._settings = settings
         self._model_config_store = model_config_store
         self._email_config_store = email_config_store
         self._adapter_registry = adapter_registry or build_default_adapter_registry()
         self._compatibility = ModelCompatibilityLayer(adapter_registry=self._adapter_registry)
+        self._oauth_token_service = oauth_token_service or OAuthTokenService(
+            settings=settings,
+            request_timeout=settings.llm_request_timeout_seconds,
+        )
 
     def list_model_configs(self):
         return [self._model_config_store.to_public(item) for item in self._model_config_store.list_all()]
@@ -69,9 +75,13 @@ class SettingsService:
             item=self._model_config_store.to_public(replacement) if replacement else None,
         )
 
-    def test_model_config_connection(self, model_name: str):
+    async def test_model_config_connection(self, model_name: str):
         record = self._model_config_store.get_by_name(model_name)
         public_item = self._model_config_store.to_public(record)
+
+        if record.auth_type == "oauth2":
+            return await self._test_oauth_connection(record, public_item)
+
         if not record.api_key:
             return ModelConfigConnectionTestResponse(
                 ok=False,
@@ -81,12 +91,15 @@ class SettingsService:
                 api_base_url=record.api_base_url,
             )
 
+        return self._test_api_key_connection(record, public_item, record.api_key)
+
+    def _test_api_key_connection(self, record, public_item, api_key: str):
         request = ModelInvocationRequest(
             system_prompt="You are a model connection health check. Reply with a short pong.",
             messages=[{"role": "user", "content": "ping"}],
         )
         url = self._compatibility.build_url(record)
-        headers = self._compatibility.build_headers(record, record.api_key)
+        headers = self._compatibility.build_headers(record, api_key)
         payload = self._compatibility.build_request(record, request)
 
         started_at = perf_counter()
@@ -118,6 +131,35 @@ class SettingsService:
             latency_ms=int((perf_counter() - started_at) * 1000),
             preview=preview or None,
         )
+
+    async def _test_oauth_connection(self, record, public_item):
+        provider = str(record.oauth_provider or "").strip()
+        if not provider:
+            return ModelConfigConnectionTestResponse(
+                ok=False,
+                message=(
+                    f"OAuth 2.0 connection test failed for '{record.name}': "
+                    "oauth_provider is required."
+                ),
+                item=public_item,
+                provider=record.provider,
+                api_base_url=record.api_base_url,
+            )
+
+        started_at = perf_counter()
+        try:
+            access_token = await self._oauth_token_service.fetch_token_once(record)
+        except Exception as exc:
+            return ModelConfigConnectionTestResponse(
+                ok=False,
+                message=f"OAuth token fetch failed for '{record.name}': {exc}",
+                item=public_item,
+                provider=record.provider,
+                api_base_url=record.api_base_url,
+                latency_ms=int((perf_counter() - started_at) * 1000),
+            )
+
+        return self._test_api_key_connection(record, public_item, access_token)
 
     def list_email_configs(self):
         return [self._to_email_public(item) for item in self._email_config_store.list_all()]

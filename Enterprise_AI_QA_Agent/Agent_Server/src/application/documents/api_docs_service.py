@@ -34,14 +34,14 @@ class ApiDocsService:
     async def list_documents(self) -> list[ApiDocRecord]:
         async with self._lock:
             catalog = self._load_catalog()
-        items = [ApiDocRecord.model_validate(item) for item in catalog]
+        items = [ApiDocRecord.model_validate(self._normalize_catalog_item(item)) for item in catalog]
         return sorted(items, key=lambda item: item.updated_at, reverse=True)
 
     async def get_document(self, doc_id: str) -> ApiDocRecord:
         async with self._lock:
             catalog = self._load_catalog()
             item = self._find_item(catalog, doc_id)
-        return ApiDocRecord.model_validate(item)
+        return ApiDocRecord.model_validate(self._normalize_catalog_item(item))
 
     async def upload_document(
         self,
@@ -50,6 +50,7 @@ class ApiDocsService:
         content_base64: str,
         source: str = "manual_upload",
         title: str | None = None,
+        project_name: str | None = None,
     ) -> ApiDocRecord:
         content = self._decode_base64(content_base64)
         declared_content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -57,6 +58,8 @@ class ApiDocsService:
         format_label, endpoint_count = self._detect_format(filename, content, preview_text)
         doc_id = str(uuid4())
         now = datetime.now(timezone.utc)
+        normalized_title = self._normalize_optional_text(title) or Path(filename).stem or filename
+        normalized_project_name = self._normalize_optional_text(project_name)
         storage_result = await self._store_upload(
             content=content,
             filename=filename,
@@ -69,8 +72,9 @@ class ApiDocsService:
 
         record = ApiDocRecord(
             id=doc_id,
-            title=(title or Path(filename).stem or filename).strip(),
+            title=normalized_title.strip(),
             filename=filename,
+            project_name=normalized_project_name,
             source=source,
             format_label=format_label,
             content_type=content_type,
@@ -90,6 +94,7 @@ class ApiDocsService:
                 "storage_backend": storage_result.get("storage_backend", "minio"),
                 "size_bytes": len(content),
                 "security": storage_result.get("security_report"),
+                "project_name": normalized_project_name,
             },
         )
 
@@ -98,6 +103,31 @@ class ApiDocsService:
             catalog.append(record.model_dump(mode="json"))
             self._save_catalog(catalog)
         return record
+
+    async def update_document(
+        self,
+        doc_id: str,
+        *,
+        title: str | None = None,
+        project_name: str | None = None,
+    ) -> ApiDocRecord:
+        normalized_title = self._normalize_optional_text(title)
+        normalized_project_name = self._normalize_optional_text(project_name)
+
+        async with self._lock:
+            catalog = self._load_catalog()
+            item = self._find_item(catalog, doc_id)
+            item["title"] = normalized_title or str(item.get("title") or Path(str(item.get("filename") or "")).stem or doc_id)
+            item["project_name"] = normalized_project_name
+            item["updated_at"] = datetime.now(timezone.utc).isoformat()
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                item["metadata"] = metadata
+            metadata["project_name"] = normalized_project_name
+            self._save_catalog(catalog)
+
+        return ApiDocRecord.model_validate(self._normalize_catalog_item(item))
 
     async def upload_attachment(
         self,
@@ -292,6 +322,22 @@ class ApiDocsService:
 
     def _save_catalog(self, catalog: list[dict[str, Any]]) -> None:
         self._catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _normalize_catalog_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(item)
+        metadata = normalized.get("metadata")
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        normalized["metadata"] = metadata_dict
+        normalized["project_name"] = self._normalize_optional_text(
+            normalized.get("project_name") or metadata_dict.get("project_name")
+        )
+        return normalized
+
+    def _normalize_optional_text(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
 
     def _find_item(self, catalog: list[dict[str, Any]], doc_id: str) -> dict[str, Any]:
         for item in catalog:

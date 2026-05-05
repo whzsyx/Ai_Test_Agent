@@ -181,6 +181,64 @@ export interface ModelDescriptor {
   tags: string[];
 }
 
+export type OAuthProviderKey =
+  | "azure_ad"
+  | "google"
+  | "github"
+  | "codebuddy"
+  | "trae"
+  | "codex"
+  | "generic";
+
+export interface OAuthProviderProfile {
+  key: OAuthProviderKey;
+  display_name: string;
+  authorization_url_template: string;
+  token_url_template: string;
+  default_scope: string;
+  extra_auth_params: Record<string, string>;
+  notes: string;
+  /** LLM API base URL (empty for providers that need a custom resource URL) */
+  api_base_url: string;
+  /** Default transport protocol for this provider */
+  default_transport: string;
+  /** Whether this provider supports server-side model listing */
+  has_model_listing: boolean;
+  /** Whether the user must supply a resource-specific Base URL (e.g. Azure AD) */
+  requires_base_url: boolean;
+}
+
+export interface OAuthStartRequest {
+  provider: OAuthProviderKey | string;
+  redirect_uri: string;
+  model_name?: string | null;
+}
+
+export interface OAuthModelItem {
+  id: string;
+  raw_id: string;
+  name: string;
+}
+
+export interface OAuthModelsResponse {
+  provider: string;
+  models: OAuthModelItem[];
+}
+
+export interface OAuthStartResponse {
+  state: string;
+  authorization_url: string;
+  redirect_uri: string;
+}
+
+export interface OAuthStatusResponse {
+  state: string;
+  status: "pending" | "completed" | "failed";
+  refresh_token?: string | null;
+  access_token_preview?: string | null;
+  error?: string | null;
+}
+
 export interface ModelConfigPublic {
   id?: number | null;
   key: string;
@@ -201,6 +259,9 @@ export interface ModelConfigPublic {
   capability_overrides: ModelCapabilitiesOverride;
   created_at?: string | null;
   updated_at?: string | null;
+  auth_type: "api_key" | "oauth2";
+  oauth_provider?: OAuthProviderKey | string | null;
+  has_oauth_refresh_token: boolean;
 }
 
 export interface ModelCapabilities {
@@ -244,6 +305,9 @@ export interface ModelConfigUpdateRequest {
   is_active: boolean;
   use_provider_defaults?: boolean | null;
   capability_overrides: ModelCapabilitiesOverride;
+  auth_type: "api_key" | "oauth2";
+  oauth_provider?: OAuthProviderKey | string | null;
+  oauth_refresh_token?: string | null;
 }
 
 export interface ModelConfigActionResponse {
@@ -678,6 +742,7 @@ export interface ApiDocRecord {
   id: string;
   title: string;
   filename: string;
+  project_name?: string | null;
   source: string;
   format_label: string;
   content_type: string;
@@ -700,6 +765,12 @@ export interface ApiDocUploadRequest {
   content_base64: string;
   source?: string;
   title?: string | null;
+  project_name?: string | null;
+}
+
+export interface ApiDocUpdateRequest {
+  title?: string | null;
+  project_name?: string | null;
 }
 
 export interface UploadedAttachmentRecord {

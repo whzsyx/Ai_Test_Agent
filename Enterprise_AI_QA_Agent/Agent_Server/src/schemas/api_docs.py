@@ -9,6 +9,7 @@ class ApiDocRecord(BaseModel):
     id: str
     title: str
     filename: str
+    project_name: str | None = None
     source: str = "manual_upload"
     format_label: str = "其他文档"
     content_type: str = "application/octet-stream"
@@ -31,6 +32,12 @@ class ApiDocUploadRequest(BaseModel):
     content_base64: str
     source: str = "manual_upload"
     title: str | None = None
+    project_name: str | None = None
+
+
+class ApiDocUpdateRequest(BaseModel):
+    title: str | None = None
+    project_name: str | None = None
 
 
 class AttachmentUploadRequest(BaseModel):

@@ -8,6 +8,9 @@ import type {
   ModelCapabilitiesOverride,
   ModelConfigPublic,
   ModelConfigUpdateRequest,
+  OAuthModelItem,
+  OAuthProviderProfile,
+  OAuthStatusResponse,
 } from "../../../types";
 
 type MessageTone = "success" | "error";
@@ -36,6 +39,20 @@ const messageText = ref("");
 const messageTone = ref<MessageTone>("success");
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
 const showCapabilities = ref(false);
+
+// OAuth provider presets
+const oauthProviders = ref<OAuthProviderProfile[]>([]);
+const oauthFlowState = ref<string | null>(null);
+const oauthFlowStatus = ref<OAuthStatusResponse | null>(null);
+const oauthPolling = ref(false);
+let oauthPollTimer: ReturnType<typeof setInterval> | null = null;
+
+// OAuth model discovery
+const oauthAvailableModels = ref<OAuthModelItem[]>([]);
+const oauthModelsFetching = ref(false);
+const oauthSelectedModelId = ref<string | null>(null);
+// Azure AD and providers that need a custom resource base URL
+const oauthCustomBaseUrl = ref("");
 
 const capabilityOptions: CapabilityOption[] = [
   { key: "tool_calling", label: "工具调用", hint: "允许模型发起工具调用" },
@@ -76,23 +93,29 @@ const modelDraft = reactive<ModelConfigUpdateRequest>({
   is_active: false,
   use_provider_defaults: true,
   capability_overrides: {},
+  auth_type: "api_key",
+  oauth_provider: null,
+  oauth_refresh_token: null,
 });
 
 const capabilityDraft = reactive<ModelCapabilities>({ ...baseCapabilities });
 
 const isEditing = computed(() => Boolean(editingModelName.value));
+const isOAuth = computed(() => modelDraft.auth_type === "oauth2");
+
+const selectedOAuthProfile = computed<OAuthProviderProfile | null>(() => {
+  if (!modelDraft.oauth_provider) return null;
+  return oauthProviders.value.find((p) => p.key === modelDraft.oauth_provider) ?? null;
+});
+
 const providerOptions = computed<SelectOption[]>(() => {
   const seen = new Set<string>();
   return modelConfigs.value
     .map((item) => item.provider.trim())
     .filter((provider) => {
-      if (!provider) {
-        return false;
-      }
+      if (!provider) return false;
       const normalized = provider.toLowerCase();
-      if (seen.has(normalized)) {
-        return false;
-      }
+      if (seen.has(normalized)) return false;
       seen.add(normalized);
       return true;
     })
@@ -100,8 +123,25 @@ const providerOptions = computed<SelectOption[]>(() => {
     .map((provider) => ({ label: provider, value: provider }));
 });
 
+const oauthProviderOptions = computed<SelectOption[]>(() =>
+  oauthProviders.value.map((p) => ({ label: p.display_name, value: p.key })),
+);
+
+const oauthModelOptions = computed<SelectOption[]>(() =>
+  oauthAvailableModels.value.map((m) => ({ label: `${m.id}  (${m.name})`, value: m.id })),
+);
+
+const oauthAuthSuccess = computed(
+  () => oauthFlowStatus.value?.status === "completed" || Boolean(modelDraft.oauth_refresh_token),
+);
+
+const oauthNeedsBaseUrl = computed(() => selectedOAuthProfile.value?.requires_base_url ?? false);
+
+const oauthHasModelListing = computed(() => selectedOAuthProfile.value?.has_model_listing ?? false);
+
 onMounted(() => {
   void loadSettings();
+  void loadOAuthProviders();
 });
 
 onBeforeUnmount(() => {
@@ -109,14 +149,13 @@ onBeforeUnmount(() => {
     clearTimeout(messageTimer);
     messageTimer = null;
   }
+  stopOAuthPoll();
 });
 
 watch(
   () => [showEditorModal.value, modelDraft.provider, modelDraft.transport, modelDraft.use_provider_defaults] as const,
   ([visible, provider, transport, useProviderDefaults]) => {
-    if (!visible || !useProviderDefaults) {
-      return;
-    }
+    if (!visible || !useProviderDefaults) return;
     applyCapabilityDraft(inferCapabilities(provider, transport || "openai_chat_completions"));
   },
 );
@@ -132,14 +171,21 @@ async function loadSettings() {
   }
 }
 
+async function loadOAuthProviders() {
+  try {
+    const res = await api.listOAuthProviders();
+    oauthProviders.value = res.providers;
+  } catch {
+    // non-critical, silently ignore
+  }
+}
+
 function showMessage(tone: MessageTone, text: string) {
   messageTone.value = tone;
   messageText.value = text;
   messageVisible.value = true;
 
-  if (messageTimer) {
-    clearTimeout(messageTimer);
-  }
+  if (messageTimer) clearTimeout(messageTimer);
 
   messageTimer = setTimeout(() => {
     messageVisible.value = false;
@@ -156,6 +202,10 @@ function resetModelDraft() {
   modelDraft.is_active = modelConfigs.value.length === 0;
   modelDraft.use_provider_defaults = true;
   modelDraft.capability_overrides = {};
+  modelDraft.auth_type = "api_key";
+  modelDraft.oauth_provider = null;
+  modelDraft.oauth_refresh_token = null;
+  resetOAuthFlow();
   applyCapabilityDraft(inferCapabilities("", modelDraft.transport));
 }
 
@@ -176,6 +226,11 @@ function openEditModal(item: ModelConfigPublic) {
   modelDraft.is_active = item.is_active;
   modelDraft.use_provider_defaults = !hasCapabilityOverrides(item.capability_overrides);
   modelDraft.capability_overrides = { ...item.capability_overrides };
+  modelDraft.auth_type = item.auth_type ?? "api_key";
+  modelDraft.oauth_provider = item.oauth_provider ?? null;
+  modelDraft.oauth_refresh_token = null;
+  oauthCustomBaseUrl.value = item.api_base_url;
+  resetOAuthFlow();
   applyCapabilityDraft(item.capabilities);
   showCapabilities.value = false;
   showEditorModal.value = true;
@@ -198,23 +253,9 @@ function inferCapabilities(provider: string, transport: string): ModelCapabiliti
   const capabilities: ModelCapabilities = { ...baseCapabilities };
 
   const openAiVisionProviders = new Set([
-    "openai",
-    "anthropic",
-    "deepseek",
-    "qwen",
-    "dashscope",
-    "zhipu",
-    "glm",
-    "openrouter",
-    "xai",
-    "minimax",
-    "volcengine",
-    "doubao",
-    "hunyuan",
-    "baidu",
-    "ernie",
-    "moonshot",
-    "kimi",
+    "openai", "anthropic", "deepseek", "qwen", "dashscope", "zhipu", "glm",
+    "openrouter", "xai", "minimax", "volcengine", "doubao", "hunyuan",
+    "baidu", "ernie", "moonshot", "kimi",
   ]);
 
   if (normalizedTransport === "anthropic_messages") {
@@ -250,34 +291,60 @@ function buildCapabilityOverrides(): ModelCapabilitiesOverride {
 }
 
 function hasCapabilityOverrides(overrides: ModelCapabilitiesOverride | undefined | null) {
-  if (!overrides) {
-    return false;
-  }
+  if (!overrides) return false;
   return Object.values(overrides).some((value) => value !== null && value !== undefined);
 }
 
 async function saveModel() {
-  if (
-    !modelDraft.model_name.trim() ||
-    !modelDraft.provider.trim() ||
-    !modelDraft.transport?.trim() ||
-    !modelDraft.base_url.trim()
-  ) {
-    showMessage("error", "模型名称、供应商、协议和 Base URL 不能为空。");
+  if (!modelDraft.model_name.trim()) {
+    showMessage("error", "配置名称不能为空。");
     return;
+  }
+
+  if (isOAuth.value) {
+    if (!modelDraft.oauth_provider) {
+      showMessage("error", "OAuth 2.0 模式需要选择提供商。");
+      return;
+    }
+    if (oauthNeedsBaseUrl.value && !oauthCustomBaseUrl.value.trim()) {
+      showMessage("error", "该提供商需要填写资源端点 (Base URL)。");
+      return;
+    }
+  } else {
+    if (!modelDraft.provider.trim() || !modelDraft.transport?.trim() || !modelDraft.base_url.trim()) {
+      showMessage("error", "供应商、协议和 Base URL 不能为空。");
+      return;
+    }
   }
 
   saving.value = true;
 
+  // For OAuth mode, auto-fill provider/transport/base_url from the profile
+  let provider = modelDraft.provider.trim().toLowerCase();
+  let transport = modelDraft.transport ?? "openai_chat_completions";
+  let base_url = modelDraft.base_url.trim();
+
+  if (isOAuth.value && selectedOAuthProfile.value) {
+    const profile = selectedOAuthProfile.value;
+    provider = profile.key;
+    transport = profile.default_transport || "openai_chat_completions";
+    base_url = oauthNeedsBaseUrl.value
+      ? oauthCustomBaseUrl.value.trim()
+      : (profile.api_base_url || "");
+  }
+
   const payload: ModelConfigUpdateRequest = {
     model_name: modelDraft.model_name.trim(),
-    provider: modelDraft.provider.trim().toLowerCase(),
-    transport: modelDraft.transport.trim(),
-    base_url: modelDraft.base_url.trim(),
-    api_key: modelDraft.api_key?.trim() ? modelDraft.api_key.trim() : null,
+    provider,
+    transport,
+    base_url,
+    api_key: isOAuth.value ? null : (modelDraft.api_key?.trim() || null),
     is_active: modelDraft.is_active,
     use_provider_defaults: modelDraft.use_provider_defaults ?? true,
     capability_overrides: modelDraft.use_provider_defaults ? {} : buildCapabilityOverrides(),
+    auth_type: modelDraft.auth_type,
+    oauth_provider: isOAuth.value ? (modelDraft.oauth_provider || null) : null,
+    oauth_refresh_token: isOAuth.value ? (modelDraft.oauth_refresh_token?.trim() || null) : null,
   };
 
   try {
@@ -323,7 +390,6 @@ async function testConnection(item: ModelConfigPublic) {
       }
       return;
     }
-
     showMessage("error", `连接测试失败：${item.name}`);
   });
 }
@@ -336,11 +402,119 @@ async function activateModel(item: ModelConfigPublic) {
   });
 }
 
-async function deleteModel(item: ModelConfigPublic) {
-  const confirmed = window.confirm(`确定删除模型“${item.name}”吗？`);
-  if (!confirmed) {
+// ── OAuth provider selection ──────────────────────────────────────────────────
+
+function onOAuthProviderChange(key: string | null) {
+  if (!key) {
+    oauthAvailableModels.value = [];
+    oauthSelectedModelId.value = null;
     return;
   }
+  // Clear model list when provider changes
+  oauthAvailableModels.value = [];
+  oauthSelectedModelId.value = null;
+  // Reset auth state for new provider
+  resetOAuthFlow();
+}
+
+// ── OAuth Authorization Code flow ─────────────────────────────────────────────
+
+function resetOAuthFlow() {
+  stopOAuthPoll();
+  oauthFlowState.value = null;
+  oauthFlowStatus.value = null;
+  oauthPolling.value = false;
+  oauthAvailableModels.value = [];
+  oauthSelectedModelId.value = null;
+}
+
+function stopOAuthPoll() {
+  if (oauthPollTimer !== null) {
+    clearInterval(oauthPollTimer);
+    oauthPollTimer = null;
+  }
+}
+
+async function launchOAuth() {
+  if (!modelDraft.oauth_provider) {
+    showMessage("error", "请先选择 OAuth 提供商。");
+    return;
+  }
+  const provider = modelDraft.oauth_provider;
+  const redirectUri = `${window.location.protocol}//${window.location.hostname}:8000/api/v1/oauth/callback`;
+
+  try {
+    const res = await api.startOAuthFlow({ provider, redirect_uri: redirectUri });
+
+    oauthFlowState.value = res.state;
+    oauthFlowStatus.value = { state: res.state, status: "pending" };
+    oauthPolling.value = true;
+
+    window.open(res.authorization_url, "_blank", "noopener,noreferrer");
+
+    stopOAuthPoll();
+    oauthPollTimer = setInterval(async () => {
+      try {
+        const status = await api.getOAuthStatus(res.state);
+        oauthFlowStatus.value = status;
+        if (status.status === "completed") {
+          stopOAuthPoll();
+          oauthPolling.value = false;
+          if (status.refresh_token) {
+            modelDraft.oauth_refresh_token = status.refresh_token;
+          }
+          showMessage("success", "OAuth 授权成功！可点击「获取可用模型」选择要使用的模型。");
+        } else if (status.status === "failed") {
+          stopOAuthPoll();
+          oauthPolling.value = false;
+          showMessage("error", `OAuth 授权失败：${status.error || "未知错误"}`);
+        }
+      } catch {
+        // network hiccup — keep polling
+      }
+    }, 2000);
+  } catch (err) {
+    showMessage("error", err instanceof Error ? err.message : "启动 OAuth 流程失败。");
+  }
+}
+
+// ── OAuth model discovery ─────────────────────────────────────────────────────
+
+async function fetchOAuthModels() {
+  if (!modelDraft.oauth_provider) {
+    showMessage("error", "请先选择 OAuth 提供商。");
+    return;
+  }
+  oauthModelsFetching.value = true;
+  try {
+    const res = await api.listOAuthModels(
+      modelDraft.oauth_provider,
+      oauthFlowState.value ?? null,
+      oauthNeedsBaseUrl.value ? oauthCustomBaseUrl.value.trim() || null : null,
+    );
+    oauthAvailableModels.value = res.models;
+    if (res.models.length === 0) {
+      showMessage("error", "未找到可用模型，请确认 .env 中凭据已配置或先完成 OAuth 授权。");
+    }
+  } catch (err) {
+    showMessage("error", err instanceof Error ? err.message : "获取模型列表失败。");
+  } finally {
+    oauthModelsFetching.value = false;
+  }
+}
+
+function onOAuthModelSelect(modelId: string | null) {
+  oauthSelectedModelId.value = modelId;
+  if (modelId && !modelDraft.model_name) {
+    modelDraft.model_name = modelId;
+  } else if (modelId) {
+    modelDraft.model_name = modelId;
+  }
+}
+
+async function deleteModel(item: ModelConfigPublic) {
+  const confirmed = window.confirm(`确定删除模型"${item.name}"吗？`);
+  if (!confirmed) return;
 
   await withAction(item.name, "delete", async () => {
     await api.deleteModelConfig(item.name);
@@ -398,11 +572,18 @@ async function deleteModel(item: ModelConfigPublic) {
 
           <div class="settings-model-card__stats settings-model-card__stats-plain">
             <div class="settings-model-card__stat">
-              <span>API Key</span>
-              <strong>{{ item.has_secret ? "已配置" : "未配置" }}</strong>
+              <span v-if="item.auth_type === 'oauth2'">
+                <i class="fa-solid fa-shield-halved"></i>
+                OAuth{{ item.oauth_provider ? ` · ${item.oauth_provider}` : " 2.0" }}
+              </span>
+              <span v-else>API Key</span>
+              <strong v-if="item.auth_type === 'oauth2'">
+                {{ item.has_oauth_refresh_token ? "令牌已获取 ✓" : "未配置" }}
+              </strong>
+              <strong v-else>{{ item.has_secret ? "已配置" : "未配置" }}</strong>
             </div>
             <div class="settings-model-card__stat settings-model-card__stat-full">
-              <span>Base URL</span>
+              <span>接口地址</span>
               <strong>{{ item.api_base_url }}</strong>
             </div>
           </div>
@@ -467,6 +648,7 @@ async function deleteModel(item: ModelConfigPublic) {
       </div>
     </div>
 
+    <!-- editor modal -->
     <div v-if="showEditorModal" class="settings-modal-overlay" @click.self="closeEditorModal">
       <section class="settings-modal-card settings-modal-card-clean">
         <div class="settings-modal-head">
@@ -477,47 +659,204 @@ async function deleteModel(item: ModelConfigPublic) {
           <button type="button" class="settings-modal-close" @click="closeEditorModal">×</button>
         </div>
 
+        <!-- ── 认证方式切换 ──────────────────────────────────────────── -->
         <div class="form-grid two">
-          <label>
-            <span>模型名称</span>
-            <input v-model="modelDraft.model_name" type="text" placeholder="claude-opus-4-7 / gpt-5.4" />
-          </label>
+          <div class="full settings-auth-type-row">
+            <span class="settings-auth-type-label">认证方式</span>
+            <div class="settings-auth-type-btns">
+              <button
+                type="button"
+                class="settings-auth-type-btn"
+                :class="{ active: modelDraft.auth_type === 'api_key' }"
+                @click="modelDraft.auth_type = 'api_key'"
+              >
+                <i class="fa-solid fa-key"></i> API Key
+              </button>
+              <button
+                type="button"
+                class="settings-auth-type-btn"
+                :class="{ active: modelDraft.auth_type === 'oauth2' }"
+                @click="modelDraft.auth_type = 'oauth2'"
+              >
+                <i class="fa-solid fa-shield-halved"></i> OAuth 2.0
+              </button>
+            </div>
+          </div>
 
-          <label class="settings-provider-field">
-            <span>供应商</span>
-            <NSelect
-              v-model:value="modelDraft.provider"
-              class="settings-provider-select"
-              menu-class="settings-provider-select-menu"
-              filterable
-              tag
-              clearable
-              :options="providerOptions"
-              placeholder="请选择或输入 provider"
-            />
-          </label>
+          <!-- ── API Key 模式 ──────────────────────────────────────────── -->
+          <template v-if="!isOAuth">
+            <label>
+              <span>模型名称</span>
+              <input v-model="modelDraft.model_name" type="text" placeholder="claude-opus-4-7 / gpt-5.4" />
+            </label>
 
-          <label class="settings-provider-field">
-            <span>协议</span>
-            <NSelect
-              v-model:value="modelDraft.transport"
-              class="settings-provider-select"
-              menu-class="settings-provider-select-menu"
-              :options="TRANSPORT_OPTIONS"
-              placeholder="请选择 transport"
-            />
-          </label>
+            <label class="settings-provider-field">
+              <span>供应商</span>
+              <NSelect
+                v-model:value="modelDraft.provider"
+                class="settings-provider-select"
+                menu-class="settings-provider-select-menu"
+                filterable
+                tag
+                clearable
+                :options="providerOptions"
+                placeholder="请选择或输入供应商"
+              />
+            </label>
 
-          <label>
-            <span>Base URL</span>
-            <input v-model="modelDraft.base_url" type="text" placeholder="https://api.deepseek.com/v1" />
-          </label>
+            <label class="settings-provider-field">
+              <span>协议</span>
+              <NSelect
+                v-model:value="modelDraft.transport"
+                class="settings-provider-select"
+                menu-class="settings-provider-select-menu"
+                :options="TRANSPORT_OPTIONS"
+                placeholder="请选择协议类型"
+              />
+            </label>
 
-          <label class="full">
-            <span>API Key</span>
-            <input v-model="modelDraft.api_key" type="password" placeholder="留空则保留当前密钥" />
-            <small>系统不会回显已保存的密钥内容。</small>
-          </label>
+            <label>
+              <span>接口地址</span>
+              <input v-model="modelDraft.base_url" type="text" placeholder="https://api.deepseek.com/v1" />
+            </label>
+
+            <label class="full">
+              <span>API Key</span>
+              <input v-model="modelDraft.api_key" type="password" placeholder="留空则保留当前密钥" />
+              <small>系统不会回显已保存的密钥内容。</small>
+            </label>
+          </template>
+
+          <!-- ── OAuth 2.0 模式 ──────────────────────────────────────────── -->
+          <template v-else>
+            <!-- Step 1: Provider -->
+            <label class="full settings-provider-field">
+              <span>OAuth 提供商</span>
+              <NSelect
+                v-model:value="modelDraft.oauth_provider"
+                class="settings-provider-select"
+                menu-class="settings-provider-select-menu"
+                :options="oauthProviderOptions"
+                placeholder="选择 OAuth 提供商"
+                clearable
+                @update:value="onOAuthProviderChange"
+              />
+              <small v-if="selectedOAuthProfile?.notes" class="oauth-provider-note">
+                {{ selectedOAuthProfile.notes }}
+              </small>
+            </label>
+
+            <!-- Azure / custom resource Base URL -->
+            <label v-if="oauthNeedsBaseUrl" class="full">
+              <span>资源端点（接口地址）</span>
+              <input
+                v-model="oauthCustomBaseUrl"
+                type="text"
+                placeholder="https://your-resource.openai.azure.com"
+              />
+              <small>该提供商的 API 端点因资源而异，请填写您的具体地址。</small>
+            </label>
+
+            <!-- Step 2: OAuth Authorization -->
+            <div v-if="modelDraft.oauth_provider" class="full oauth-launch-section">
+              <div class="oauth-step-label">
+                <span class="oauth-step-num">1</span>
+                <span>浏览器授权</span>
+                <i v-if="oauthAuthSuccess" class="fa-solid fa-check oauth-step-done"></i>
+              </div>
+
+              <!-- Success: refresh token obtained -->
+              <div v-if="modelDraft.oauth_refresh_token" class="oauth-token-status oauth-token-ok">
+                <i class="fa-solid fa-circle-check"></i>
+                已获取 Refresh Token，授权完成
+                <button type="button" class="oauth-token-clear" @click="modelDraft.oauth_refresh_token = null; resetOAuthFlow()">
+                  清除
+                </button>
+              </div>
+
+              <!-- Polling / pending / failed -->
+              <div v-else-if="oauthFlowStatus" class="oauth-token-status" :class="{
+                'oauth-token-pending': oauthFlowStatus.status === 'pending',
+                'oauth-token-ok': oauthFlowStatus.status === 'completed',
+                'oauth-token-error': oauthFlowStatus.status === 'failed',
+              }">
+                <i class="fa-solid" :class="{
+                  'fa-spinner fa-spin': oauthFlowStatus.status === 'pending',
+                  'fa-circle-check': oauthFlowStatus.status === 'completed',
+                  'fa-circle-xmark': oauthFlowStatus.status === 'failed',
+                }"></i>
+                <span v-if="oauthFlowStatus.status === 'pending'">等待用户在浏览器中完成授权…</span>
+                <span v-else-if="oauthFlowStatus.status === 'completed'">授权成功</span>
+                <span v-else>授权失败：{{ oauthFlowStatus.error }}</span>
+                <button v-if="oauthFlowStatus.status !== 'pending'" type="button" class="oauth-token-clear" @click="resetOAuthFlow()">
+                  重置
+                </button>
+              </div>
+
+              <button
+                type="button"
+                class="oauth-launch-btn"
+                :disabled="oauthPolling || !modelDraft.oauth_provider"
+                @click="launchOAuth"
+              >
+                <i class="fa-solid" :class="oauthPolling ? 'fa-spinner fa-spin' : 'fa-arrow-up-right-from-square'"></i>
+                {{ oauthPolling ? "等待授权中…" : (oauthAuthSuccess ? "重新授权" : "启动 OAuth 授权") }}
+              </button>
+
+              <p class="oauth-env-hint">
+                <i class="fa-solid fa-circle-info"></i>
+                Client ID / Client Secret 等凭据已在后端 <code>.env</code> 中配置，无需在此填写。
+              </p>
+            </div>
+
+            <!-- Step 3: Model Discovery (shown once provider is selected) -->
+            <div v-if="modelDraft.oauth_provider" class="full oauth-models-section">
+              <div class="oauth-step-label">
+                <span class="oauth-step-num">2</span>
+                <span>选择模型</span>
+                <i v-if="oauthSelectedModelId" class="fa-solid fa-check oauth-step-done"></i>
+              </div>
+
+              <div class="oauth-models-row">
+                <button
+                  type="button"
+                  class="oauth-fetch-btn"
+                  :disabled="oauthModelsFetching || !modelDraft.oauth_provider"
+                  @click="fetchOAuthModels"
+                >
+                  <i class="fa-solid" :class="oauthModelsFetching ? 'fa-spinner fa-spin' : 'fa-magnifying-glass'"></i>
+                  {{ oauthModelsFetching ? "查询中…" : "获取可用模型" }}
+                </button>
+
+                <NSelect
+                  v-if="oauthAvailableModels.length > 0"
+                  :value="oauthSelectedModelId"
+                  class="settings-provider-select oauth-model-select"
+                  menu-class="settings-provider-select-menu"
+                  :options="oauthModelOptions"
+                  placeholder="选择模型"
+                  filterable
+                  clearable
+                  @update:value="onOAuthModelSelect"
+                />
+              </div>
+
+              <p v-if="!oauthHasModelListing && !oauthAvailableModels.length" class="oauth-no-listing-hint">
+                该提供商暂不支持自动模型列表，请在下方直接填写配置名称。
+              </p>
+            </div>
+
+            <!-- Step 4 / Config name (always shown in OAuth mode) -->
+            <label class="full">
+              <span>配置名称</span>
+              <input
+                v-model="modelDraft.model_name"
+                type="text"
+                :placeholder="oauthSelectedModelId ? oauthSelectedModelId : 'gpt-4o / gemini-2.0-flash'"
+              />
+              <small>此名称用于在系统中标识该模型配置，可自定义。</small>
+            </label>
+          </template>
 
           <label class="checkbox-row full">
             <input v-model="modelDraft.is_active" type="checkbox" />
@@ -525,10 +864,19 @@ async function deleteModel(item: ModelConfigPublic) {
           </label>
         </div>
 
-        <section class="settings-capability-panel">
-          <div class="settings-capability-panel__head" @click="showCapabilities = !showCapabilities" style="cursor: pointer; user-select: none;">
+        <!-- Capability overrides (API key mode only; hidden for OAuth to keep the form clean) -->
+        <section v-if="!isOAuth" class="settings-capability-panel">
+          <div
+            class="settings-capability-panel__head"
+            style="cursor: pointer; user-select: none;"
+            @click="showCapabilities = !showCapabilities"
+          >
             <div style="display: flex; align-items: flex-start; gap: 8px;">
-              <i class="fa-solid" :class="showCapabilities ? 'fa-chevron-down' : 'fa-chevron-right'" style="margin-top: 4px;"></i>
+              <i
+                class="fa-solid"
+                :class="showCapabilities ? 'fa-chevron-down' : 'fa-chevron-right'"
+                style="margin-top: 4px;"
+              ></i>
               <div>
                 <strong>能力覆盖</strong>
                 <p>默认根据供应商和协议推断能力；如果需要，可在当前模型上单独覆盖。</p>
@@ -570,3 +918,223 @@ async function deleteModel(item: ModelConfigPublic) {
     </div>
   </section>
 </template>
+
+<style scoped>
+/* ── 认证方式切换按钮 ─────────────────────────────────────────── */
+.settings-auth-type-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-auth-type-label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.settings-auth-type-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-auth-type-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.settings-auth-type-btn:hover {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.settings-auth-type-btn.active {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── OAuth 提供商备注 ─────────────────────────────────────────── */
+.oauth-provider-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* ── 步骤标签 ─────────────────────────────────────────────────── */
+.oauth-step-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.oauth-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.oauth-step-done {
+  color: var(--text);
+  font-size: 14px;
+}
+
+/* ── 浏览器授权区域 ───────────────────────────────────────────── */
+.oauth-launch-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* ── 模型选择区域 ─────────────────────────────────────────────── */
+.oauth-models-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.oauth-models-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.oauth-model-select {
+  flex: 1;
+  min-width: 200px;
+}
+
+.oauth-no-listing-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ── 操作按钮 ─────────────────────────────────────────────────── */
+.oauth-launch-btn,
+.oauth-fetch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  align-self: flex-start;
+}
+
+.oauth-launch-btn:hover:not(:disabled),
+.oauth-fetch-btn:hover:not(:disabled) {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.oauth-launch-btn:disabled,
+.oauth-fetch-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── 授权状态横幅 ─────────────────────────────────────────────── */
+.oauth-token-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* 等待中：静默灰 */
+.oauth-token-pending {
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+/* 成功：深色强调 */
+.oauth-token-ok {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+
+/* 失败：红色保留语义 */
+.oauth-token-error {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+
+.oauth-token-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 0;
+}
+
+.oauth-token-clear:hover {
+  opacity: 1;
+}
+
+/* ── 环境变量提示 ─────────────────────────────────────────────── */
+.oauth-env-hint {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 0;
+}
+
+.oauth-env-hint code {
+  background: var(--surface-muted);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: monospace;
+  color: var(--text);
+}
+</style>

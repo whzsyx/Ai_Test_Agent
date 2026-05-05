@@ -85,6 +85,76 @@ class MySQLModelConfigStore:
                     """
                 )
                 cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'auth_type'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `auth_type` VARCHAR(32) NOT NULL DEFAULT 'api_key' AFTER `transport`
+                        """
+                    )
+                cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'oauth_client_id'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `oauth_client_id` TEXT NULL AFTER `auth_type`
+                        """
+                    )
+                cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'oauth_client_secret'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `oauth_client_secret` TEXT NULL AFTER `oauth_client_id`
+                        """
+                    )
+                cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'oauth_token_endpoint'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `oauth_token_endpoint` VARCHAR(1024) NULL AFTER `oauth_client_secret`
+                        """
+                    )
+                cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'oauth_scope'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `oauth_scope` VARCHAR(512) NULL AFTER `oauth_token_endpoint`
+                        """
+                    )
+                cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'oauth_provider'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `oauth_provider` VARCHAR(64) NULL AFTER `auth_type`
+                        """
+                    )
+                cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'oauth_refresh_token'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `oauth_refresh_token` TEXT NULL AFTER `oauth_scope`
+                        """
+                    )
+                cur.execute(
                     f"SELECT COUNT(*) AS total FROM `{self._settings.llm_model_table}`"
                 )
                 total = cur.fetchone()["total"]
@@ -132,13 +202,18 @@ class MySQLModelConfigStore:
                     )
             conn.commit()
 
+    _SELECT_COLS = (
+        "id, model_name, api_key, base_url, provider, is_active, created_at, updated_at"
+        ", capability_overrides, transport"
+        ", auth_type, oauth_provider, oauth_refresh_token"
+    )
+
     def list_all(self) -> list[ModelConfigRecord]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     ORDER BY id ASC
                     """
@@ -154,8 +229,7 @@ class MySQLModelConfigStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -171,8 +245,7 @@ class MySQLModelConfigStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -186,15 +259,19 @@ class MySQLModelConfigStore:
                 cur.execute(
                     f"""
                     INSERT INTO `{self._settings.llm_model_table}`
-                    (`model_name`, `api_key`, `base_url`, `provider`, `transport`, `capability_overrides`, `is_active`)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (`model_name`, `api_key`, `base_url`, `provider`, `transport`, `capability_overrides`, `is_active`,
+                     `auth_type`, `oauth_provider`, `oauth_refresh_token`)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         `api_key`=VALUES(`api_key`),
                         `base_url`=VALUES(`base_url`),
                         `provider`=VALUES(`provider`),
                         `transport`=VALUES(`transport`),
                         `capability_overrides`=VALUES(`capability_overrides`),
-                        `is_active`=VALUES(`is_active`)
+                        `is_active`=VALUES(`is_active`),
+                        `auth_type`=VALUES(`auth_type`),
+                        `oauth_provider`=VALUES(`oauth_provider`),
+                        `oauth_refresh_token`=VALUES(`oauth_refresh_token`)
                     """,
                     (
                         payload.model_name,
@@ -207,12 +284,14 @@ class MySQLModelConfigStore:
                             existing_row=existing_row,
                         ),
                         int(payload.is_active),
+                        payload.auth_type or "api_key",
+                        payload.oauth_provider or None,
+                        payload.oauth_refresh_token if payload.oauth_refresh_token else ((existing_row or {}).get("oauth_refresh_token") or None),
                     ),
                 )
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -227,8 +306,7 @@ class MySQLModelConfigStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -260,7 +338,10 @@ class MySQLModelConfigStore:
                         `provider`=%s,
                         `transport`=%s,
                         `capability_overrides`=%s,
-                        `is_active`=%s
+                        `is_active`=%s,
+                        `auth_type`=%s,
+                        `oauth_provider`=%s,
+                        `oauth_refresh_token`=%s
                     WHERE `model_name`=%s
                     """,
                     (
@@ -274,13 +355,15 @@ class MySQLModelConfigStore:
                             existing_row=existing_row,
                         ),
                         int(payload.is_active),
+                        payload.auth_type or "api_key",
+                        payload.oauth_provider or None,
+                        payload.oauth_refresh_token if payload.oauth_refresh_token else (existing_row.get("oauth_refresh_token") or None),
                         original_model_name,
                     ),
                 )
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -306,8 +389,7 @@ class MySQLModelConfigStore:
                 )
                 cur.execute(
                     f"""
-                        SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides, transport
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -322,8 +404,7 @@ class MySQLModelConfigStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                    , capability_overrides
+                    SELECT {self._SELECT_COLS}
                     FROM `{self._settings.llm_model_table}`
                     WHERE model_name=%s
                     """,
@@ -343,8 +424,7 @@ class MySQLModelConfigStore:
                 if deleted_record.is_active:
                     cur.execute(
                         f"""
-                        SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                        , capability_overrides, transport
+                        SELECT {self._SELECT_COLS}
                         FROM `{self._settings.llm_model_table}`
                         ORDER BY id ASC
                         LIMIT 1
@@ -359,8 +439,7 @@ class MySQLModelConfigStore:
                         )
                         cur.execute(
                             f"""
-                            SELECT id, model_name, api_key, base_url, provider, is_active, created_at, updated_at
-                            , capability_overrides, transport
+                            SELECT {self._SELECT_COLS}
                             FROM `{self._settings.llm_model_table}`
                             WHERE model_name=%s
                             """,
@@ -404,6 +483,9 @@ class MySQLModelConfigStore:
             capability_overrides=record.capability_overrides,
             created_at=record.created_at,
             updated_at=record.updated_at,
+            auth_type=record.auth_type,
+            oauth_provider=record.oauth_provider,
+            has_oauth_refresh_token=bool(record.oauth_refresh_token),
         )
 
     def _connect(self):
@@ -436,6 +518,9 @@ class MySQLModelConfigStore:
         canonical_key = self._canonical_model_key(provider, model_name)
         created_at = row.get("created_at")
         updated_at = row.get("updated_at")
+        auth_type = str(row.get("auth_type") or "api_key").strip() or "api_key"
+        if auth_type not in ("api_key", "oauth2"):
+            auth_type = "api_key"
         return ModelConfigRecord(
             id=row.get("id"),
             key=canonical_key,
@@ -459,6 +544,9 @@ class MySQLModelConfigStore:
             capability_overrides=capability_overrides,
             created_at=self._normalize_datetime(created_at),
             updated_at=self._normalize_datetime(updated_at),
+            auth_type=auth_type,
+            oauth_provider=row.get("oauth_provider") or None,
+            oauth_refresh_token=row.get("oauth_refresh_token") or None,
         )
 
     def _normalize_datetime(self, value) -> datetime | None:

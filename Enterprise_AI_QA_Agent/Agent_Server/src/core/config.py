@@ -72,6 +72,21 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
 
+    # OAuth 2.0 Provider Credentials
+    oauth_azure_ad_client_id: str = ""
+    oauth_azure_ad_client_secret: str = ""
+    oauth_azure_ad_tenant_id: str = ""
+    oauth_google_client_id: str = ""
+    oauth_google_client_secret: str = ""
+    oauth_github_client_id: str = ""
+    oauth_github_client_secret: str = ""
+    oauth_codebuddy_client_id: str = ""
+    oauth_codebuddy_client_secret: str = ""
+    oauth_trae_client_id: str = ""
+    oauth_trae_client_secret: str = ""
+    oauth_codex_client_id: str = ""
+    oauth_codex_client_secret: str = ""
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",

@@ -18,10 +18,12 @@ from src.api.routes.attachments import router as attachments_router
 from src.api.routes.api_docs import router as api_docs_router
 from src.api.routes.health import router as health_router
 from src.api.routes.knowledge import router as knowledge_router
+from src.api.routes.oauth import router as oauth_router
 from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
 from src.application.model_adapters import build_default_adapter_registry
+from src.application.models.oauth_token_service import OAuthTokenService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.documents.api_docs_service import ApiDocsService
 from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
@@ -114,10 +116,15 @@ async def lifespan(app: FastAPI):
     transcript_hygiene_service = TranscriptHygieneService()
     runtime_control = RuntimeControlRegistry()
     adapter_registry = build_default_adapter_registry()
+    oauth_token_service = OAuthTokenService(
+        settings=settings,
+        request_timeout=settings.llm_request_timeout_seconds,
+    )
     model_runtime_service = ModelRuntimeService(
         model_registry=model_registry,
         settings=settings,
         adapter_registry=adapter_registry,
+        oauth_token_service=oauth_token_service,
     )
     tool_runtime_service = ToolRuntimeService(
         request_timeout_seconds=settings.llm_request_timeout_seconds,
@@ -219,11 +226,13 @@ async def lifespan(app: FastAPI):
         mcp_registry=mcp_registry,
         mode_registry=mode_registry,
     )
+    app.state.oauth_token_service = oauth_token_service
     app.state.settings_service = SettingsService(
         settings=settings,
         model_config_store=model_config_store,
         email_config_store=email_config_store,
         adapter_registry=adapter_registry,
+        oauth_token_service=oauth_token_service,
     )
     yield
 
@@ -250,6 +259,7 @@ app.include_router(attachments_router, prefix=settings.api_v1_prefix)
 app.include_router(api_docs_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
+app.include_router(oauth_router, prefix=settings.api_v1_prefix)
 
 
 if __name__ == "__main__":

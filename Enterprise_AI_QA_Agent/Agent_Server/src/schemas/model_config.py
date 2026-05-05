@@ -16,6 +16,8 @@ ModelTransport = Literal[
     "google_gemini_generate_content",
 ]
 
+ModelAuthType = Literal["api_key", "oauth2"]
+
 
 ContentPartType = Literal[
     "text",
@@ -105,6 +107,9 @@ class ModelConfigRecord(BaseModel):
     capability_overrides: ModelCapabilitiesOverride = Field(default_factory=ModelCapabilitiesOverride)
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    auth_type: ModelAuthType = "api_key"
+    oauth_provider: str | None = None
+    oauth_refresh_token: str | None = None
 
     @model_validator(mode="after")
     def _sync_capabilities(self):
@@ -135,6 +140,9 @@ class ModelConfigPublic(BaseModel):
     capability_overrides: ModelCapabilitiesOverride = Field(default_factory=ModelCapabilitiesOverride)
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    auth_type: ModelAuthType = "api_key"
+    oauth_provider: str | None = None
+    has_oauth_refresh_token: bool = False
 
 
 class ModelInvocationRequest(BaseModel):
