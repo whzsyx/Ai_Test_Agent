@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     oauth_azure_ad_tenant_id: str = ""
     oauth_google_client_id: str = ""
     oauth_google_client_secret: str = ""
+    oauth_google_project_id: str = ""
     oauth_github_client_id: str = ""
     oauth_github_client_secret: str = ""
     oauth_codebuddy_client_id: str = ""

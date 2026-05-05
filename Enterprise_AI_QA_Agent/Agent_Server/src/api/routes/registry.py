@@ -33,6 +33,10 @@ class SkillMarketplaceInstallRequest(BaseModel):
     overwrite: bool = False
 
 
+class MCPToolCallRequest(BaseModel):
+    arguments: dict[str, object] = Field(default_factory=dict, description="Arguments passed to the MCP tool.")
+
+
 @router.get("/framework")
 async def framework_summary(request: Request):
     return request.app.state.registry_service.framework_summary()
@@ -183,3 +187,36 @@ async def list_managed_mcp_servers(request: Request):
 @router.get("/mcp/providers")
 async def list_mcp_providers(request: Request):
     return request.app.state.registry_service.list_mcp_providers()
+
+
+@router.get("/mcp/managed/{server_key}/tools")
+async def list_managed_mcp_tools(server_key: str, request: Request):
+    try:
+        return await request.app.state.registry_service.list_managed_mcp_tools(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/mcp/managed/{server_key}/test")
+async def test_managed_mcp_server(server_key: str, request: Request):
+    try:
+        return await request.app.state.registry_service.test_managed_mcp_server(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/mcp/managed/{server_key}/tools/{tool_name}/call")
+async def call_managed_mcp_tool(
+    server_key: str,
+    tool_name: str,
+    payload: MCPToolCallRequest,
+    request: Request,
+):
+    try:
+        return await request.app.state.registry_service.call_managed_mcp_tool(
+            server_key,
+            tool_name,
+            payload.arguments,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

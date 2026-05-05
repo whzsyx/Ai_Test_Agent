@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useMessage } from "naive-ui";
+import { useMessage, NSelect } from "naive-ui";
 
 import { api } from "../../../services/api";
 import type {
@@ -114,6 +114,10 @@ const projectNameSuggestions = computed(() =>
       ].filter((value): value is string => Boolean(value)),
     ),
   ).sort((a, b) => a.localeCompare(b, "zh-CN")),
+);
+
+const projectNameOptions = computed(() =>
+  projectNameSuggestions.value.map(name => ({ label: name, value: name }))
 );
 
 function formatBytes(value: number) {
@@ -508,55 +512,59 @@ onBeforeUnmount(() => {
             <h3>{{ selectedDoc?.title || "文档内容预览" }}</h3>
             <p v-if="selectedDoc">{{ selectedDoc.filename }} · {{ selectedDoc.format_label }}</p>
           </div>
-          <button class="icon-btn" @click="closePreview"><i class="fa-solid fa-xmark"></i></button>
-        </header>
-
-        <div v-if="previewLoading" class="api-doc-empty">
-          <i class="fa-solid fa-spinner fa-spin"></i>
-          <span>正在加载文档详情...</span>
-        </div>
-        <template v-else-if="selectedDoc">
-          <div class="preview-form-grid">
-            <label class="field-block">
-              <span>文档标题</span>
-              <input v-model="editTitle" placeholder="例如：用户中心 OpenAPI v2">
-            </label>
-            <label class="field-block">
-              <span>所属项目</span>
-              <input
-                v-model="editProjectName"
-                list="api-doc-project-suggestions"
-                placeholder="例如：mall-order-service"
-              >
-              <small v-if="projectNameSuggestions.length" class="field-hint">
-                可直接输入新项目名，也可复用已有项目：{{ projectNameSuggestions.join(" / ") }}
-              </small>
-            </label>
-          </div>
-
-          <div class="preview-meta-actions">
-            <button class="primary-btn" :disabled="savingMetadata" @click="saveDocMetadata">
+          <div class="tools-modal-head-actions">
+            <button v-if="selectedDoc" class="primary-btn head-save-btn" :disabled="savingMetadata" @click="saveDocMetadata">
               {{ savingMetadata ? "保存中..." : "保存文档信息" }}
             </button>
+            <button class="icon-btn" @click="closePreview"><i class="fa-solid fa-xmark"></i></button>
           </div>
+        </header>
 
-          <div class="preview-meta-grid">
-            <div><strong>所属项目：</strong>{{ selectedDoc.project_name || "未设置" }}</div>
-            <div><strong>内容类型：</strong>{{ selectedDoc.content_type }}</div>
-            <div><strong>上传来源：</strong>{{ selectedDoc.source }}</div>
-            <div><strong>更新时间：</strong>{{ formatServerDateTime(selectedDoc.updated_at) }}</div>
-            <div><strong>MinIO URI：</strong>{{ selectedDoc.storage_uri }}</div>
+        <div class="tools-modal-body">
+          <div v-if="previewLoading" class="api-doc-empty">
+            <i class="fa-solid fa-spinner fa-spin"></i>
+            <span>正在加载文档详情...</span>
           </div>
-
-          <div v-if="selectedDoc.preview_error" class="preview-inline-error">{{ selectedDoc.preview_error }}</div>
-          <div v-else class="preview-code-shell">
-            <div class="preview-toolbar">
-              <span>文件内容</span>
-              <span v-if="selectedDoc.preview_truncated">已截断显示前 20000 个字符</span>
+          <template v-else-if="selectedDoc">
+            <div class="preview-form-grid">
+              <label class="field-block">
+                <span>文档标题</span>
+                <input v-model="editTitle" placeholder="例如：用户中心 OpenAPI v2">
+              </label>
+              <label class="field-block">
+                <span>所属项目</span>
+                <n-select
+                  v-model:value="editProjectName"
+                  filterable
+                  tag
+                  :options="projectNameOptions"
+                  placeholder="例如：mall-order-service"
+                  class="custom-select"
+                />
+                <small v-if="projectNameSuggestions.length" class="field-hint">
+                  可直接输入新项目名，也可复用已有项目：{{ projectNameSuggestions.join(" / ") }}
+                </small>
+              </label>
             </div>
-            <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂时没有可预览内容。" }}</code></pre>
-          </div>
-        </template>
+
+            <div class="preview-meta-grid">
+              <div><strong>所属项目：</strong>{{ selectedDoc.project_name || "未设置" }}</div>
+              <div><strong>内容类型：</strong>{{ selectedDoc.content_type }}</div>
+              <div><strong>上传来源：</strong>{{ selectedDoc.source }}</div>
+              <div><strong>更新时间：</strong>{{ formatServerDateTime(selectedDoc.updated_at) }}</div>
+              <div><strong>MinIO URI：</strong>{{ selectedDoc.storage_uri }}</div>
+            </div>
+
+            <div v-if="selectedDoc.preview_error" class="preview-inline-error">{{ selectedDoc.preview_error }}</div>
+            <div v-else class="preview-code-shell">
+              <div class="preview-toolbar">
+                <span>文件内容</span>
+                <span v-if="selectedDoc.preview_truncated">已截断显示前 20000 个字符</span>
+              </div>
+              <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂时没有可预览内容。" }}</code></pre>
+            </div>
+          </template>
+        </div>
       </section>
     </div>
 
@@ -570,108 +578,112 @@ onBeforeUnmount(() => {
           <button class="icon-btn" @click="closeUpload"><i class="fa-solid fa-xmark"></i></button>
         </header>
 
-        <div class="import-mode-tabs">
-          <button :class="{ active: uploadMode === 'local' }" @click="uploadMode = 'local'">本地文件导入</button>
-          <button :class="{ active: uploadMode === 'url' }" @click="uploadMode = 'url'">URL 地址导入</button>
-          <button :class="{ active: uploadMode === 'integration' }" @click="uploadMode = 'integration'">第三方平台接入</button>
-        </div>
+        <div class="tools-modal-body">
+          <div class="import-mode-tabs">
+            <button :class="{ active: uploadMode === 'local' }" @click="uploadMode = 'local'">本地文件导入</button>
+            <button :class="{ active: uploadMode === 'url' }" @click="uploadMode = 'url'">URL 地址导入</button>
+            <button :class="{ active: uploadMode === 'integration' }" @click="uploadMode = 'integration'">第三方平台接入</button>
+          </div>
 
-        <template v-if="uploadMode === 'local'">
-          <label class="upload-drop">
-            <i class="fa-solid fa-file-arrow-up"></i>
-            <strong>{{ uploadFile?.name || "选择要导入的本地文档文件" }}</strong>
-            <span>推荐上传 JSON / YAML / Markdown / TXT / Postman Collection</span>
-            <input type="file" accept=".json,.yaml,.yml,.txt,.md,.csv,.xml,.html" @change="onUploadFileChange">
-          </label>
-        </template>
+          <template v-if="uploadMode === 'local'">
+            <label class="upload-drop">
+              <i class="fa-solid fa-file-arrow-up"></i>
+              <strong>{{ uploadFile?.name || "选择要导入的本地文档文件" }}</strong>
+              <span>推荐上传 JSON / YAML / Markdown / TXT / Postman Collection</span>
+              <input type="file" accept=".json,.yaml,.yml,.txt,.md,.csv,.xml,.html" @change="onUploadFileChange">
+            </label>
+          </template>
 
-        <template v-else-if="uploadMode === 'url'">
-          <label class="field-block modal-field">
-            <span>文档 URL</span>
-            <input v-model="remoteUrl" placeholder="例如：https://example.com/openapi.json">
-            <small class="field-hint">后端会直接拉取远程文档并纳入统一管理。</small>
-          </label>
-        </template>
+          <template v-else-if="uploadMode === 'url'">
+            <label class="field-block modal-field">
+              <span>文档 URL</span>
+              <input v-model="remoteUrl" placeholder="例如：https://example.com/openapi.json">
+              <small class="field-hint">后端会直接拉取远程文档并纳入统一管理。</small>
+            </label>
+          </template>
 
-        <template v-else>
-          <label class="field-block modal-field">
-            <span>选择接入源</span>
-            <select v-model="selectedIntegrationId">
-              <option value="">请选择接入源</option>
-              <option v-for="integration in importableIntegrations" :key="integration.id" :value="integration.id">
-                {{ integration.name }} · {{ integration.kind.toUpperCase() }}
-              </option>
-            </select>
-            <small class="field-hint">这里会展示“插件导入”页中已启用的 MCP / API 接入。</small>
-          </label>
+          <template v-else>
+            <label class="field-block modal-field">
+              <span>选择接入源</span>
+              <select v-model="selectedIntegrationId">
+                <option value="">请选择接入源</option>
+                <option v-for="integration in importableIntegrations" :key="integration.id" :value="integration.id">
+                  {{ integration.name }} · {{ integration.kind.toUpperCase() }}
+                </option>
+              </select>
+              <small class="field-hint">这里会展示“插件导入”页中已启用的 MCP / API 接入。</small>
+            </label>
 
-          <div v-if="selectedIntegration" class="integration-brief">
-            <div><strong>类型：</strong>{{ selectedIntegration.kind.toUpperCase() }}</div>
-            <div><strong>默认项目：</strong>{{ selectedIntegration.project_name || "未设置" }}</div>
-            <div>
-              <strong>{{ selectedIntegrationIsMcp ? "MCP 服务地址" : "默认文档地址" }}：</strong>
-              {{ selectedIntegrationIsMcp ? (selectedIntegration.endpoint_url || "未设置") : (selectedIntegration.document_url || "未设置") }}
+            <div v-if="selectedIntegration" class="integration-brief">
+              <div><strong>类型：</strong>{{ selectedIntegration.kind.toUpperCase() }}</div>
+              <div><strong>默认项目：</strong>{{ selectedIntegration.project_name || "未设置" }}</div>
+              <div>
+                <strong>{{ selectedIntegrationIsMcp ? "MCP 服务地址" : "默认文档地址" }}：</strong>
+                {{ selectedIntegrationIsMcp ? (selectedIntegration.endpoint_url || "未设置") : (selectedIntegration.document_url || "未设置") }}
+              </div>
             </div>
+
+            <label v-if="workspaceOptions.length" class="field-block modal-field">
+              <span>选择工作区</span>
+              <select v-model="selectedWorkspaceId" :disabled="integrationImportLoading">
+                <option value="">请选择工作区</option>
+                <option v-for="workspace in workspaceOptions" :key="workspace.id" :value="workspace.id">
+                  {{ workspace.name }} · {{ workspace.document_count }} 份文档
+                </option>
+              </select>
+              <small class="field-hint">MCP 导入会先定位工作区，再从该工作区导入接口文档。</small>
+            </label>
+
+            <label v-if="filteredImportSources.length" class="field-block modal-field">
+              <span>{{ selectedIntegrationIsMcp ? "选择接口文档" : "选择导入源" }}</span>
+              <select v-model="selectedImportSourceId" :disabled="integrationImportLoading">
+                <option value="">请选择</option>
+                <option v-for="source in filteredImportSources" :key="source.id" :value="source.id">
+                  {{ source.label }}<template v-if="source.project_name"> · {{ source.project_name }}</template>
+                </option>
+              </select>
+              <small v-if="selectedImportSource?.summary" class="field-hint">{{ selectedImportSource.summary }}</small>
+            </label>
+
+            <label v-if="!selectedIntegrationIsMcp" class="field-block modal-field">
+              <span>文档地址覆盖（可选）</span>
+              <input v-model="integrationDocumentUrl" placeholder="留空则使用接入源默认文档地址">
+            </label>
+
+            <div v-if="integrationImportHint" class="integration-inline-hint">
+              {{ integrationImportHint }}
+            </div>
+          </template>
+
+          <div class="upload-form-grid">
+            <label class="field-block modal-field">
+              <span>文档标题（可选）</span>
+              <input v-model="uploadTitle" placeholder="例如：用户中心 OpenAPI v2">
+            </label>
+
+            <label class="field-block modal-field">
+              <span>所属项目（建议填写）</span>
+              <n-select
+                v-model:value="uploadProjectName"
+                filterable
+                tag
+                :options="projectNameOptions"
+                placeholder="例如：mall-order-service"
+                class="custom-select"
+                :to="false"
+              />
+              <small class="field-hint">
+                可直接输入新项目名，也可从已有项目中复用
+              </small>
+            </label>
           </div>
 
-          <label v-if="workspaceOptions.length" class="field-block modal-field">
-            <span>选择工作区</span>
-            <select v-model="selectedWorkspaceId" :disabled="integrationImportLoading">
-              <option value="">请选择工作区</option>
-              <option v-for="workspace in workspaceOptions" :key="workspace.id" :value="workspace.id">
-                {{ workspace.name }} · {{ workspace.document_count }} 份文档
-              </option>
-            </select>
-            <small class="field-hint">MCP 导入会先定位工作区，再从该工作区导入接口文档。</small>
-          </label>
-
-          <label v-if="filteredImportSources.length" class="field-block modal-field">
-            <span>{{ selectedIntegrationIsMcp ? "选择接口文档" : "选择导入源" }}</span>
-            <select v-model="selectedImportSourceId" :disabled="integrationImportLoading">
-              <option value="">请选择</option>
-              <option v-for="source in filteredImportSources" :key="source.id" :value="source.id">
-                {{ source.label }}<template v-if="source.project_name"> · {{ source.project_name }}</template>
-              </option>
-            </select>
-            <small v-if="selectedImportSource?.summary" class="field-hint">{{ selectedImportSource.summary }}</small>
-          </label>
-
-          <label v-if="!selectedIntegrationIsMcp" class="field-block modal-field">
-            <span>文档地址覆盖（可选）</span>
-            <input v-model="integrationDocumentUrl" placeholder="留空则使用接入源默认文档地址">
-          </label>
-
-          <div v-if="integrationImportHint" class="integration-inline-hint">
-            {{ integrationImportHint }}
+          <div class="modal-actions">
+            <button class="secondary-btn" @click="closeUpload">取消</button>
+            <button class="primary-btn" :disabled="uploadLoading || !canSubmitIntegrationImport" @click="submitUpload">
+              {{ uploadLoading ? "导入中..." : "开始导入" }}
+            </button>
           </div>
-        </template>
-
-        <label class="field-block modal-field">
-          <span>文档标题（可选）</span>
-          <input v-model="uploadTitle" placeholder="例如：用户中心 OpenAPI v2">
-        </label>
-
-        <label class="field-block modal-field">
-          <span>所属项目（建议填写）</span>
-          <input
-            v-model="uploadProjectName"
-            list="api-doc-project-suggestions"
-            placeholder="例如：mall-order-service"
-          >
-          <small v-if="projectNameSuggestions.length" class="field-hint">
-            可直接输入新项目名，也可从已有项目中复用
-          </small>
-        </label>
-
-        <datalist id="api-doc-project-suggestions">
-          <option v-for="projectName in projectNameSuggestions" :key="projectName" :value="projectName" />
-        </datalist>
-
-        <div class="modal-actions">
-          <button class="secondary-btn" @click="closeUpload">取消</button>
-          <button class="primary-btn" :disabled="uploadLoading || !canSubmitIntegrationImport" @click="submitUpload">
-            {{ uploadLoading ? "导入中..." : "开始导入" }}
-          </button>
         </div>
       </section>
     </div>
@@ -879,8 +891,9 @@ onBeforeUnmount(() => {
 .tools-modal {
   width: min(960px, 100%);
   max-height: min(88vh, 900px);
-  overflow-x: hidden;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 24px;
   background: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -888,6 +901,7 @@ onBeforeUnmount(() => {
 }
 
 .tools-modal-head {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -905,22 +919,33 @@ onBeforeUnmount(() => {
   color: var(--muted);
 }
 
-.api-doc-preview-modal,
-.upload-modal {
+.tools-modal-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.head-save-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.tools-modal-body {
+  flex: 1;
+  overflow-y: auto;
   padding-bottom: 24px;
 }
 
 .preview-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 16px;
-  padding-right: 28px;
+  gap: 16px;
+  padding: 20px 28px 0;
+  align-items: start;
 }
 
-.preview-meta-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding: 16px 28px 0;
+.preview-form-grid .field-block {
+  margin: 0;
 }
 
 .preview-meta-grid {
@@ -962,8 +987,8 @@ onBeforeUnmount(() => {
 .preview-code {
   margin: 0;
   padding: 18px;
-  max-height: 56vh;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 13px;
@@ -979,18 +1004,26 @@ onBeforeUnmount(() => {
 }
 
 .import-mode-tabs button {
-  border: 1px solid rgba(15, 23, 42, 0.1);
+  border: 1px solid #E5E7EB;
   border-radius: 999px;
-  padding: 8px 14px;
-  background: rgba(248, 250, 252, 0.9);
-  color: #475569;
+  padding: 8px 16px;
+  background: #ffffff;
+  color: #6B7280;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.import-mode-tabs button:hover {
+  background: #f9fafb;
+  color: #1F2937;
 }
 
 .import-mode-tabs button.active {
-  background: #0f172a;
+  background: #111827;
   color: #ffffff;
-  border-color: #0f172a;
+  border-color: #111827;
 }
 
 .upload-drop {
@@ -1022,11 +1055,23 @@ onBeforeUnmount(() => {
   display: none;
 }
 
+.upload-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+  padding: 0 28px;
+  align-items: start;
+}
+
+.upload-form-grid .modal-field {
+  margin: 16px 0 0;
+}
+
 .field-block {
   display: grid;
   gap: 8px;
   font-size: 13px;
-  color: #475569;
+  color: #1F2937;
 }
 
 .modal-field,
@@ -1035,23 +1080,101 @@ onBeforeUnmount(() => {
 }
 
 .field-block span {
-  font-weight: 600;
+  font-weight: 500;
 }
 
-.field-block input,
-.field-block select {
+.field-block > input,
+.field-block > select {
   width: 100%;
-  border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 12px;
-  padding: 11px 12px;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  padding: 10px 12px;
   font-size: 14px;
   background: #ffffff;
+  color: #1F2937;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.field-block > input:focus,
+.field-block > select:focus {
+  outline: none;
+  border-color: #111827;
+  box-shadow: 0 0 0 1px #111827;
+}
+
+.field-block > input::placeholder {
+  color: #9CA3AF;
 }
 
 .field-hint {
-  color: #64748b;
+  color: #6B7280;
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* NSelect Custom Styles */
+:deep(.custom-select .n-base-selection) {
+  --n-border: 1px solid #E5E7EB !important;
+  --n-border-hover: 1px solid #111827 !important;
+  --n-border-focus: 1px solid #111827 !important;
+  --n-border-active: 1px solid #111827 !important;
+  --n-box-shadow-focus: 0 0 0 1px #111827 !important;
+  --n-box-shadow-active: 0 0 0 1px #111827 !important;
+  --n-caret-color: #111827 !important;
+  --n-text-color: #1F2937 !important;
+  --n-placeholder-color: #9CA3AF !important;
+  --n-border-radius: 8px !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  background: #ffffff;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  display: flex;
+  align-items: center;
+}
+
+:deep(.custom-select .n-base-selection-label) {
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+:deep(.custom-select .n-base-selection-tags) {
+  align-items: center !important;
+}
+
+:deep(.custom-select .n-base-selection-input) {
+  font-size: 14px !important;
+  color: #1F2937 !important;
+  height: 100% !important;
+  line-height: normal !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+:deep(.custom-select .n-base-selection-placeholder) {
+  color: #9CA3AF !important;
+  font-size: 14px !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+:deep(.custom-select .n-base-suffix) {
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+:deep(.n-base-select-menu) {
+  --n-option-text-color: #1F2937 !important;
+  --n-option-text-color-active: #111827 !important;
+  --n-option-color-active: #f9fafb !important;
+  --n-option-color-pending: #f9fafb !important;
+  --n-border-radius: 8px !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+  border: 1px solid #E5E7EB !important;
 }
 
 .integration-brief {

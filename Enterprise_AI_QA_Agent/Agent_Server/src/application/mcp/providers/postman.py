@@ -16,10 +16,18 @@ from src.schemas.mcp_management import MCPProviderDescriptor, ResolvedImportDocu
 
 
 class PostmanExternalMCPProvider(BaseExternalMCPProvider):
+    """Minimal Postman MCP adapter for API document import.
+
+    This provider intentionally keeps the scope small:
+    - list workspaces
+    - list collections in a workspace
+    - resolve one collection into an inline Postman Collection JSON
+    """
+
     descriptor = MCPProviderDescriptor(
         key="postman",
         name="Postman MCP",
-        summary="Manage Postman workspaces, collections, and API assets through a remote MCP endpoint.",
+        summary="Read Postman workspaces and collections for API document import.",
         supports_workspace_selection=True,
         supports_document_import=True,
     )
@@ -43,15 +51,13 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
     ) -> IntegrationImportSourcesResponse:
         session, tool_map = await self._open_session(integration)
         workspaces = await self._list_workspaces(session, tool_map)
-        workspace_lookup = {item.id: item for item in workspaces}
 
         sources: list[IntegrationImportSourceDescriptor] = []
         if workspace_id:
-            workspace = workspace_lookup.get(workspace_id)
+            workspace = next((item for item in workspaces if item.id == workspace_id), None)
             if workspace is None:
                 raise ValueError("未找到所选的 Postman 工作区。")
-            sources.extend(await self._list_collection_sources(session, tool_map, workspace))
-            sources.extend(await self._list_spec_sources(session, tool_map, workspace))
+            sources = await self._list_collection_sources(session, tool_map, workspace)
 
         return IntegrationImportSourcesResponse(
             integration_id=integration.id,
@@ -68,41 +74,40 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
         import_source_id: str,
         workspace_id: str | None = None,
     ) -> ResolvedImportDocument:
-        session, tool_map = await self._open_session(integration)
         kind, object_id = self._split_source_id(import_source_id)
+        if kind != "collection":
+            raise ValueError("当前仅支持从 Postman Collection 导入接口文档。")
 
-        if kind == "collection":
-            document = await self._resolve_collection_document(session, tool_map, collection_id=object_id)
-            if workspace_id:
-                document.project_name = integration.project_name or workspace_id
-            return document
-
-        raise ValueError("当前仅支持从 Postman Collection 导入接口文档。")
+        session, tool_map = await self._open_session(integration)
+        document = await self._resolve_collection_document(session, tool_map, collection_id=object_id)
+        if workspace_id:
+            document.project_name = integration.project_name or workspace_id
+        return document
 
     async def _open_session(self, integration: IntegrationRecord) -> tuple[object, dict[str, str]]:
         endpoint_url = integration.endpoint_url or integration.document_url
         if not endpoint_url:
             raise ValueError("当前 Postman MCP 接入缺少 Endpoint URL。")
+
         session = await self._client.initialize(endpoint_url=endpoint_url, headers=integration.headers)
         await self._client.notify_initialized(session)
         tools = await self._client.list_tools(session)
         return session, self._discover_tools(tools)
 
     def _discover_tools(self, tools: list[dict[str, Any]]) -> dict[str, str]:
-        names = {str(item.get("name")) for item in tools if item.get("name")}
+        available_names = {str(item.get("name")) for item in tools if item.get("name")}
         mapping = {
             "get_workspaces": "getWorkspaces",
             "get_collections": "getCollections",
             "get_collection": "getCollection",
             "get_collection_request": "getCollectionRequest",
-            "get_all_specs": "getAllSpecs",
         }
-        discovered: dict[str, str] = {}
-        for key, name in mapping.items():
-            if name in names:
-                discovered[key] = name
-        if "get_workspaces" not in discovered:
-            raise ValueError("当前 Postman MCP 未暴露工作区查询工具 getWorkspaces。")
+        discovered = {key: name for key, name in mapping.items() if name in available_names}
+
+        required = {"get_workspaces", "get_collections", "get_collection", "get_collection_request"}
+        missing = sorted(required.difference(discovered))
+        if missing:
+            raise ValueError(f"当前 Postman MCP 缺少必需工具：{', '.join(missing)}。")
         return discovered
 
     async def _list_workspaces(
@@ -116,8 +121,8 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
             arguments={},
             request_id="postman-get-workspaces",
         )
-        text = self._extract_text_content(payload)
-        rows = self._parse_markdown_table(text)
+        rows = self._parse_markdown_table(self._extract_text_content(payload))
+
         workspaces: list[IntegrationWorkspaceDescriptor] = []
         for row in rows:
             workspace_id = row.get("id")
@@ -141,17 +146,14 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
         tool_map: dict[str, str],
         workspace: IntegrationWorkspaceDescriptor,
     ) -> list[IntegrationImportSourceDescriptor]:
-        tool_name = tool_map.get("get_collections")
-        if not tool_name:
-            return []
         payload = await self._client.call_tool(
             session,
-            tool_name=tool_name,
+            tool_name=tool_map["get_collections"],
             arguments={"workspace": workspace.id},
             request_id=f"postman-get-collections-{workspace.id}",
         )
-        text = self._extract_text_content(payload)
-        rows = self._parse_markdown_table(text)
+        rows = self._parse_markdown_table(self._extract_text_content(payload))
+
         sources: list[IntegrationImportSourceDescriptor] = []
         for row in rows:
             collection_id = row.get("id")
@@ -172,48 +174,6 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
             )
         return sources
 
-    async def _list_spec_sources(
-        self,
-        session: object,
-        tool_map: dict[str, str],
-        workspace: IntegrationWorkspaceDescriptor,
-    ) -> list[IntegrationImportSourceDescriptor]:
-        tool_name = tool_map.get("get_all_specs")
-        if not tool_name:
-            return []
-        payload = await self._client.call_tool(
-            session,
-            tool_name=tool_name,
-            arguments={"workspaceId": workspace.id},
-            request_id=f"postman-get-specs-{workspace.id}",
-        )
-        text = self._extract_text_content(payload)
-        parsed = self._parse_json_text(text)
-        specs = parsed.get("specs")
-        if not isinstance(specs, list):
-            return []
-        sources: list[IntegrationImportSourceDescriptor] = []
-        for spec in specs:
-            if not isinstance(spec, dict):
-                continue
-            spec_id = str(spec.get("id") or "").strip()
-            spec_name = str(spec.get("name") or spec.get("summary") or "").strip()
-            if not spec_id or not spec_name:
-                continue
-            sources.append(
-                IntegrationImportSourceDescriptor(
-                    id=f"spec:{spec_id}",
-                    label=spec_name,
-                    document_url=f"postman://spec/{spec_id}",
-                    kind="postman_spec",
-                    summary=f"Postman 工作区 {workspace.name} 中的 API 规范",
-                    project_name=workspace.project_name,
-                    workspace_id=workspace.id,
-                    workspace_name=workspace.name,
-                )
-            )
-        return sources
-
     async def _resolve_collection_document(
         self,
         session: object,
@@ -227,8 +187,7 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
             arguments={"collectionId": collection_id},
             request_id=f"postman-get-collection-{collection_id}",
         )
-        collection_text = self._extract_text_content(collection_payload)
-        collection_data = self._parse_json_text(collection_text)
+        collection_data = self._parse_json_text(self._extract_text_content(collection_payload))
         collection = collection_data.get("collection")
         if not isinstance(collection, dict):
             raise ValueError("Postman MCP 返回的 Collection 结构无法识别。")
@@ -250,14 +209,10 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
             request_payload = await self._client.call_tool(
                 session,
                 tool_name=tool_map["get_collection_request"],
-                arguments={
-                    "collectionId": collection_id,
-                    "requestId": request_id,
-                },
+                arguments={"collectionId": collection_id, "requestId": request_id},
                 request_id=f"postman-get-request-{request_id}",
             )
-            request_text = self._extract_text_content(request_payload)
-            request_data = self._parse_json_text(request_text)
+            request_data = self._parse_json_text(self._extract_text_content(request_payload))
             request_entry = self._build_collection_item(request_data)
             if request_entry is not None:
                 items.append(request_entry)
@@ -284,48 +239,38 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
         data = payload.get("data")
         if not isinstance(data, dict):
             return None
+
         name = str(data.get("name") or "Untitled Request").strip()
         method = str(data.get("method") or "GET").strip().upper()
         url = str(data.get("url") or "").strip()
+
+        headers: list[dict[str, str]] = []
         header_data = data.get("headerData")
-        headers = []
         if isinstance(header_data, list):
             for item in header_data:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("enabled") is False:
+                if not isinstance(item, dict) or item.get("enabled") is False:
                     continue
                 key = str(item.get("key") or "").strip()
                 if not key:
                     continue
-                headers.append(
-                    {
-                        "key": key,
-                        "value": str(item.get("value") or ""),
-                    }
-                )
+                headers.append({"key": key, "value": str(item.get("value") or "")})
 
         request: dict[str, Any] = {
             "method": method,
             "header": headers,
             "url": {"raw": url} if url else {"raw": ""},
         }
+
         raw_body = data.get("rawModeData")
         if isinstance(raw_body, str) and raw_body.strip():
             request["body"] = {
                 "mode": "raw",
                 "raw": raw_body,
-                "options": {
-                    "raw": {
-                        "language": "json",
-                    }
-                },
+                "options": {"raw": {"language": "json"}},
             }
+
+        item: dict[str, Any] = {"name": name, "request": request}
         description = data.get("description")
-        item: dict[str, Any] = {
-            "name": name,
-            "request": request,
-        }
         if isinstance(description, str) and description.strip():
             item["description"] = description.strip()
         return item
@@ -341,6 +286,7 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
                     if isinstance(item, dict) and item.get("type") == "text":
                         raise ValueError(str(item.get("text") or "MCP 调用失败。"))
             raise ValueError("MCP 调用失败。")
+
         content = result.get("content")
         if not isinstance(content, list):
             raise ValueError("MCP 返回中没有 content 内容。")
@@ -353,18 +299,21 @@ class PostmanExternalMCPProvider(BaseExternalMCPProvider):
 
     def _parse_markdown_table(self, text: str) -> list[dict[str, str]]:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        header_index = next((index for index, line in enumerate(lines) if line.startswith("|") and line.endswith("|")), None)
+        header_index = next(
+            (index for index, line in enumerate(lines) if line.startswith("|") and line.endswith("|")),
+            None,
+        )
         if header_index is None or header_index + 1 >= len(lines):
             return []
+
         headers = [part.strip() for part in lines[header_index].strip("|").split("|")]
         rows: list[dict[str, str]] = []
         for line in lines[header_index + 2:]:
             if not (line.startswith("|") and line.endswith("|")):
                 break
             values = [part.strip() for part in line.strip("|").split("|")]
-            if len(values) != len(headers):
-                continue
-            rows.append(dict(zip(headers, values)))
+            if len(values) == len(headers):
+                rows.append(dict(zip(headers, values)))
         return rows
 
     def _parse_json_text(self, text: str) -> dict[str, Any]:

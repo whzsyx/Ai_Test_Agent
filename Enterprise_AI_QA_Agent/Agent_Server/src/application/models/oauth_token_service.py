@@ -313,6 +313,8 @@ class OAuthTokenService:
         extra_headers: dict[str, str] = {}
         if provider == "github":
             extra_headers["Copilot-Integration-Id"] = "vscode-chat"
+        elif provider == "google" and self._settings.oauth_google_project_id.strip():
+            extra_headers["x-goog-user-project"] = self._settings.oauth_google_project_id.strip()
 
         async with httpx.AsyncClient(timeout=self._request_timeout) as client:
             resp = await client.get(

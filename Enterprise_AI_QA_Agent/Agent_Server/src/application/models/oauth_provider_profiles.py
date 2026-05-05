@@ -51,7 +51,7 @@ _PROFILES: dict[str, OAuthProviderProfile] = {
         display_name="Google OAuth 2.0 (Gemini / AI Studio)",
         authorization_url_template="https://accounts.google.com/o/oauth2/v2/auth",
         token_url_template="https://oauth2.googleapis.com/token",
-        default_scope="https://www.googleapis.com/auth/generative-language",
+        default_scope="https://www.googleapis.com/auth/generative-language.retriever",
         extra_auth_params={"access_type": "offline", "prompt": "consent"},
         notes=(
             "Google Gemini / AI Studio API. Register OAuth credentials in "

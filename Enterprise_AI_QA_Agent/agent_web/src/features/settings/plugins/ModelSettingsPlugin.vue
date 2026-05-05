@@ -139,6 +139,11 @@ const oauthNeedsBaseUrl = computed(() => selectedOAuthProfile.value?.requires_ba
 
 const oauthHasModelListing = computed(() => selectedOAuthProfile.value?.has_model_listing ?? false);
 
+/** 支持拉取模型列表时，有列表后配置名由所选模型决定，不再单独展示输入框 */
+const showOAuthConfigNameField = computed(
+  () => !oauthHasModelListing.value || oauthAvailableModels.value.length === 0,
+);
+
 onMounted(() => {
   void loadSettings();
   void loadOAuthProviders();
@@ -231,6 +236,15 @@ function openEditModal(item: ModelConfigPublic) {
   modelDraft.oauth_refresh_token = null;
   oauthCustomBaseUrl.value = item.api_base_url;
   resetOAuthFlow();
+  if (item.auth_type === "oauth2" && item.oauth_provider && item.name) {
+    const profile = oauthProviders.value.find((p) => p.key === item.oauth_provider);
+    if (profile?.has_model_listing) {
+      oauthAvailableModels.value = [
+        { id: item.name, raw_id: item.name, name: item.description?.trim() || item.name },
+      ];
+      oauthSelectedModelId.value = item.name;
+    }
+  }
   applyCapabilityDraft(item.capabilities);
   showCapabilities.value = false;
   showEditorModal.value = true;
@@ -296,6 +310,14 @@ function hasCapabilityOverrides(overrides: ModelCapabilitiesOverride | undefined
 }
 
 async function saveModel() {
+  if (isOAuth.value && oauthHasModelListing.value && oauthAvailableModels.value.length > 0) {
+    if (!oauthSelectedModelId.value?.trim()) {
+      showMessage("error", "请先获取可用模型并在列表中选择要使用的模型。");
+      return;
+    }
+    modelDraft.model_name = oauthSelectedModelId.value.trim();
+  }
+
   if (!modelDraft.model_name.trim()) {
     showMessage("error", "配置名称不能为空。");
     return;
@@ -435,13 +457,22 @@ function stopOAuthPoll() {
   }
 }
 
+function buildOAuthRedirectUri(provider: string) {
+  const origin = `${window.location.protocol}//${window.location.hostname}:8000`;
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "github") return `${origin}/api/v1/oauth/github/callback`;
+  if (normalized === "google") return `${origin}/api/v1/oauth/google/callback`;
+  if (normalized === "azure_ad") return `${origin}/api/v1/oauth/azure/callback`;
+  return `${origin}/api/v1/oauth/callback`;
+}
+
 async function launchOAuth() {
   if (!modelDraft.oauth_provider) {
     showMessage("error", "请先选择 OAuth 提供商。");
     return;
   }
   const provider = modelDraft.oauth_provider;
-  const redirectUri = `${window.location.protocol}//${window.location.hostname}:8000/api/v1/oauth/callback`;
+  const redirectUri = buildOAuthRedirectUri(provider);
 
   try {
     const res = await api.startOAuthFlow({ provider, redirect_uri: redirectUri });
@@ -505,9 +536,7 @@ async function fetchOAuthModels() {
 
 function onOAuthModelSelect(modelId: string | null) {
   oauthSelectedModelId.value = modelId;
-  if (modelId && !modelDraft.model_name) {
-    modelDraft.model_name = modelId;
-  } else if (modelId) {
+  if (modelId) {
     modelDraft.model_name = modelId;
   }
 }
@@ -846,15 +875,15 @@ async function deleteModel(item: ModelConfigPublic) {
               </p>
             </div>
 
-            <!-- Step 4 / Config name (always shown in OAuth mode) -->
-            <label class="full">
+            <!-- 无模型列表或尚未拉取到列表时，需手动填写配置名称 -->
+            <label v-if="showOAuthConfigNameField" class="full">
               <span>配置名称</span>
               <input
                 v-model="modelDraft.model_name"
                 type="text"
-                :placeholder="oauthSelectedModelId ? oauthSelectedModelId : 'gpt-4o / gemini-2.0-flash'"
+                placeholder="gpt-4o / gemini-2.0-flash"
               />
-              <small>此名称用于在系统中标识该模型配置，可自定义。</small>
+              <small>该提供商未提供模型列表或列表为空时，请在此填写在系统中使用的配置名称。</small>
             </label>
           </template>
 

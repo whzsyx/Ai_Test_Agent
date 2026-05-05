@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { api } from "../services/api";
 import { toolsPlugins, type ToolsPluginKey } from "../features/tools/plugins";
 import type { SkillMarketplaceItem, SkillMarketplaceSource } from "../types";
@@ -7,6 +7,9 @@ import type { SkillMarketplaceItem, SkillMarketplaceSource } from "../types";
 const defaultPlugin = toolsPlugins[0];
 const activeTab = ref<ToolsPluginKey>(defaultPlugin.key);
 const skillsRefreshKey = ref(0);
+
+/** 插件导入页内子 Tab：api / mcp / managed，由 PluginsPlugin 广播 */
+const pluginsIntegrationPane = ref<"api" | "mcp" | "managed">("api");
 
 const marketplaceOpen = ref(false);
 const marketplaceSource = ref<SkillMarketplaceSource>("anthropic");
@@ -164,6 +167,25 @@ function fileToBase64(file: File): Promise<string> {
 function openApiDocUpload() {
   window.dispatchEvent(new CustomEvent("qa-agent:open-api-doc-upload"));
 }
+
+function openIntegrationCreate(kind: "api" | "mcp") {
+  window.dispatchEvent(new CustomEvent("qa-agent:open-integration-create", { detail: { kind } }));
+}
+
+function onPluginsIntegrationPaneEvent(ev: Event) {
+  const tab = (ev as CustomEvent<{ tab?: string }>).detail?.tab;
+  if (tab === "api" || tab === "mcp" || tab === "managed") {
+    pluginsIntegrationPane.value = tab;
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("qa-agent:plugins-integration-pane", onPluginsIntegrationPaneEvent);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("qa-agent:plugins-integration-pane", onPluginsIntegrationPaneEvent);
+});
 </script>
 
 <template>
@@ -184,6 +206,22 @@ function openApiDocUpload() {
         </template>
         <template v-else-if="activeTab === 'apidocs'">
           <button class="primary-btn" @click="openApiDocUpload"><i class="fa-solid fa-plus"></i> 添加文档源</button>
+        </template>
+        <template v-else-if="activeTab === 'plugins'">
+          <button
+            v-if="pluginsIntegrationPane === 'api'"
+            class="primary-btn"
+            @click="openIntegrationCreate('api')"
+          >
+            <i class="fa-solid fa-plus"></i> 新增 API 接入
+          </button>
+          <button
+            v-else-if="pluginsIntegrationPane === 'mcp'"
+            class="primary-btn"
+            @click="openIntegrationCreate('mcp')"
+          >
+            <i class="fa-solid fa-plus"></i> 新增 MCP 接入
+          </button>
         </template>
       </div>
     </div>

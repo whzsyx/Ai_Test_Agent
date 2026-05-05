@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 ManagedMCPSourceKind = Literal["builtin", "external"]
+ManagedMCPToolSourceKind = Literal["builtin_capability", "external_tool", "external_capability"]
 
 
 class MCPProviderDescriptor(BaseModel):
@@ -34,6 +35,50 @@ class ManagedMCPServerDescriptor(BaseModel):
     supports_workspace_selection: bool = False
     supports_document_import: bool = False
     metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ManagedMCPToolDescriptor(BaseModel):
+    key: str
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    source_kind: ManagedMCPToolSourceKind
+    managed_server_key: str
+    server_name: str
+    provider_key: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class ManagedMCPToolsResponse(BaseModel):
+    server_key: str
+    server_name: str
+    source_kind: ManagedMCPSourceKind
+    tools: list[ManagedMCPToolDescriptor] = Field(default_factory=list)
+
+
+class ManagedMCPTestResponse(BaseModel):
+    ok: bool
+    message: str
+    server_key: str
+    server_name: str
+    source_kind: ManagedMCPSourceKind
+    status_code: int | None = None
+    latency_ms: float | None = None
+    tool_count: int | None = None
+
+
+class ManagedMCPToolCallRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManagedMCPToolCallResponse(BaseModel):
+    ok: bool
+    server_key: str
+    server_name: str
+    source_kind: ManagedMCPSourceKind
+    tool_name: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
 
 
 class ResolvedImportDocument(BaseModel):

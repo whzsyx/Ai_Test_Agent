@@ -24,6 +24,10 @@ import type {
   IntegrationImportSourcesResponse,
   IntegrationRecord,
   IntegrationTestResponse,
+  ManagedMCPToolCallRequest,
+  ManagedMCPToolCallResponse,
+  ManagedMCPTestResponse,
+  ManagedMCPToolsResponse,
   ManagedMCPServerDescriptor,
   MCPProviderDescriptor,
   IntegrationUpdateRequest,
@@ -412,6 +416,23 @@ export const api = {
   },
   listMcpProviders(): Promise<MCPProviderDescriptor[]> {
     return request("/api/v1/registry/mcp/providers");
+  },
+  listManagedMcpTools(serverKey: string): Promise<ManagedMCPToolsResponse> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/tools`);
+  },
+  testManagedMcpServer(serverKey: string): Promise<ManagedMCPTestResponse> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/test`, {
+      method: "POST",
+    });
+  },
+  callManagedMcpTool(serverKey: string, toolName: string, payload: ManagedMCPToolCallRequest): Promise<ManagedMCPToolCallResponse> {
+    return request(
+      `/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/tools/${encodeURIComponent(toolName)}/call`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   },
   interruptSession(sessionId: string, reason?: string): Promise<SessionDetail> {
     return request(`/api/v1/sessions/${sessionId}/interrupt`, {

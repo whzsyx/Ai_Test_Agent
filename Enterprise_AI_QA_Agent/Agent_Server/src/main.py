@@ -32,6 +32,7 @@ from src.application.knowledge.knowledge_graph_service import KnowledgeGraphServ
 from src.application.mcp.client import ExternalMCPClient
 from src.application.mcp.manager_service import MCPManagerService
 from src.application.mcp.provider_registry import MCPProviderRegistry
+from src.application.mcp.runtime_manager import MCPRuntimeManager
 from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
 from src.application.context.memory_runtime_service import MemoryRuntimeService
@@ -101,10 +102,18 @@ async def lifespan(app: FastAPI):
         settings=settings,
         mcp_provider_registry=mcp_provider_registry,
     )
+    mcp_runtime_manager = MCPRuntimeManager(
+        builtin_registry=mcp_registry,
+        mcp_runtime_service=mcp_runtime_service,
+        integration_catalog_service=integration_catalog_service,
+        provider_registry=mcp_provider_registry,
+        external_mcp_client=external_mcp_client,
+    )
     mcp_manager_service = MCPManagerService(
         builtin_registry=mcp_registry,
         integration_catalog_service=integration_catalog_service,
         provider_registry=mcp_provider_registry,
+        runtime_manager=mcp_runtime_manager,
     )
     skill_management_service = SkillManagementService(
         skill_registry=skill_registry,
@@ -196,6 +205,7 @@ async def lifespan(app: FastAPI):
     app.state.integration_catalog_service = integration_catalog_service
     app.state.external_mcp_client = external_mcp_client
     app.state.mcp_provider_registry = mcp_provider_registry
+    app.state.mcp_runtime_manager = mcp_runtime_manager
     app.state.mcp_manager_service = mcp_manager_service
     app.state.memory_store = memory_store
     app.state.memory_runtime_service = memory_runtime_service

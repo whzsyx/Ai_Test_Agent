@@ -930,6 +930,52 @@ export interface ManagedMCPServerDescriptor {
   metadata: Record<string, unknown>;
 }
 
+export type ManagedMCPToolSourceKind = "builtin_capability" | "external_tool" | "external_capability";
+
+export interface ManagedMCPToolDescriptor {
+  key: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  source_kind: ManagedMCPToolSourceKind;
+  managed_server_key: string;
+  server_name: string;
+  provider_key?: string | null;
+  tags: string[];
+}
+
+export interface ManagedMCPToolsResponse {
+  server_key: string;
+  server_name: string;
+  source_kind: ManagedMCPSourceKind;
+  tools: ManagedMCPToolDescriptor[];
+}
+
+export interface ManagedMCPTestResponse {
+  ok: boolean;
+  message: string;
+  server_key: string;
+  server_name: string;
+  source_kind: ManagedMCPSourceKind;
+  status_code?: number | null;
+  latency_ms?: number | null;
+  tool_count?: number | null;
+}
+
+export interface ManagedMCPToolCallRequest {
+  arguments?: Record<string, unknown>;
+}
+
+export interface ManagedMCPToolCallResponse {
+  ok: boolean;
+  server_key: string;
+  server_name: string;
+  source_kind: ManagedMCPSourceKind;
+  tool_name: string;
+  result: Record<string, unknown>;
+  error?: string | null;
+}
+
 export interface UploadedAttachmentRecord {
   id: string;
   filename: string;
