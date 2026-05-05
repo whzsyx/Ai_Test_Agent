@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.api.routes.attachments import router as attachments_router
 from src.api.routes.api_docs import router as api_docs_router
 from src.api.routes.health import router as health_router
+from src.api.routes.integrations import router as integrations_router
 from src.api.routes.knowledge import router as knowledge_router
 from src.api.routes.oauth import router as oauth_router
 from src.api.routes.registry import router as registry_router
@@ -26,7 +27,11 @@ from src.application.model_adapters import build_default_adapter_registry
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.documents.api_docs_service import ApiDocsService
+from src.application.integrations.integration_catalog_service import IntegrationCatalogService
 from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
+from src.application.mcp.client import ExternalMCPClient
+from src.application.mcp.manager_service import MCPManagerService
+from src.application.mcp.provider_registry import MCPProviderRegistry
 from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
 from src.application.context.memory_runtime_service import MemoryRuntimeService
@@ -89,6 +94,17 @@ async def lifespan(app: FastAPI):
         settings=settings,
         artifact_storage_service=artifact_storage_service,
         upload_security_service=upload_security_service,
+    )
+    external_mcp_client = ExternalMCPClient(settings=settings)
+    mcp_provider_registry = MCPProviderRegistry(client=external_mcp_client)
+    integration_catalog_service = IntegrationCatalogService(
+        settings=settings,
+        mcp_provider_registry=mcp_provider_registry,
+    )
+    mcp_manager_service = MCPManagerService(
+        builtin_registry=mcp_registry,
+        integration_catalog_service=integration_catalog_service,
+        provider_registry=mcp_provider_registry,
     )
     skill_management_service = SkillManagementService(
         skill_registry=skill_registry,
@@ -177,6 +193,10 @@ async def lifespan(app: FastAPI):
     app.state.artifact_storage_service = artifact_storage_service
     app.state.upload_security_service = upload_security_service
     app.state.api_docs_service = api_docs_service
+    app.state.integration_catalog_service = integration_catalog_service
+    app.state.external_mcp_client = external_mcp_client
+    app.state.mcp_provider_registry = mcp_provider_registry
+    app.state.mcp_manager_service = mcp_manager_service
     app.state.memory_store = memory_store
     app.state.memory_runtime_service = memory_runtime_service
     app.state.session_backend = settings.session_backend
@@ -225,6 +245,7 @@ async def lifespan(app: FastAPI):
         skill_registry=skill_registry,
         mcp_registry=mcp_registry,
         mode_registry=mode_registry,
+        mcp_manager_service=mcp_manager_service,
     )
     app.state.oauth_token_service = oauth_token_service
     app.state.settings_service = SettingsService(
@@ -257,6 +278,7 @@ app.include_router(knowledge_router, prefix=settings.api_v1_prefix)
 app.include_router(registry_router, prefix=settings.api_v1_prefix)
 app.include_router(attachments_router, prefix=settings.api_v1_prefix)
 app.include_router(api_docs_router, prefix=settings.api_v1_prefix)
+app.include_router(integrations_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
 app.include_router(oauth_router, prefix=settings.api_v1_prefix)

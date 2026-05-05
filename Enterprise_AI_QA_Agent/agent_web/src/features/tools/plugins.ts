@@ -40,7 +40,7 @@ export const toolsPlugins: ToolsPluginDefinition[] = [
   },
   {
     key: "registry",
-    label: "后端已注册服务",
+    label: "后端注册服务",
     icon: "fa-server",
     iconType: "solid",
     component: markRaw(RegistryPlugin),

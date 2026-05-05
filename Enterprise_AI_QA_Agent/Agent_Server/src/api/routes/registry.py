@@ -173,3 +173,13 @@ async def upload_skill(payload: SkillUploadRequest, request: Request):
 @router.get("/mcp")
 async def list_mcp_servers(request: Request):
     return request.app.state.registry_service.list_mcp_servers()
+
+
+@router.get("/mcp/managed")
+async def list_managed_mcp_servers(request: Request):
+    return await request.app.state.registry_service.list_managed_mcp_servers()
+
+
+@router.get("/mcp/providers")
+async def list_mcp_providers(request: Request):
+    return request.app.state.registry_service.list_mcp_providers()

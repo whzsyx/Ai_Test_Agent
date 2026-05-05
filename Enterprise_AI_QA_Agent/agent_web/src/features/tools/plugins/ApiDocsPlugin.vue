@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMessage } from "naive-ui";
 
 import { api } from "../../../services/api";
-import type { ApiDocRecord } from "../../../types";
+import type {
+  ApiDocRecord,
+  IntegrationImportSourceDescriptor,
+  IntegrationImportSourcesResponse,
+  IntegrationRecord,
+} from "../../../types";
 import { formatServerDateTime } from "../../../utils/datetime";
+
+type ImportMode = "local" | "url" | "integration";
 
 const toast = useMessage();
 
 const docs = ref<ApiDocRecord[]>([]);
+const integrations = ref<IntegrationRecord[]>([]);
 const loading = ref(false);
 const error = ref("");
 const selectedDoc = ref<ApiDocRecord | null>(null);
@@ -18,19 +26,92 @@ const savingMetadata = ref(false);
 const deletingId = ref("");
 const uploadOpen = ref(false);
 const uploadLoading = ref(false);
+const uploadMode = ref<ImportMode>("local");
+
 const uploadFile = ref<File | null>(null);
 const uploadTitle = ref("");
 const uploadProjectName = ref("");
+const remoteUrl = ref("");
+const selectedIntegrationId = ref("");
+const integrationDocumentUrl = ref("");
+const selectedWorkspaceId = ref("");
+const selectedImportSourceId = ref("");
+const integrationImportCatalog = ref<IntegrationImportSourcesResponse | null>(null);
+const integrationImportLoading = ref(false);
+
 const editTitle = ref("");
 const editProjectName = ref("");
 
 const hasDocs = computed(() => docs.value.length > 0);
+const importableIntegrations = computed(() =>
+  integrations.value.filter((item) => item.enabled && (item.kind === "api" || item.kind === "mcp")),
+);
+const selectedIntegration = computed(
+  () => importableIntegrations.value.find((item) => item.id === selectedIntegrationId.value) ?? null,
+);
+const selectedIntegrationIsMcp = computed(() => selectedIntegration.value?.kind === "mcp");
+const workspaceOptions = computed(() => integrationImportCatalog.value?.workspaces ?? []);
+const integrationImportSources = computed(() => integrationImportCatalog.value?.sources ?? []);
+const filteredImportSources = computed(() => {
+  if (!integrationImportCatalog.value) {
+    return [];
+  }
+  if (!integrationImportCatalog.value.supports_workspace_selection) {
+    return integrationImportCatalog.value.sources;
+  }
+  if (!selectedWorkspaceId.value) {
+    return [];
+  }
+  return integrationImportCatalog.value.sources.filter((source) => source.workspace_id === selectedWorkspaceId.value);
+});
+const selectedImportSource = computed<IntegrationImportSourceDescriptor | null>(
+  () => filteredImportSources.value.find((item) => item.id === selectedImportSourceId.value) ?? null,
+);
+const integrationImportHint = computed(() => {
+  if (!selectedIntegration.value) {
+    return "";
+  }
+  if (integrationImportLoading.value) {
+    return "正在加载可导入的工作区和接口文档...";
+  }
+  if (!integrationImportCatalog.value) {
+    return "";
+  }
+  if (integrationImportCatalog.value.supports_workspace_selection && !workspaceOptions.value.length) {
+    return "这个 MCP 接入已启用工作区导入模式，但还没有配置任何可用工作区。";
+  }
+  if (integrationImportCatalog.value.supports_workspace_selection && workspaceOptions.value.length && !selectedWorkspaceId.value) {
+    return "请先选择工作区，再选择该工作区下的接口文档。";
+  }
+  if (!filteredImportSources.value.length) {
+    return selectedIntegration.value.kind === "mcp"
+      ? "当前接入还没有可导入的接口文档源。"
+      : "当前接入没有可导入的文档地址，请补充默认文档地址或导入源配置。";
+  }
+  return "";
+});
+const canSubmitIntegrationImport = computed(() => {
+  if (uploadMode.value !== "integration") {
+    return true;
+  }
+  if (!selectedIntegrationId.value || integrationImportLoading.value) {
+    return false;
+  }
+  if (!integrationImportCatalog.value) {
+    return false;
+  }
+  if (integrationImportCatalog.value.supports_workspace_selection) {
+    return Boolean(selectedWorkspaceId.value && selectedImportSourceId.value);
+  }
+  return Boolean(selectedImportSourceId.value || integrationDocumentUrl.value.trim() || selectedIntegration.value?.document_url);
+});
 const projectNameSuggestions = computed(() =>
   Array.from(
     new Set(
-      docs.value
-        .map((doc) => doc.project_name?.trim())
-        .filter((value): value is string => Boolean(value)),
+      [
+        ...docs.value.map((doc) => doc.project_name?.trim()),
+        ...integrations.value.map((integration) => integration.project_name?.trim()),
+      ].filter((value): value is string => Boolean(value)),
     ),
   ).sort((a, b) => a.localeCompare(b, "zh-CN")),
 );
@@ -46,9 +127,16 @@ function formatBytes(value: number) {
 }
 
 function resetUploadForm() {
+  uploadMode.value = "local";
   uploadFile.value = null;
   uploadTitle.value = "";
   uploadProjectName.value = "";
+  remoteUrl.value = "";
+  selectedIntegrationId.value = "";
+  integrationDocumentUrl.value = "";
+  selectedWorkspaceId.value = "";
+  selectedImportSourceId.value = "";
+  integrationImportCatalog.value = null;
 }
 
 function resetPreviewForm() {
@@ -121,32 +209,100 @@ async function loadDocs() {
   }
 }
 
-async function submitUpload() {
-  if (!uploadFile.value) {
-    toast.error("请选择要上传的 API 文档文件");
-    return;
+async function loadIntegrations() {
+  try {
+    integrations.value = await api.listIntegrations();
+  } catch {
+    integrations.value = [];
   }
+}
 
+async function loadIntegrationImportCatalog(integrationId: string, workspaceId?: string | null) {
+  integrationImportLoading.value = true;
+  if (!workspaceId) {
+    selectedWorkspaceId.value = "";
+    selectedImportSourceId.value = "";
+    integrationImportCatalog.value = null;
+  } else {
+    selectedImportSourceId.value = "";
+  }
+  try {
+    integrationImportCatalog.value = await api.listIntegrationImportSources(integrationId, workspaceId ?? null);
+    if (
+      !workspaceId &&
+      integrationImportCatalog.value.supports_workspace_selection &&
+      integrationImportCatalog.value.workspaces.length === 1
+    ) {
+      selectedWorkspaceId.value = integrationImportCatalog.value.workspaces[0].id;
+    }
+    if (
+      !integrationImportCatalog.value.supports_workspace_selection &&
+      integrationImportCatalog.value.sources.length === 1
+    ) {
+      selectedImportSourceId.value = integrationImportCatalog.value.sources[0].id;
+    }
+  } catch (err) {
+    integrationImportCatalog.value = null;
+    toast.error(err instanceof Error ? err.message : "加载接入导入源失败");
+  } finally {
+    integrationImportLoading.value = false;
+  }
+}
+
+async function submitUpload() {
   uploadLoading.value = true;
   try {
-    const contentBase64 = await fileToBase64(uploadFile.value);
-    const created = await api.uploadApiDoc({
-      filename: uploadFile.value.name,
-      content_base64: contentBase64,
-      source: "tools_api_docs",
-      title: uploadTitle.value.trim() || null,
-      project_name: uploadProjectName.value.trim() || null,
-    });
+    let created: ApiDocRecord;
+    if (uploadMode.value === "local") {
+      if (!uploadFile.value) {
+        toast.error("请选择要导入的本地 API 文档文件");
+        return;
+      }
+      const contentBase64 = await fileToBase64(uploadFile.value);
+      created = await api.uploadApiDoc({
+        filename: uploadFile.value.name,
+        content_base64: contentBase64,
+        source: "tools_api_docs_local",
+        title: uploadTitle.value.trim() || null,
+        project_name: uploadProjectName.value.trim() || null,
+      });
+    } else if (uploadMode.value === "url") {
+      if (!remoteUrl.value.trim()) {
+        toast.error("请填写要导入的文档 URL");
+        return;
+      }
+      created = await api.importApiDocFromUrl({
+        url: remoteUrl.value.trim(),
+        title: uploadTitle.value.trim() || null,
+        project_name: uploadProjectName.value.trim() || null,
+        source: "tools_api_docs_url",
+      });
+    } else {
+      if (!selectedIntegrationId.value) {
+        toast.error("请选择一个第三方接入源");
+        return;
+      }
+      if (!canSubmitIntegrationImport.value) {
+        toast.error(integrationImportHint.value || "当前接入还没有准备好可导入的接口文档源");
+        return;
+      }
+      created = await api.importApiDocFromIntegration({
+        integration_id: selectedIntegrationId.value,
+        title: uploadTitle.value.trim() || null,
+        project_name: uploadProjectName.value.trim() || null,
+        document_url: integrationDocumentUrl.value.trim() || null,
+        workspace_id: selectedWorkspaceId.value || null,
+        import_source_id: selectedImportSourceId.value || null,
+        source: "tools_api_docs_integration",
+      });
+    }
+
     upsertDoc(created);
     await loadDocs();
-    toast.success("API 文档已上传并加入文档管理", {
-      duration: 2200,
-    });
-    setTimeout(() => {
-      closeUpload();
-    }, 300);
+    toast.success("API 文档已导入并加入文档管理", { duration: 2200 });
+    setTimeout(() => closeUpload(), 280);
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "上传 API 文档失败");
+    toast.error(err instanceof Error ? err.message : "导入 API 文档失败");
   } finally {
     uploadLoading.value = false;
   }
@@ -218,8 +374,45 @@ async function deleteDoc(doc: ApiDocRecord) {
   }
 }
 
+watch(selectedIntegrationId, async (integrationId) => {
+  integrationDocumentUrl.value = "";
+  selectedWorkspaceId.value = "";
+  selectedImportSourceId.value = "";
+  integrationImportCatalog.value = null;
+  if (!integrationId || uploadMode.value !== "integration") {
+    return;
+  }
+  await loadIntegrationImportCatalog(integrationId);
+});
+
+watch(selectedWorkspaceId, async (workspaceId) => {
+  if (!workspaceId) {
+    selectedImportSourceId.value = "";
+    return;
+  }
+  if (!selectedIntegrationId.value || uploadMode.value !== "integration") {
+    return;
+  }
+  await loadIntegrationImportCatalog(selectedIntegrationId.value, workspaceId);
+  const candidates = filteredImportSources.value;
+  if (candidates.length === 1) {
+    selectedImportSourceId.value = candidates[0].id;
+  }
+});
+
+watch(uploadMode, (mode) => {
+  if (mode !== "integration") {
+    selectedIntegrationId.value = "";
+    integrationDocumentUrl.value = "";
+    selectedWorkspaceId.value = "";
+    selectedImportSourceId.value = "";
+    integrationImportCatalog.value = null;
+  }
+});
+
 onMounted(() => {
   void loadDocs();
+  void loadIntegrations();
   window.addEventListener("qa-agent:open-api-doc-upload", handleExternalOpenUpload);
 });
 
@@ -234,7 +427,7 @@ onBeforeUnmount(() => {
       <div>
         <h3 class="section-title">API 接口文档</h3>
         <p class="head-desc">
-          统一管理通过“添加文档源”上传到 MinIO 的 OpenAPI、Swagger、Postman 与文本接口文档，并为后续接口测试模式维护所属项目。
+          统一管理 OpenAPI、Swagger、Postman 和 Markdown 文档，并为后续接口测试模式维护所属项目与导入来源。
         </p>
       </div>
     </div>
@@ -252,8 +445,8 @@ onBeforeUnmount(() => {
 
     <div v-else-if="!hasDocs" class="api-doc-empty">
       <i class="fa-solid fa-file-circle-plus"></i>
-      <strong>还没有上传任何 API 文档</strong>
-      <span>这里展示的是明确加入“API 接口文档管理”的文件，聊天框 Attachments 上传的会话附件不会默认出现在这里。</span>
+      <strong>还没有导入任何 API 文档</strong>
+      <span>支持本地文件、URL 地址，以及第三方接入源导入。</span>
     </div>
 
     <div v-else class="api-docs-list">
@@ -324,18 +517,18 @@ onBeforeUnmount(() => {
         </div>
         <template v-else-if="selectedDoc">
           <div class="preview-form-grid">
-            <label class="upload-field">
-              文档标题
+            <label class="field-block">
+              <span>文档标题</span>
               <input v-model="editTitle" placeholder="例如：用户中心 OpenAPI v2">
             </label>
-            <label class="upload-field">
-              所属项目
+            <label class="field-block">
+              <span>所属项目</span>
               <input
                 v-model="editProjectName"
                 list="api-doc-project-suggestions"
                 placeholder="例如：mall-order-service"
               >
-              <small v-if="projectNameSuggestions.length" class="upload-hint">
+              <small v-if="projectNameSuggestions.length" class="field-hint">
                 可直接输入新项目名，也可复用已有项目：{{ projectNameSuggestions.join(" / ") }}
               </small>
             </label>
@@ -371,48 +564,113 @@ onBeforeUnmount(() => {
       <section class="tools-modal upload-modal">
         <header class="tools-modal-head">
           <div>
-            <h3>上传 API 文档</h3>
-            <p>支持 OpenAPI、Swagger、Postman Collection、Markdown、JSON、YAML 等文本文件，文件会保存到 MinIO。</p>
+            <h3>导入 API 文档</h3>
+            <p>支持本地文件导入、URL 地址导入，以及通过第三方接入源导入文档。</p>
           </div>
           <button class="icon-btn" @click="closeUpload"><i class="fa-solid fa-xmark"></i></button>
         </header>
 
-        <label class="upload-drop">
-          <i class="fa-solid fa-file-arrow-up"></i>
-          <strong>{{ uploadFile?.name || "选择要上传的文档文件" }}</strong>
-          <span>推荐上传 JSON / YAML / Markdown / TXT / Postman Collection</span>
-          <input type="file" accept=".json,.yaml,.yml,.txt,.md,.csv,.xml,.html" @change="onUploadFileChange">
-        </label>
+        <div class="import-mode-tabs">
+          <button :class="{ active: uploadMode === 'local' }" @click="uploadMode = 'local'">本地文件导入</button>
+          <button :class="{ active: uploadMode === 'url' }" @click="uploadMode = 'url'">URL 地址导入</button>
+          <button :class="{ active: uploadMode === 'integration' }" @click="uploadMode = 'integration'">第三方平台接入</button>
+        </div>
 
-        <label class="upload-field">
-          文档标题（可选）
+        <template v-if="uploadMode === 'local'">
+          <label class="upload-drop">
+            <i class="fa-solid fa-file-arrow-up"></i>
+            <strong>{{ uploadFile?.name || "选择要导入的本地文档文件" }}</strong>
+            <span>推荐上传 JSON / YAML / Markdown / TXT / Postman Collection</span>
+            <input type="file" accept=".json,.yaml,.yml,.txt,.md,.csv,.xml,.html" @change="onUploadFileChange">
+          </label>
+        </template>
+
+        <template v-else-if="uploadMode === 'url'">
+          <label class="field-block modal-field">
+            <span>文档 URL</span>
+            <input v-model="remoteUrl" placeholder="例如：https://example.com/openapi.json">
+            <small class="field-hint">后端会直接拉取远程文档并纳入统一管理。</small>
+          </label>
+        </template>
+
+        <template v-else>
+          <label class="field-block modal-field">
+            <span>选择接入源</span>
+            <select v-model="selectedIntegrationId">
+              <option value="">请选择接入源</option>
+              <option v-for="integration in importableIntegrations" :key="integration.id" :value="integration.id">
+                {{ integration.name }} · {{ integration.kind.toUpperCase() }}
+              </option>
+            </select>
+            <small class="field-hint">这里会展示“插件导入”页中已启用的 MCP / API 接入。</small>
+          </label>
+
+          <div v-if="selectedIntegration" class="integration-brief">
+            <div><strong>类型：</strong>{{ selectedIntegration.kind.toUpperCase() }}</div>
+            <div><strong>默认项目：</strong>{{ selectedIntegration.project_name || "未设置" }}</div>
+            <div>
+              <strong>{{ selectedIntegrationIsMcp ? "MCP 服务地址" : "默认文档地址" }}：</strong>
+              {{ selectedIntegrationIsMcp ? (selectedIntegration.endpoint_url || "未设置") : (selectedIntegration.document_url || "未设置") }}
+            </div>
+          </div>
+
+          <label v-if="workspaceOptions.length" class="field-block modal-field">
+            <span>选择工作区</span>
+            <select v-model="selectedWorkspaceId" :disabled="integrationImportLoading">
+              <option value="">请选择工作区</option>
+              <option v-for="workspace in workspaceOptions" :key="workspace.id" :value="workspace.id">
+                {{ workspace.name }} · {{ workspace.document_count }} 份文档
+              </option>
+            </select>
+            <small class="field-hint">MCP 导入会先定位工作区，再从该工作区导入接口文档。</small>
+          </label>
+
+          <label v-if="filteredImportSources.length" class="field-block modal-field">
+            <span>{{ selectedIntegrationIsMcp ? "选择接口文档" : "选择导入源" }}</span>
+            <select v-model="selectedImportSourceId" :disabled="integrationImportLoading">
+              <option value="">请选择</option>
+              <option v-for="source in filteredImportSources" :key="source.id" :value="source.id">
+                {{ source.label }}<template v-if="source.project_name"> · {{ source.project_name }}</template>
+              </option>
+            </select>
+            <small v-if="selectedImportSource?.summary" class="field-hint">{{ selectedImportSource.summary }}</small>
+          </label>
+
+          <label v-if="!selectedIntegrationIsMcp" class="field-block modal-field">
+            <span>文档地址覆盖（可选）</span>
+            <input v-model="integrationDocumentUrl" placeholder="留空则使用接入源默认文档地址">
+          </label>
+
+          <div v-if="integrationImportHint" class="integration-inline-hint">
+            {{ integrationImportHint }}
+          </div>
+        </template>
+
+        <label class="field-block modal-field">
+          <span>文档标题（可选）</span>
           <input v-model="uploadTitle" placeholder="例如：用户中心 OpenAPI v2">
         </label>
 
-        <label class="upload-field">
-          所属项目（建议填写）
+        <label class="field-block modal-field">
+          <span>所属项目（建议填写）</span>
           <input
             v-model="uploadProjectName"
             list="api-doc-project-suggestions"
             placeholder="例如：mall-order-service"
           >
-          <small v-if="projectNameSuggestions.length" class="upload-hint">
-            可直接输入新项目名，也可从已有项目中选择
+          <small v-if="projectNameSuggestions.length" class="field-hint">
+            可直接输入新项目名，也可从已有项目中复用
           </small>
         </label>
 
         <datalist id="api-doc-project-suggestions">
-          <option
-            v-for="projectName in projectNameSuggestions"
-            :key="projectName"
-            :value="projectName"
-          />
+          <option v-for="projectName in projectNameSuggestions" :key="projectName" :value="projectName" />
         </datalist>
 
         <div class="modal-actions">
           <button class="secondary-btn" @click="closeUpload">取消</button>
-          <button class="primary-btn" :disabled="uploadLoading" @click="submitUpload">
-            {{ uploadLoading ? "上传中..." : "上传到 MinIO" }}
+          <button class="primary-btn" :disabled="uploadLoading || !canSubmitIntegrationImport" @click="submitUpload">
+            {{ uploadLoading ? "导入中..." : "开始导入" }}
           </button>
         </div>
       </section>
@@ -623,31 +881,10 @@ onBeforeUnmount(() => {
   max-height: min(88vh, 900px);
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.42) transparent;
-  scrollbar-gutter: stable;
   border-radius: 24px;
   background: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
-}
-
-.tools-modal::-webkit-scrollbar {
-  width: 8px;
-}
-
-.tools-modal::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tools-modal::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.34);
-}
-
-.tools-modal::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.52);
 }
 
 .tools-modal-head {
@@ -693,12 +930,13 @@ onBeforeUnmount(() => {
   color: #475569;
 }
 
-.preview-inline-error {
-  margin: 20px 28px 0;
+.preview-inline-error,
+.integration-inline-hint {
+  margin: 16px 28px 0;
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgba(239, 68, 68, 0.08);
-  color: #b91c1c;
+  background: rgba(59, 130, 246, 0.06);
+  color: #1e3a8a;
   font-size: 13px;
 }
 
@@ -725,11 +963,7 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 18px;
   max-height: 56vh;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
+  overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 13px;
@@ -738,21 +972,25 @@ onBeforeUnmount(() => {
   font-family: "Consolas", "SFMono-Regular", monospace;
 }
 
-.preview-code::-webkit-scrollbar {
-  width: 8px;
+.import-mode-tabs {
+  display: flex;
+  gap: 10px;
+  padding: 20px 28px 0;
 }
 
-.preview-code::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.preview-code::-webkit-scrollbar-thumb {
+.import-mode-tabs button {
+  border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.32);
+  padding: 8px 14px;
+  background: rgba(248, 250, 252, 0.9);
+  color: #475569;
+  cursor: pointer;
 }
 
-.preview-code::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.48);
+.import-mode-tabs button.active {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
 }
 
 .upload-drop {
@@ -784,26 +1022,48 @@ onBeforeUnmount(() => {
   display: none;
 }
 
-.upload-field {
+.field-block {
   display: grid;
   gap: 8px;
-  margin: 16px 28px 0;
   font-size: 13px;
   color: #475569;
 }
 
-.upload-field input {
+.modal-field,
+.field-block {
+  margin: 16px 28px 0;
+}
+
+.field-block span {
+  font-weight: 600;
+}
+
+.field-block input,
+.field-block select {
   width: 100%;
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 12px;
   padding: 11px 12px;
   font-size: 14px;
+  background: #ffffff;
 }
 
-.upload-hint {
+.field-hint {
   color: #64748b;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.integration-brief {
+  margin: 16px 28px 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.8);
+  color: #475569;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
 }
 
 .modal-actions {
@@ -821,6 +1081,10 @@ onBeforeUnmount(() => {
   .preview-form-grid {
     grid-template-columns: 1fr;
     padding-right: 0;
+  }
+
+  .import-mode-tabs {
+    flex-wrap: wrap;
   }
 }
 

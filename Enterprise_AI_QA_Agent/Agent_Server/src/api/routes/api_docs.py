@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from src.schemas.api_docs import ApiDocUpdateRequest, ApiDocUploadRequest
+from src.schemas.api_docs import (
+    ApiDocImportIntegrationRequest,
+    ApiDocImportUrlRequest,
+    ApiDocUpdateRequest,
+    ApiDocUploadRequest,
+)
 
 
 router = APIRouter(prefix="/registry/api-docs", tags=["api-docs"])
@@ -42,6 +47,52 @@ async def update_api_doc(doc_id: str, payload: ApiDocUpdateRequest, request: Req
             doc_id,
             title=payload.title,
             project_name=payload.project_name,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/import-url")
+async def import_api_doc_from_url(payload: ApiDocImportUrlRequest, request: Request):
+    try:
+        return await request.app.state.api_docs_service.import_document_from_url(
+            url=payload.url,
+            title=payload.title,
+            project_name=payload.project_name,
+            source=payload.source,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/import-integration")
+async def import_api_doc_from_integration(payload: ApiDocImportIntegrationRequest, request: Request):
+    try:
+        integration = await request.app.state.integration_catalog_service.get_integration(payload.integration_id)
+        import_request = await request.app.state.integration_catalog_service.resolve_import_document(
+            payload.integration_id,
+            override_document_url=payload.document_url,
+            import_source_id=payload.import_source_id,
+            workspace_id=payload.workspace_id,
+        )
+        if import_request.mode == "inline":
+            if not import_request.filename or not import_request.content_base64:
+                raise ValueError("导入源未返回可用的文档内容。")
+            return await request.app.state.api_docs_service.upload_document(
+                filename=import_request.filename,
+                content_base64=import_request.content_base64,
+                source=payload.source,
+                title=payload.title or import_request.title,
+                project_name=payload.project_name or import_request.project_name,
+            )
+        return await request.app.state.api_docs_service.import_document_from_integration(
+            integration=integration,
+            title=payload.title,
+            project_name=payload.project_name,
+            document_url=import_request.document_url,
+            source=payload.source,
+            headers=import_request.headers,
+            auth=import_request.auth,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

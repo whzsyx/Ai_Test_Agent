@@ -773,6 +773,163 @@ export interface ApiDocUpdateRequest {
   project_name?: string | null;
 }
 
+export interface ApiDocImportUrlRequest {
+  url: string;
+  title?: string | null;
+  project_name?: string | null;
+  source?: string;
+}
+
+export interface ApiDocImportIntegrationRequest {
+  integration_id: string;
+  title?: string | null;
+  project_name?: string | null;
+  document_url?: string | null;
+  workspace_id?: string | null;
+  import_source_id?: string | null;
+  source?: string;
+}
+
+export type IntegrationKind = "mcp" | "api";
+export type IntegrationTransport = "stdio" | "http" | "websocket";
+export type IntegrationAuthType = "none" | "bearer" | "api_key" | "basic";
+
+export interface IntegrationRecord {
+  id: string;
+  name: string;
+  kind: IntegrationKind;
+  enabled: boolean;
+  description?: string | null;
+  project_name?: string | null;
+  document_url?: string | null;
+  transport?: IntegrationTransport | null;
+  endpoint_url?: string | null;
+  command?: string | null;
+  capabilities: string[];
+  headers: Record<string, string>;
+  env: Record<string, string>;
+  base_url?: string | null;
+  auth_type: IntegrationAuthType;
+  auth_config: Record<string, string>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IntegrationCreateRequest {
+  name: string;
+  kind: IntegrationKind;
+  enabled?: boolean;
+  description?: string | null;
+  project_name?: string | null;
+  document_url?: string | null;
+  transport?: IntegrationTransport | null;
+  endpoint_url?: string | null;
+  command?: string | null;
+  capabilities?: string[];
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  base_url?: string | null;
+  auth_type?: IntegrationAuthType;
+  auth_config?: Record<string, string>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IntegrationUpdateRequest {
+  name?: string | null;
+  enabled?: boolean | null;
+  description?: string | null;
+  project_name?: string | null;
+  document_url?: string | null;
+  transport?: IntegrationTransport | null;
+  endpoint_url?: string | null;
+  command?: string | null;
+  capabilities?: string[] | null;
+  headers?: Record<string, string> | null;
+  env?: Record<string, string> | null;
+  base_url?: string | null;
+  auth_type?: IntegrationAuthType | null;
+  auth_config?: Record<string, string> | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface IntegrationTestResponse {
+  ok: boolean;
+  message: string;
+  target_url?: string | null;
+  integration_id?: string | null;
+  status_code?: number | null;
+  latency_ms?: number | null;
+  preview?: string | null;
+}
+
+export interface IntegrationWorkspaceDescriptor {
+  id: string;
+  name: string;
+  description?: string | null;
+  project_name?: string | null;
+  document_count: number;
+}
+
+export interface IntegrationImportSourceDescriptor {
+  id: string;
+  label: string;
+  document_url: string;
+  kind: string;
+  summary?: string | null;
+  project_name?: string | null;
+  workspace_id?: string | null;
+  workspace_name?: string | null;
+}
+
+export interface IntegrationImportSourcesResponse {
+  integration_id: string;
+  kind: IntegrationKind;
+  supports_workspace_selection: boolean;
+  workspaces: IntegrationWorkspaceDescriptor[];
+  sources: IntegrationImportSourceDescriptor[];
+}
+
+export interface MCPServerDescriptor {
+  key: string;
+  name: string;
+  summary: string;
+  transport: string;
+  status: string;
+  capabilities: string[];
+  enabled: boolean;
+}
+
+export type ManagedMCPSourceKind = "builtin" | "external";
+
+export interface MCPProviderDescriptor {
+  key: string;
+  name: string;
+  summary: string;
+  supports_workspace_selection: boolean;
+  supports_document_import: boolean;
+}
+
+export interface ManagedMCPServerDescriptor {
+  key: string;
+  name: string;
+  summary: string;
+  transport: string;
+  status: string;
+  capabilities: string[];
+  enabled: boolean;
+  source_kind: ManagedMCPSourceKind;
+  provider_key?: string | null;
+  provider_name?: string | null;
+  integration_id?: string | null;
+  project_name?: string | null;
+  endpoint_url?: string | null;
+  document_url?: string | null;
+  supports_workspace_selection: boolean;
+  supports_document_import: boolean;
+  metadata: Record<string, unknown>;
+}
+
 export interface UploadedAttachmentRecord {
   id: string;
   filename: string;

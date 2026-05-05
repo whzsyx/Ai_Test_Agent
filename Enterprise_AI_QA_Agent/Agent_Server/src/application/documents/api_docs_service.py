@@ -7,12 +7,16 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, unquote
 from uuid import uuid4
+
+import httpx
 
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.security.upload_security_service import UploadSecurityService
 from src.core.config import Settings
 from src.schemas.api_docs import ApiDocRecord, UploadedAttachmentRecord
+from src.schemas.integration import IntegrationRecord
 
 
 class ApiDocsService:
@@ -128,6 +132,53 @@ class ApiDocsService:
             self._save_catalog(catalog)
 
         return ApiDocRecord.model_validate(self._normalize_catalog_item(item))
+
+    async def import_document_from_url(
+        self,
+        *,
+        url: str,
+        title: str | None = None,
+        project_name: str | None = None,
+        source: str = "tools_api_docs_url",
+        headers: dict[str, str] | None = None,
+        auth: tuple[str, str] | None = None,
+        filename: str | None = None,
+    ) -> ApiDocRecord:
+        fetched = await self._fetch_remote_document(url=url, headers=headers, auth=auth)
+        resolved_filename = filename or self._derive_remote_filename(
+            original_url=url,
+            final_url=fetched["final_url"],
+            content_type=fetched["content_type"],
+        )
+        return await self.upload_document(
+            filename=resolved_filename,
+            content_base64=base64.b64encode(fetched["content"]).decode("ascii"),
+            source=source,
+            title=title,
+            project_name=project_name,
+        )
+
+    async def import_document_from_integration(
+        self,
+        *,
+        integration: IntegrationRecord,
+        source: str = "tools_api_docs_integration",
+        title: str | None = None,
+        project_name: str | None = None,
+        document_url: str | None = None,
+        headers: dict[str, str] | None = None,
+        auth: tuple[str, str] | None = None,
+    ) -> ApiDocRecord:
+        import_title = title or integration.name
+        import_project_name = project_name or integration.project_name
+        return await self.import_document_from_url(
+            url=document_url or integration.document_url or integration.endpoint_url or integration.base_url or "",
+            title=import_title,
+            project_name=import_project_name,
+            source=source,
+            headers=headers,
+            auth=auth,
+        )
 
     async def upload_attachment(
         self,
@@ -310,6 +361,43 @@ class ApiDocsService:
                 if stripped.startswith("/") and stripped.endswith(":"):
                     count += 1
         return count or None
+
+    async def _fetch_remote_document(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str] | None = None,
+        auth: tuple[str, str] | None = None,
+    ) -> dict[str, Any]:
+        normalized_url = self._normalize_optional_text(url)
+        if not normalized_url:
+            raise ValueError("导入地址不能为空。")
+
+        client_auth = httpx.BasicAuth(*auth) if auth is not None else None
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(self._settings.llm_request_timeout_seconds, 45.0),
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(normalized_url, headers=headers or {}, auth=client_auth)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ValueError(f"远程文档拉取失败：{exc}") from exc
+
+        return {
+            "content": response.content,
+            "content_type": response.headers.get("content-type", "application/octet-stream"),
+            "final_url": str(response.url),
+        }
+
+    def _derive_remote_filename(self, *, original_url: str, final_url: str, content_type: str) -> str:
+        for candidate in (final_url, original_url):
+            parsed = urlparse(candidate)
+            name = Path(unquote(parsed.path)).name
+            if name:
+                return name
+        suffix = mimetypes.guess_extension(content_type.split(";")[0].strip()) or ".txt"
+        return f"remote-api-doc{suffix}"
 
     def _load_catalog(self) -> list[dict[str, Any]]:
         if not self._catalog_path.exists():

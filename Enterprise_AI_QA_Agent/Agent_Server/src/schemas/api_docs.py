@@ -40,6 +40,23 @@ class ApiDocUpdateRequest(BaseModel):
     project_name: str | None = None
 
 
+class ApiDocImportUrlRequest(BaseModel):
+    url: str
+    title: str | None = None
+    project_name: str | None = None
+    source: str = "tools_api_docs_url"
+
+
+class ApiDocImportIntegrationRequest(BaseModel):
+    integration_id: str
+    title: str | None = None
+    project_name: str | None = None
+    document_url: str | None = None
+    workspace_id: str | None = None
+    import_source_id: str | None = None
+    source: str = "tools_api_docs_integration"
+
+
 class AttachmentUploadRequest(BaseModel):
     filename: str
     content_base64: str

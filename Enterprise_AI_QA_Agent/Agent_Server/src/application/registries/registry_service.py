@@ -7,6 +7,7 @@ from src.registry.models import ModelRegistry
 from src.registry.skills import SkillRegistry
 from src.registry.tools import ToolRegistry
 from src.schemas.session import RuntimeMode, SessionMode
+from src.application.mcp.manager_service import MCPManagerService
 
 
 class RegistryService:
@@ -18,6 +19,7 @@ class RegistryService:
         skill_registry: SkillRegistry,
         mcp_registry: MCPRegistry,
         mode_registry: ModeRegistry,
+        mcp_manager_service: MCPManagerService | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._tool_registry = tool_registry
@@ -25,6 +27,7 @@ class RegistryService:
         self._skill_registry = skill_registry
         self._mcp_registry = mcp_registry
         self._mode_registry = mode_registry
+        self._mcp_manager_service = mcp_manager_service
 
     def list_agents(self):
         return self._agent_registry.list()
@@ -43,6 +46,16 @@ class RegistryService:
 
     def list_mcp_servers(self):
         return self._mcp_registry.list()
+
+    async def list_managed_mcp_servers(self):
+        if self._mcp_manager_service is None:
+            return self._mcp_registry.list()
+        return await self._mcp_manager_service.list_managed_servers()
+
+    def list_mcp_providers(self):
+        if self._mcp_manager_service is None:
+            return []
+        return self._mcp_manager_service.list_providers()
 
     def list_modes(self):
         return self._mode_registry.list()
