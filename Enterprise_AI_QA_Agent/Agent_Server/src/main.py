@@ -37,6 +37,7 @@ from src.application.prompting.prompt_service import PromptSubmissionService
 from src.application.registries.registry_service import RegistryService
 from src.application.runtime.runtime_service import RuntimeService
 from src.application.sessions.session_service import SessionService
+from src.application.security.upload_security_service import UploadSecurityService
 from src.application.skills.skill_management_service import SkillManagementService
 from src.application.skills.skill_marketplace_service import SkillMarketplaceService
 from src.application.skills.skill_runtime_service import SkillRuntimeService
@@ -73,17 +74,25 @@ async def lifespan(app: FastAPI):
     email_config_store.initialize()
     model_registry = ModelRegistry(model_config_store)
     skill_registry = SkillRegistry()
-    skill_management_service = SkillManagementService(skill_registry=skill_registry)
-    skill_marketplace_service = SkillMarketplaceService(skill_management_service=skill_management_service)
     mcp_registry = MCPRegistry()
     mode_registry = ModeRegistry()
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
     mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
     artifact_storage_service = ArtifactStorageService(settings=settings)
-    api_docs_service = ApiDocsService(
+    upload_security_service = UploadSecurityService(
         settings=settings,
         artifact_storage_service=artifact_storage_service,
     )
+    api_docs_service = ApiDocsService(
+        settings=settings,
+        artifact_storage_service=artifact_storage_service,
+        upload_security_service=upload_security_service,
+    )
+    skill_management_service = SkillManagementService(
+        skill_registry=skill_registry,
+        upload_security_service=upload_security_service,
+    )
+    skill_marketplace_service = SkillMarketplaceService(skill_management_service=skill_management_service)
     memory_store = PostgresVectorMemoryStore(settings=settings)
     memory_runtime_service = MemoryRuntimeService(
         memory_store=memory_store,
@@ -159,6 +168,7 @@ async def lifespan(app: FastAPI):
     app.state.skill_runtime_service = skill_runtime_service
     app.state.mcp_runtime_service = mcp_runtime_service
     app.state.artifact_storage_service = artifact_storage_service
+    app.state.upload_security_service = upload_security_service
     app.state.api_docs_service = api_docs_service
     app.state.memory_store = memory_store
     app.state.memory_runtime_service = memory_runtime_service

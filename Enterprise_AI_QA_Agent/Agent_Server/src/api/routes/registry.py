@@ -160,7 +160,7 @@ async def install_skill(payload: SkillInstallRequest, request: Request):
 @router.post("/skills/upload")
 async def upload_skill(payload: SkillUploadRequest, request: Request):
     try:
-        return request.app.state.skill_management_service.install_from_upload(
+        return await request.app.state.skill_management_service.install_from_upload(
             filename=payload.filename,
             content_base64=payload.content_base64,
             key=payload.key,

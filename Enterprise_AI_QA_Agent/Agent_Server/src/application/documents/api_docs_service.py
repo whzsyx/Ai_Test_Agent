@@ -10,14 +10,22 @@ from typing import Any
 from uuid import uuid4
 
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.security.upload_security_service import UploadSecurityService
 from src.core.config import Settings
 from src.schemas.api_docs import ApiDocRecord, UploadedAttachmentRecord
 
 
 class ApiDocsService:
-    def __init__(self, *, settings: Settings, artifact_storage_service: ArtifactStorageService) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        artifact_storage_service: ArtifactStorageService,
+        upload_security_service: UploadSecurityService | None = None,
+    ) -> None:
         self._settings = settings
         self._artifact_storage_service = artifact_storage_service
+        self._upload_security_service = upload_security_service
         self._data_dir = (Path(__file__).resolve().parents[2] / settings.data_dir / "api_docs").resolve()
         self._catalog_path = self._data_dir / "catalog.json"
         self._lock = asyncio.Lock()
@@ -44,17 +52,20 @@ class ApiDocsService:
         title: str | None = None,
     ) -> ApiDocRecord:
         content = self._decode_base64(content_base64)
-        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        preview_text, preview_truncated, preview_error = self._build_preview(filename, content, content_type)
+        declared_content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        preview_text, preview_truncated, preview_error = self._build_preview(filename, content, declared_content_type)
         format_label, endpoint_count = self._detect_format(filename, content, preview_text)
         doc_id = str(uuid4())
         now = datetime.now(timezone.utc)
-        storage_result = await self._artifact_storage_service.store_uploaded_bytes(
+        storage_result = await self._store_upload(
             content=content,
             filename=filename,
             object_prefix=f"api-docs/{doc_id}",
-            content_type=content_type,
+            profile="api_document",
+            source=source,
+            content_type=declared_content_type,
         )
+        content_type = str(storage_result.get("content_type") or declared_content_type)
 
         record = ApiDocRecord(
             id=doc_id,
@@ -78,6 +89,7 @@ class ApiDocsService:
                 "original_filename": filename,
                 "storage_backend": storage_result.get("storage_backend", "minio"),
                 "size_bytes": len(content),
+                "security": storage_result.get("security_report"),
             },
         )
 
@@ -95,16 +107,19 @@ class ApiDocsService:
         source: str = "chat_attachment",
     ) -> UploadedAttachmentRecord:
         content = self._decode_base64(content_base64)
-        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        preview_text, preview_truncated, preview_error = self._build_preview(filename, content, content_type)
+        declared_content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        preview_text, preview_truncated, preview_error = self._build_preview(filename, content, declared_content_type)
         attachment_id = str(uuid4())
         now = datetime.now(timezone.utc)
-        storage_result = await self._artifact_storage_service.store_uploaded_bytes(
+        storage_result = await self._store_upload(
             content=content,
             filename=filename,
             object_prefix=f"attachments/{attachment_id}",
-            content_type=content_type,
+            profile="chat_attachment",
+            source=source,
+            content_type=declared_content_type,
         )
+        content_type = str(storage_result.get("content_type") or declared_content_type)
         return UploadedAttachmentRecord(
             id=attachment_id,
             filename=filename,
@@ -120,6 +135,7 @@ class ApiDocsService:
                 "storage_backend": storage_result.get("storage_backend", "minio"),
                 "bucket": storage_result.get("bucket", ""),
                 "object_name": storage_result.get("object_name", ""),
+                "security": storage_result.get("security_report"),
             },
         )
 
@@ -137,6 +153,32 @@ class ApiDocsService:
             except Exception:
                 pass
         return {"ok": True, "deleted_id": doc_id}
+
+    async def _store_upload(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        object_prefix: str,
+        profile: str,
+        source: str,
+        content_type: str,
+    ) -> dict[str, Any]:
+        if self._upload_security_service is not None:
+            return await self._upload_security_service.secure_store_upload(
+                content=content,
+                filename=filename,
+                object_prefix=object_prefix,
+                profile=profile,
+                source=source,
+                content_type=content_type,
+            )
+        return await self._artifact_storage_service.store_uploaded_bytes(
+            content=content,
+            filename=filename,
+            object_prefix=object_prefix,
+            content_type=content_type,
+        )
 
     def _decode_base64(self, value: str) -> bytes:
         try:

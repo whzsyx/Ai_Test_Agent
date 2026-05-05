@@ -9,15 +9,22 @@ import base64
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from uuid import uuid4
 
+from src.application.security.upload_security_service import UploadSecurityService
 from src.registry.skills import SkillRegistry
 
 
 class SkillManagementService:
     """Manage filesystem skills under Agent_Server/src/SKILLS."""
 
-    def __init__(self, skill_registry: SkillRegistry) -> None:
+    def __init__(
+        self,
+        skill_registry: SkillRegistry,
+        upload_security_service: UploadSecurityService | None = None,
+    ) -> None:
         self._skill_registry = skill_registry
+        self._upload_security_service = upload_security_service
         self._skills_root = Path(__file__).resolve().parents[2] / "SKILLS"
         self._skills_root.mkdir(parents=True, exist_ok=True)
 
@@ -125,7 +132,7 @@ class SkillManagementService:
             install_key = self._safe_key(key or self._name_from_content(content) or "downloaded-skill")
             return self.upsert_skill(install_key, content)
 
-    def install_from_upload(
+    async def install_from_upload(
         self,
         filename: str,
         content_base64: str,
@@ -134,16 +141,19 @@ class SkillManagementService:
     ) -> dict[str, Any]:
         safe_name = Path(filename or "uploaded-skill").name
         data = base64.b64decode(content_base64)
+        upload_result = await self._secure_stage_upload(filename=safe_name, content=data)
         with TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / safe_name
             target.write_bytes(data)
             if safe_name.lower().endswith(".zip"):
                 with zipfile.ZipFile(target) as archive:
                     self._safe_extract(archive, Path(temp_dir) / "extracted")
-                return self._install_extracted_skills(Path(temp_dir) / "extracted", key=key, overwrite=overwrite)
+                result = self._install_extracted_skills(Path(temp_dir) / "extracted", key=key, overwrite=overwrite)
+                return self._attach_upload_metadata(result, upload_result)
             content = data.decode("utf-8")
             install_key = self._safe_key(key or self._name_from_content(content) or Path(safe_name).stem)
-            return self.upsert_skill(install_key, content)
+            result = self.upsert_skill(install_key, content)
+            return self._attach_upload_metadata(result, upload_result)
 
     def _copy_skill_dir(self, source: Path, key: str, overwrite: bool) -> dict[str, Any]:
         target = self._skills_root / key
@@ -245,3 +255,26 @@ class SkillManagementService:
             if root != destination and root not in destination.parents:
                 raise ValueError("Refusing to extract archive entry outside target directory.")
         archive.extractall(target)
+
+    async def _secure_stage_upload(self, *, filename: str, content: bytes) -> dict[str, Any]:
+        if self._upload_security_service is None:
+            return {}
+        return await self._upload_security_service.secure_store_upload(
+            content=content,
+            filename=filename,
+            object_prefix=f"skills/{uuid4()}",
+            profile="skill_package",
+            source="skill_upload",
+            content_type=None,
+        )
+
+    def _attach_upload_metadata(self, result: dict[str, Any], upload_result: dict[str, Any]) -> dict[str, Any]:
+        if not upload_result:
+            return result
+        return {
+            **result,
+            "upload_uri": upload_result.get("uri"),
+            "upload_bucket": upload_result.get("bucket"),
+            "upload_object_name": upload_result.get("object_name"),
+            "security_report": upload_result.get("security_report"),
+        }

@@ -75,6 +75,7 @@ function toInputAttachment(doc: UploadedAttachmentRecord): InputAttachment {
       uploaded_at: doc.uploaded_at,
       preview_truncated: doc.preview_truncated,
       size_bytes: doc.size_bytes,
+      security: doc.metadata?.security ?? null,
     },
   };
 }

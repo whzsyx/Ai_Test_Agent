@@ -490,6 +490,16 @@ class ToolRuntimeService:
         prefer_excerpt = bool(arguments.get("prefer_excerpt", False))
         excerpt = " ".join(str(target.get("text_excerpt") or "").split())
         excerpt_text, excerpt_truncated = _truncate_text(excerpt, max_chars) if excerpt else ("", False)
+        attachment_allowed, security_report = self._attachment_read_allowed(target)
+        if not attachment_allowed:
+            security_decision = str(security_report.get("decision") or "blocked").strip() if security_report else "blocked"
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Attachment '{target.get('name')}' is not readable because it is marked as {security_decision}.",
+                "attachment": self._attachment_summary(target),
+                "error": "attachment_security_blocked",
+            }
         uri = str(target.get("uri") or "").strip()
         content_type = str(target.get("content_type") or target.get("metadata", {}).get("content_type") or "").strip()
 
@@ -1742,13 +1752,22 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        endpoint = str(arguments.get("endpoint") or "").strip()
-        objective = str(arguments.get("objective") or context.user_message).strip()
+        request_context = (
+            context.context_bundle.get("api_testing_request")
+            if isinstance(context.context_bundle.get("api_testing_request"), dict)
+            else {}
+        )
+        endpoint = str(arguments.get("endpoint") or request_context.get("endpoint") or "").strip()
+        method = str(arguments.get("method") or request_context.get("method") or "").strip().upper()
+        objective = str(arguments.get("objective") or request_context.get("objective") or context.user_message).strip()
+        verification_focus = str(arguments.get("verification_focus") or request_context.get("verification_focus") or "general").strip()
         return {
             "status": "partial",
             "summary": "API testing mode scaffold is registered. Dedicated contract and assertion flows can now be attached to this entry tool.",
             "endpoint": endpoint,
+            "method": method,
             "objective": objective,
+            "verification_focus": verification_focus,
             "checks": [],
             "next_steps": ["Bind this tool to API contract checks, payload assertions, and report generation."],
         }
@@ -1796,11 +1815,19 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
+        request_context_key = f"{mode_key}_request"
+        request_context = (
+            context.context_bundle.get(request_context_key)
+            if isinstance(context.context_bundle.get(request_context_key), dict)
+            else {}
+        )
         return {
             "status": "partial",
             "summary": summary,
             "mode_key": mode_key,
-            "objective": str(arguments.get("objective") or context.user_message).strip(),
+            "objective": str(arguments.get("objective") or request_context.get("objective") or context.user_message).strip(),
+            "recognized_intent": dict(context.context_bundle.get("mode_intent") or {}),
+            "request": request_context,
             "next_steps": [
                 "Replace placeholder runtime with dedicated mode executor",
                 "Attach verification and evaluation policies",
@@ -2811,6 +2838,7 @@ class ToolRuntimeService:
 
     def _attachment_summary(self, item: dict[str, Any]) -> dict[str, Any]:
         metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+        security = self._attachment_security_report(item)
         return {
             "attachment_id": str(metadata.get("attachment_id") or item.get("id") or "").strip(),
             "name": str(item.get("name") or "").strip(),
@@ -2819,7 +2847,35 @@ class ToolRuntimeService:
             "source": str(metadata.get("source") or "").strip(),
             "uploaded_at": str(metadata.get("uploaded_at") or "").strip(),
             "size_bytes": metadata.get("size_bytes"),
+            "security_decision": str(security.get("decision") or "").strip(),
+            "security_risk_score": security.get("risk_score"),
         }
+
+    def _attachment_security_report(self, item: dict[str, Any]) -> dict[str, Any]:
+        metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+        security = metadata.get("security")
+        return security if isinstance(security, dict) else {}
+
+    def _attachment_read_allowed(self, item: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        security = self._attachment_security_report(item)
+        decision = str(security.get("decision") or "").strip().lower()
+        if decision and decision != "allow":
+            return False, security
+
+        uri = str(item.get("uri") or "").strip()
+        if uri.startswith("minio://"):
+            bucket = self._attachment_bucket_from_uri(uri)
+            if self._settings is not None and bucket in {
+                self._settings.minio_upload_temp_bucket,
+                self._settings.minio_upload_quarantine_bucket,
+            }:
+                return False, security
+        return True, security
+
+    def _attachment_bucket_from_uri(self, uri: str) -> str:
+        raw = uri.removeprefix("minio://")
+        bucket, _, _ = raw.partition("/")
+        return bucket
 
     def _decode_attachment_bytes(
         self,

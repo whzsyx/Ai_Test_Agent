@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 import mimetypes
 from copy import deepcopy
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from src.core.config import Settings
@@ -47,31 +47,36 @@ class ArtifactStorageService:
         filename: str,
         object_prefix: str,
         content_type: str | None = None,
+        bucket_name: str | None = None,
+        object_name: str | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
             raise RuntimeError("Artifact storage backend is not enabled.")
 
-        safe_prefix = "/".join(self._safe_segment(part) for part in object_prefix.split("/") if part.strip())
-        safe_name = self._safe_segment(filename or "upload.bin")
-        object_name = f"{safe_prefix}/{safe_name}" if safe_prefix else safe_name
+        target_bucket = bucket_name or self._settings.minio_bucket
+        resolved_object_name = (
+            self._safe_object_name(object_name)
+            if object_name
+            else self._build_uploaded_object_name(object_prefix=object_prefix, filename=filename)
+        )
         resolved_content_type = content_type or self._content_type(Path(filename))
         client = self._minio_client()
-        self._ensure_bucket(client)
+        self._ensure_bucket(client, target_bucket)
         buffer = BytesIO(content)
         client.put_object(
-            self._settings.minio_bucket,
-            object_name,
+            target_bucket,
+            resolved_object_name,
             buffer,
             length=len(content),
             content_type=resolved_content_type,
         )
-        minio_uri = f"minio://{self._settings.minio_bucket}/{object_name}"
+        minio_uri = f"minio://{target_bucket}/{resolved_object_name}"
         return {
             "path": minio_uri,
             "uri": minio_uri,
             "storage_backend": "minio",
-            "bucket": self._settings.minio_bucket,
-            "object_name": object_name,
+            "bucket": target_bucket,
+            "object_name": resolved_object_name,
             "content_type": resolved_content_type,
             "original_filename": filename,
             "size_bytes": len(content),
@@ -111,6 +116,38 @@ class ArtifactStorageService:
             "size_bytes": getattr(stat, "size", len(content)),
             "etag": getattr(stat, "etag", ""),
         }
+
+    async def copy_object_uri(
+        self,
+        uri: str,
+        *,
+        bucket_name: str,
+        object_name: str,
+    ) -> dict[str, Any]:
+        source = await self.read_object_uri(uri)
+        return await self.store_uploaded_bytes(
+            content=source["content"],
+            filename=Path(source["object_name"]).name,
+            object_prefix="",
+            content_type=str(source.get("content_type") or "application/octet-stream"),
+            bucket_name=bucket_name,
+            object_name=object_name,
+        )
+
+    async def move_object_uri(
+        self,
+        uri: str,
+        *,
+        bucket_name: str,
+        object_name: str,
+    ) -> dict[str, Any]:
+        copied = await self.copy_object_uri(
+            uri,
+            bucket_name=bucket_name,
+            object_name=object_name,
+        )
+        await self.delete_object_uri(uri)
+        return copied
 
     def _rewrite_artifact_paths(
         self,
@@ -201,7 +238,7 @@ class ArtifactStorageService:
         )
         content_type = self._content_type(local_path)
         client = self._minio_client()
-        self._ensure_bucket(client)
+        self._ensure_bucket(client, self._settings.minio_bucket)
         client.fput_object(
             self._settings.minio_bucket,
             object_name,
@@ -239,6 +276,18 @@ class ArtifactStorageService:
     def _normalize_object_name(self, relative: Path) -> str:
         return "/".join(self._safe_segment(part) for part in relative.parts if part)
 
+    def _build_uploaded_object_name(self, *, object_prefix: str, filename: str) -> str:
+        safe_prefix = "/".join(self._safe_segment(part) for part in object_prefix.split("/") if part.strip())
+        safe_name = self._safe_segment(filename or "upload.bin")
+        return f"{safe_prefix}/{safe_name}" if safe_prefix else safe_name
+
+    def _safe_object_name(self, value: str) -> str:
+        return "/".join(
+            self._safe_segment(part)
+            for part in PurePosixPath(str(value)).parts
+            if part not in {"", ".", "/"}
+        )
+
     def _safe_segment(self, value: str) -> str:
         normalized = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value))
         return normalized.strip("._") or "artifact"
@@ -259,10 +308,10 @@ class ArtifactStorageService:
             secure=self._settings.minio_secure,
         )
 
-    def _ensure_bucket(self, client: Any) -> None:
-        if client.bucket_exists(self._settings.minio_bucket):
+    def _ensure_bucket(self, client: Any, bucket_name: str) -> None:
+        if client.bucket_exists(bucket_name):
             return
-        client.make_bucket(self._settings.minio_bucket)
+        client.make_bucket(bucket_name)
 
     def _remove_local_file(self, path: Path) -> None:
         try:

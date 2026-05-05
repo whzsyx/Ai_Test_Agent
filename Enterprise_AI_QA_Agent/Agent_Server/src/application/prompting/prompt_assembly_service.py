@@ -255,6 +255,7 @@ class PromptAssemblyService:
         attachment_count = int(len(context_bundle.get("attachments") or []))
         input_envelope = dict(context_bundle.get("input_envelope") or {})
         input_routing = dict(context_bundle.get("input_routing") or {})
+        mode_intent = dict(context_bundle.get("mode_intent") or {})
         sections = [
             PromptSection(
                 key="user_request",
@@ -273,6 +274,27 @@ class PromptAssemblyService:
                 cache_scope="ephemeral",
                 priority=20,
                 content=str(state.get("normalized_input") or "").strip() or "(same as user request)",
+            ),
+            PromptSection(
+                key="detected_intent",
+                title="Detected Intent",
+                source="prompt_assembly.runtime",
+                channel="runtime_message",
+                cache_scope="dynamic",
+                priority=22,
+                content=(
+                    "No explicit test-mode intent metadata is attached to this turn."
+                    if not mode_intent
+                    else (
+                        f"Mode key: {mode_intent.get('mode_key') or 'unknown'}\n"
+                        f"Intent key: {mode_intent.get('intent_key') or 'general_execution'}\n"
+                        f"Confidence: {mode_intent.get('confidence', 0.0)}\n"
+                        f"Suggested agent: {mode_intent.get('suggested_agent_key') or 'none'}\n"
+                        f"Recommended skills: {self._format_csv(mode_intent.get('recommended_skills') or [])}\n"
+                        f"Reasons: {self._format_csv(mode_intent.get('reasons') or [])}\n"
+                        f"Parameters: {mode_intent.get('parameters') or {}}"
+                    )
+                ),
             ),
             PromptSection(
                 key="attachment_intent",

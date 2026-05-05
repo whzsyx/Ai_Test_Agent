@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     minio_secret_key: str = ""
     minio_bucket: str = "qa-agent"
     minio_secure: bool = False
+    minio_upload_temp_bucket: str = "upload-temp"
+    minio_upload_safe_bucket: str = "upload-safe"
+    minio_upload_quarantine_bucket: str = "upload-quarantine"
+    upload_scan_max_bytes: int = 10 * 1024 * 1024
+    upload_scan_medium_risk_threshold: int = 30
+    upload_scan_high_risk_threshold: int = 70
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90
     browser_backend: str = "playwright-cli"

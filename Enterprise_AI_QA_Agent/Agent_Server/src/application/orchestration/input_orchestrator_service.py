@@ -6,6 +6,7 @@ from uuid import uuid4
 from src.domain.models import SessionRecord
 from src.registry.modes import ModeRegistry
 from src.application.testing.direction_service import QATaskDirectionService
+from src.application.testing.mode_intent_service import TestModeIntentService
 from src.application.testing.router_service import QATaskRouterService
 from src.schemas.session import (
     ExecutionRequest,
@@ -23,6 +24,7 @@ class InputOrchestratorService:
         self._mode_registry = mode_registry
         self._qa_task_direction_service = QATaskDirectionService()
         self._qa_task_router_service = QATaskRouterService()
+        self._test_mode_intent_service = TestModeIntentService()
 
     def orchestrate(self, session: SessionRecord, payload: SendMessageRequest) -> ExecutionRequest:
         raw_content = payload.content or ""
@@ -71,6 +73,7 @@ class InputOrchestratorService:
         normalized_input = " ".join(content.split())
         mode = self._mode_registry.resolve(payload.mode_key or session.mode_key)
         skill_keys = list(dict.fromkeys([*mode.default_skill_keys, *payload.skill_keys]))
+        mode_intent_state = None
 
         if mode.key == "default":
             detected_task_state = self._qa_task_direction_service.classify(
@@ -87,7 +90,16 @@ class InputOrchestratorService:
                 "recommended_skills": detected_task_state.recommended_skills,
             }
         else:
-            test_task_state = self._build_mode_task_state(mode.key, mode.default_skill_keys)
+            mode_intent_state = self._test_mode_intent_service.classify(
+                mode=mode,
+                message=normalized_input,
+                context=payload.context,
+            )
+            test_task_state = self._build_mode_task_state(
+                mode_key=mode.key,
+                recommended_skills=mode.default_skill_keys,
+                mode_intent_state=mode_intent_state,
+            )
             test_route = {
                 "agent_key": mode.default_agent_key,
                 "harness": mode.harness_key,
@@ -156,10 +168,19 @@ class InputOrchestratorService:
             "hook_results": [result.model_dump(mode="python") for result in hook_results],
             "harness_flags": harness_flags,
         }
+        if mode_intent_state is not None:
+            context.update(self._build_mode_intent_context(mode.key, mode_intent_state))
         requested_agent_key = payload.agent_key or session.selected_agent or mode.default_agent_key
         routed_test_agent_key = test_route.get("agent_key") if bool(test_task_state["is_test_task"]) else ""
         if mode.key == "default" and routed_test_agent_key and (not requested_agent_key or requested_agent_key in {"auto", "coordinator"}):
             resolved_agent_key = routed_test_agent_key
+        elif (
+            mode.is_test_mode
+            and mode_intent_state is not None
+            and mode_intent_state.suggested_agent_key
+            and requested_agent_key in {"", "auto", mode.default_agent_key}
+        ):
+            resolved_agent_key = mode_intent_state.suggested_agent_key
         else:
             resolved_agent_key = requested_agent_key or mode.default_agent_key
         orchestration_meta = {
@@ -177,6 +198,7 @@ class InputOrchestratorService:
             "source": payload.source,
             "test_direction": test_task_state["direction"],
             "test_harness": test_route.get("harness", "base_conversation"),
+            "mode_intent": mode_intent_state.intent_key if mode_intent_state is not None else "",
         }
 
         return ExecutionRequest(
@@ -271,15 +293,93 @@ class InputOrchestratorService:
                 flags.append(item)
         return flags
 
-    def _build_mode_task_state(self, mode_key: str, recommended_skills: list[str]) -> dict[str, object]:
+    def _build_mode_task_state(
+        self,
+        mode_key: str,
+        recommended_skills: list[str],
+        mode_intent_state=None,
+    ) -> dict[str, object]:
+        reasons = [f"Execution is pinned to explicit mode '{mode_key}'."]
+        confidence = 1.0
+        merged_skills = list(recommended_skills)
+        if mode_intent_state is not None:
+            reasons.extend(mode_intent_state.reasons)
+            confidence = max(0.55, float(mode_intent_state.confidence or 0.0))
+            for skill_key in mode_intent_state.recommended_skills:
+                if skill_key not in merged_skills:
+                    merged_skills.append(skill_key)
         return {
             "is_test_task": mode_key != "default",
             "direction": mode_key,
-            "confidence": 1.0,
+            "confidence": confidence,
             "needs_direction_selection": False,
-            "reasons": [f"Execution is pinned to explicit mode '{mode_key}'."],
-            "recommended_skills": list(recommended_skills),
+            "reasons": reasons,
+            "recommended_skills": merged_skills,
         }
+
+    def _build_mode_intent_context(self, mode_key: str, mode_intent_state) -> dict[str, object]:
+        parameters = dict(mode_intent_state.parameters or {})
+        context = {
+            "mode_intent": {
+                "mode_key": mode_intent_state.mode_key,
+                "intent_key": mode_intent_state.intent_key,
+                "confidence": mode_intent_state.confidence,
+                "reasons": list(mode_intent_state.reasons),
+                "suggested_agent_key": mode_intent_state.suggested_agent_key,
+                "recommended_skills": list(mode_intent_state.recommended_skills),
+                "parameters": parameters,
+            }
+        }
+        objective = str(parameters.get("objective") or "").strip()
+        target_url = str(parameters.get("target_url") or "").strip()
+        if objective:
+            context["objective"] = objective
+        if target_url:
+            context["target_url"] = target_url
+        if mode_key == "ui_automation":
+            context["ui_automation_direction"] = str(parameters.get("direction") or "").strip()
+            context["ui_automation_subdirection"] = str(parameters.get("subdirection") or "").strip()
+            context["ui_automation_request"] = {
+                "objective": objective,
+                "target_url": target_url,
+                "direction": str(parameters.get("direction") or "").strip(),
+                "subdirection": str(parameters.get("subdirection") or "").strip(),
+            }
+        elif mode_key == "api_testing":
+            context["api_testing_request"] = {
+                "objective": objective,
+                "endpoint": str(parameters.get("endpoint") or "").strip(),
+                "method": str(parameters.get("method") or "").strip(),
+                "verification_focus": str(parameters.get("verification_focus") or "").strip(),
+            }
+        elif mode_key == "security_testing":
+            context["security_testing_request"] = {
+                "objective": objective,
+                "risk_focus": str(parameters.get("risk_focus") or "").strip(),
+                "target_url": target_url,
+            }
+        elif mode_key == "performance_testing":
+            context["performance_testing_request"] = {
+                "objective": objective,
+                "workload_profile": str(parameters.get("workload_profile") or "").strip(),
+                "target_url": target_url,
+            }
+        elif mode_key == "smoke_testing":
+            context["smoke_testing_request"] = {
+                "objective": objective,
+                "suite_focus": str(parameters.get("suite_focus") or "").strip(),
+                "target_url": target_url,
+            }
+        elif mode_key == "code_review":
+            project_scope = str(parameters.get("project_scope") or "").strip()
+            if project_scope:
+                context["project_scope"] = project_scope
+            context["code_review_request"] = {
+                "objective": objective,
+                "review_focus": str(parameters.get("review_focus") or "").strip(),
+                "project_scope": project_scope,
+            }
+        return context
 
     def _parse_slash_command(self, content: str) -> tuple[str | None, str]:
         if not content.startswith("/"):
