@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     oauth_github_client_secret: str = ""
     oauth_codebuddy_client_id: str = ""
     oauth_codebuddy_client_secret: str = ""
+    oauth_codebuddy_poll_url: str = ""
+    oauth_codebuddy_models_endpoint: str = ""
     oauth_trae_client_id: str = ""
     oauth_trae_client_secret: str = ""
     oauth_codex_client_id: str = ""

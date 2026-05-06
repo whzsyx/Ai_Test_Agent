@@ -124,7 +124,11 @@ const providerOptions = computed<SelectOption[]>(() => {
 });
 
 const oauthProviderOptions = computed<SelectOption[]>(() =>
-  oauthProviders.value.map((p) => ({ label: p.display_name, value: p.key })),
+  oauthProviders.value.map((p) => ({
+    label: p.is_enabled ? p.display_name : `${p.display_name}（即将支持）`,
+    value: p.key,
+    disabled: !p.is_enabled,
+  })),
 );
 
 const oauthModelOptions = computed<SelectOption[]>(() =>
@@ -139,9 +143,15 @@ const oauthNeedsBaseUrl = computed(() => selectedOAuthProfile.value?.requires_ba
 
 const oauthHasModelListing = computed(() => selectedOAuthProfile.value?.has_model_listing ?? false);
 
+const oauthSupportsManualModelName = computed(
+  () => selectedOAuthProfile.value?.supports_manual_model_name ?? true,
+);
+
 /** 支持拉取模型列表时，有列表后配置名由所选模型决定，不再单独展示输入框 */
 const showOAuthConfigNameField = computed(
-  () => !oauthHasModelListing.value || oauthAvailableModels.value.length === 0,
+  () =>
+    oauthSupportsManualModelName.value &&
+    (!oauthHasModelListing.value || oauthAvailableModels.value.length === 0),
 );
 
 onMounted(() => {
@@ -432,6 +442,14 @@ function onOAuthProviderChange(key: string | null) {
     oauthSelectedModelId.value = null;
     return;
   }
+  const profile = oauthProviders.value.find((item) => item.key === key);
+  if (profile && !profile.is_enabled) {
+    showMessage("error", `${profile.display_name} 暂未开放，请先选择其他已启用的平台。`);
+    modelDraft.oauth_provider = null;
+    oauthAvailableModels.value = [];
+    oauthSelectedModelId.value = null;
+    return;
+  }
   // Clear model list when provider changes
   oauthAvailableModels.value = [];
   oauthSelectedModelId.value = null;
@@ -469,6 +487,10 @@ function buildOAuthRedirectUri(provider: string) {
 async function launchOAuth() {
   if (!modelDraft.oauth_provider) {
     showMessage("error", "请先选择 OAuth 提供商。");
+    return;
+  }
+  if (selectedOAuthProfile.value && !selectedOAuthProfile.value.is_enabled) {
+    showMessage("error", `${selectedOAuthProfile.value.display_name} 暂未开放授权登录。`);
     return;
   }
   const provider = modelDraft.oauth_provider;
@@ -514,6 +536,10 @@ async function launchOAuth() {
 async function fetchOAuthModels() {
   if (!modelDraft.oauth_provider) {
     showMessage("error", "请先选择 OAuth 提供商。");
+    return;
+  }
+  if (selectedOAuthProfile.value && !selectedOAuthProfile.value.is_enabled) {
+    showMessage("error", `${selectedOAuthProfile.value.display_name} 暂未开放模型拉取能力。`);
     return;
   }
   oauthModelsFetching.value = true;
@@ -773,6 +799,9 @@ async function deleteModel(item: ModelConfigPublic) {
               <small v-if="selectedOAuthProfile?.notes" class="oauth-provider-note">
                 {{ selectedOAuthProfile.notes }}
               </small>
+              <small v-if="selectedOAuthProfile && !selectedOAuthProfile.is_enabled" class="oauth-provider-note">
+                该平台接入能力还在开发中，当前仅保留扩展位，暂不可用于授权登录。
+              </small>
             </label>
 
             <!-- Azure / custom resource Base URL -->
@@ -825,7 +854,7 @@ async function deleteModel(item: ModelConfigPublic) {
               <button
                 type="button"
                 class="oauth-launch-btn"
-                :disabled="oauthPolling || !modelDraft.oauth_provider"
+                :disabled="oauthPolling || !modelDraft.oauth_provider || (selectedOAuthProfile ? !selectedOAuthProfile.is_enabled : false)"
                 @click="launchOAuth"
               >
                 <i class="fa-solid" :class="oauthPolling ? 'fa-spinner fa-spin' : 'fa-arrow-up-right-from-square'"></i>
@@ -850,7 +879,7 @@ async function deleteModel(item: ModelConfigPublic) {
                 <button
                   type="button"
                   class="oauth-fetch-btn"
-                  :disabled="oauthModelsFetching || !modelDraft.oauth_provider"
+                  :disabled="oauthModelsFetching || !modelDraft.oauth_provider || (selectedOAuthProfile ? !selectedOAuthProfile.is_enabled : false)"
                   @click="fetchOAuthModels"
                 >
                   <i class="fa-solid" :class="oauthModelsFetching ? 'fa-spinner fa-spin' : 'fa-magnifying-glass'"></i>

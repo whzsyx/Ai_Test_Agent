@@ -59,6 +59,12 @@ class OpenAIChatCompletionsAdapter(ProviderAdapter):
                 payload["parallel_tool_calls"] = False
         return payload
 
+    def build_headers(self, config: ModelConfigRecord, api_key: str) -> dict[str, str]:
+        headers = super().build_headers(config, api_key)
+        if resolve_provider_profile(config.provider).provider == "github":
+            headers.setdefault("Copilot-Integration-Id", "vscode-chat")
+        return headers
+
     def parse_response(self, config: ModelConfigRecord, data: dict[str, Any]) -> dict[str, Any]:
         choices = data.get("choices", []) or []
         message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}

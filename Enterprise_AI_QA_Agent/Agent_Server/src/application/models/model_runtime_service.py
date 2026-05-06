@@ -126,30 +126,44 @@ class ModelRuntimeService:
         descriptor = adapter.describe(config)
         url = adapter.build_url(config)
         headers = adapter.build_headers(config, api_key)
+        effective_request = request
         tool_name_map = adapter.build_tool_name_map(request.tools)
         payload = adapter.build_request(config, request, tool_name_map=tool_name_map)
+        tool_fallback_used = False
 
         try:
-            if _stream_handler_var.get() is not None:
-                parsed = await self._stream_with_adapter(adapter, config, url, headers, payload)
-            else:
-                async with httpx.AsyncClient(timeout=self._settings.llm_request_timeout_seconds) as client:
-                    response = await client.post(url, headers=headers, json=payload)
-                    response.raise_for_status()
-                    data = response.json()
-                parsed = adapter.parse_response(config, data)
+            parsed = await self._send_with_adapter(adapter, config, url, headers, payload)
         except httpx.HTTPError as exc:
-            return self._http_error_result(config, request, exc)
+            if self._should_retry_google_without_tools(config, request, exc):
+                effective_request = self._build_google_tool_free_request(request)
+                tool_name_map = adapter.build_tool_name_map(effective_request.tools)
+                payload = adapter.build_request(
+                    config,
+                    effective_request,
+                    tool_name_map=tool_name_map,
+                )
+                tool_fallback_used = True
+                try:
+                    parsed = await self._send_with_adapter(adapter, config, url, headers, payload)
+                except httpx.HTTPError as retry_exc:
+                    return self._http_error_result(config, request, retry_exc)
+            else:
+                return self._http_error_result(config, request, exc)
 
         parsed["tool_calls"] = adapter.remap_tool_calls(
             parsed["tool_calls"],
             tool_name_map,
         )
 
+        request_payload = self._summarize_request(config, effective_request)
+        if tool_fallback_used:
+            request_payload["original_tool_count"] = len(request.tools)
+            request_payload["original_tool_names"] = [item.get("name", "") for item in request.tools]
+
         return ModelInvocationResult(
             text=parsed["text"] or "",
             tool_calls=parsed["tool_calls"],
-            request_payload=self._summarize_request(config, request),
+            request_payload=request_payload,
             response_summary={
                 "mode": "ok",
                 "provider": config.provider,
@@ -162,9 +176,112 @@ class ModelRuntimeService:
                 "tool_call_count": len(parsed["tool_calls"]),
                 "tool_call_names": [item.name for item in parsed["tool_calls"]],
                 "content_preview": truncate_text(parsed["text"], 180),
+                "tool_fallback": "google_retry_without_tools" if tool_fallback_used else "",
             },
             raw_response=parsed["raw_response"],
         )
+
+    async def _send_with_adapter(
+        self,
+        adapter: ProviderAdapter,
+        config: ModelConfigRecord,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if _stream_handler_var.get() is not None:
+            return await self._stream_with_adapter(adapter, config, url, headers, payload)
+
+        async with httpx.AsyncClient(timeout=self._settings.llm_request_timeout_seconds) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        return adapter.parse_response(config, data)
+
+    def _should_retry_google_without_tools(
+        self,
+        config: ModelConfigRecord,
+        request: ModelInvocationRequest,
+        exc: httpx.HTTPError,
+    ) -> bool:
+        if config.transport != "google_gemini_generate_content" or not request.tools:
+            return False
+        return isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.status_code == 400
+
+    def _build_google_tool_free_request(
+        self,
+        request: ModelInvocationRequest,
+    ) -> ModelInvocationRequest:
+        filtered_structured_messages = []
+        for message in request.structured_messages:
+            if message.role == "tool":
+                continue
+            if message.role == "assistant" and message.tool_calls and not self._has_visible_message_content(message):
+                continue
+            filtered_structured_messages.append(
+                message.model_copy(update={"tool_calls": []}) if message.tool_calls else message
+            )
+
+        filtered_messages: list[dict[str, Any]] = []
+        for item in request.messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role == "tool":
+                continue
+            if role == "assistant" and item.get("tool_calls") and not self._has_visible_raw_message_content(item):
+                continue
+            if role == "assistant" and item.get("tool_calls"):
+                filtered = dict(item)
+                filtered["tool_calls"] = []
+                filtered_messages.append(filtered)
+                continue
+            filtered_messages.append(item)
+
+        return request.model_copy(
+            update={
+                "tools": [],
+                "messages": filtered_messages,
+                "structured_messages": filtered_structured_messages,
+            }
+        )
+
+    def _has_visible_message_content(self, message: Any) -> bool:
+        parts = getattr(message, "parts", []) or []
+        for part in parts:
+            part_type = str(getattr(part, "type", "") or "")
+            if part_type != "text":
+                return True
+            if str(getattr(part, "text", "") or "").strip():
+                return True
+        return False
+
+    def _has_visible_raw_message_content(self, item: dict[str, Any]) -> bool:
+        content = item.get("content")
+        if isinstance(content, str):
+            return bool(content.strip())
+        if isinstance(content, list):
+            for entry in content:
+                if isinstance(entry, str) and entry.strip():
+                    return True
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("type") or "").strip().lower() in {"text", "output_text"}:
+                    text_value = entry.get("text")
+                    if isinstance(text_value, dict):
+                        text_value = text_value.get("value", "")
+                    if str(text_value or entry.get("content") or "").strip():
+                        return True
+                else:
+                    return True
+        if isinstance(content, dict):
+            if str(content.get("type") or "").strip().lower() in {"text", "output_text"}:
+                text_value = content.get("text")
+                if isinstance(text_value, dict):
+                    text_value = text_value.get("value", "")
+                return bool(str(text_value or content.get("content") or "").strip())
+            return True
+        return False
 
     def _http_error_result(
         self,

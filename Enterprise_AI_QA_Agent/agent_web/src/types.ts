@@ -206,6 +206,12 @@ export interface OAuthProviderProfile {
   has_model_listing: boolean;
   /** Whether the user must supply a resource-specific Base URL (e.g. Azure AD) */
   requires_base_url: boolean;
+  /** Provider login flow kind: standard_oauth / custom_callback / polling_auth */
+  auth_mode: string;
+  /** Whether the user may manually enter a model name when listing is unavailable */
+  supports_manual_model_name: boolean;
+  /** Whether this provider is implemented and available in the UI */
+  is_enabled: boolean;
 }
 
 export interface OAuthStartRequest {

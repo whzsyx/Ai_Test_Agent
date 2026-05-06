@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from src.application.model_adapters.base import (
@@ -15,9 +16,41 @@ from src.schemas.tool_runtime import ModelToolCall
 
 class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
     adapter_key = "google_gemini_generate_content"
+    _SCHEMA_ALLOWED_KEYS = {
+        "type",
+        "description",
+        "properties",
+        "items",
+        "required",
+        "enum",
+        "format",
+        "nullable",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+        "minLength",
+        "maxLength",
+    }
 
     def matches(self, config: ModelConfigRecord) -> bool:
         return config.transport == "google_gemini_generate_content"
+
+    def build_tool_name_map(self, tools: list[dict[str, Any]]) -> dict[str, str]:
+        name_map: dict[str, str] = {}
+        used: set[str] = set()
+        for item in tools:
+            original = str(item.get("name") or "").strip()
+            if not original:
+                continue
+            candidate = self._sanitize_google_tool_name(original)
+            suffix = 2
+            while candidate in used and name_map.get(original) != candidate:
+                candidate = self._sanitize_google_tool_name(f"{original}_{suffix}")
+                suffix += 1
+            used.add(candidate)
+            name_map[original] = candidate
+        return name_map
 
     def describe(self, config: ModelConfigRecord) -> AdapterDescriptor:
         return AdapterDescriptor(
@@ -60,13 +93,22 @@ class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
                         {
                             "name": (tool_name_map or {}).get(item["name"], item["name"]),
                             "description": item["description"],
-                            "parameters": item["input_schema"],
+                            "parameters": self._sanitize_function_parameters(item["input_schema"]),
                         }
                         for item in request.tools
                     ]
                 }
             ]
         return payload
+
+    def build_headers(self, config: ModelConfigRecord, api_key: str) -> dict[str, str]:
+        if config.auth_type == "oauth2":
+            return {
+                "Authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+                **config.extra_headers,
+            }
+        return super().build_headers(config, api_key)
 
     def parse_response(self, config: ModelConfigRecord, data: dict[str, Any]) -> dict[str, Any]:
         candidates = data.get("candidates", []) or []
@@ -249,3 +291,71 @@ class GoogleGeminiGenerateContentAdapter(ProviderAdapter):
             label = part.file_name or "file"
             return {"text": f"[file:{label}]"}
         return None
+
+    def _sanitize_function_parameters(self, schema: Any) -> dict[str, Any]:
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+
+        working = dict(schema)
+        for union_key in ("anyOf", "oneOf", "allOf"):
+            if union_key in working and "type" not in working:
+                candidate = self._first_supported_union_member(working.get(union_key))
+                if candidate:
+                    working = {**candidate, **{key: value for key, value in working.items() if key != union_key}}
+                else:
+                    working.pop(union_key, None)
+
+        sanitized: dict[str, Any] = {}
+        for key, value in working.items():
+            if key not in self._SCHEMA_ALLOWED_KEYS:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                sanitized["properties"] = {
+                    str(name): self._sanitize_function_parameters(child_schema)
+                    for name, child_schema in value.items()
+                    if isinstance(name, str)
+                }
+                continue
+            if key == "items":
+                sanitized["items"] = self._sanitize_function_parameters(value)
+                continue
+            if key == "required" and isinstance(value, list):
+                known = set((sanitized.get("properties") or {}).keys()) if isinstance(sanitized.get("properties"), dict) else None
+                required = [str(item) for item in value if isinstance(item, str)]
+                sanitized["required"] = [item for item in required if known is None or item in known]
+                continue
+            if key == "type":
+                if isinstance(value, list):
+                    preferred = next((item for item in value if isinstance(item, str) and item != "null"), None)
+                    if preferred:
+                        sanitized["type"] = preferred
+                elif isinstance(value, str):
+                    sanitized["type"] = value
+                continue
+            sanitized[key] = value
+
+        if sanitized.get("type") == "object":
+            sanitized.setdefault("properties", {})
+        return sanitized or {"type": "object", "properties": {}}
+
+    def _first_supported_union_member(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, list):
+            return None
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "null":
+                continue
+            if isinstance(item_type, list) and all(part == "null" for part in item_type):
+                continue
+            return item
+        return None
+
+    def _sanitize_google_tool_name(self, value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_")
+        if not cleaned:
+            cleaned = "tool"
+        if cleaned[0].isdigit():
+            cleaned = f"tool_{cleaned}"
+        return cleaned[:64]

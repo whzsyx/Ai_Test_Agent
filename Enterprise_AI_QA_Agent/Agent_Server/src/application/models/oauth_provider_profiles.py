@@ -1,4 +1,4 @@
-"""Known OAuth 2.0 provider presets for common AI/LLM services."""
+"""Known OAuth/login provider presets for model integrations."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,15 +13,16 @@ class OAuthProviderProfile:
     default_scope: str
     extra_auth_params: dict[str, str] = field(default_factory=dict)
     notes: str = ""
-    # LLM API integration metadata
-    api_base_url: str = ""           # Base URL for calling the LLM API
+    api_base_url: str = ""
     default_transport: str = "openai_chat_completions"
-    models_endpoint: str = ""        # REST endpoint to list available models
-    models_response_path: str = "data"   # Top-level JSON key that holds the model list
-    model_id_field: str = "id"           # Field within each item that is the model ID
-    model_name_field: str = ""           # Human-readable name field (empty = use id)
-    # When True, the user must still supply a resource-specific base URL
+    models_endpoint: str = ""
+    models_response_path: str = "data"
+    model_id_field: str = "id"
+    model_name_field: str = ""
     requires_base_url: bool = False
+    auth_mode: str = "standard_oauth"
+    supports_manual_model_name: bool = True
+    is_enabled: bool = True
 
 
 _PROFILES: dict[str, OAuthProviderProfile] = {
@@ -41,10 +42,11 @@ _PROFILES: dict[str, OAuthProviderProfile] = {
         ),
         api_base_url="",
         default_transport="openai_chat_completions",
-        models_endpoint="",   # requires per-resource endpoint: {base_url}/openai/models
+        models_endpoint="",
         models_response_path="data",
         model_id_field="id",
         requires_base_url=True,
+        auth_mode="standard_oauth",
     ),
     "google": OAuthProviderProfile(
         key="google",
@@ -63,6 +65,8 @@ _PROFILES: dict[str, OAuthProviderProfile] = {
         models_response_path="models",
         model_id_field="name",
         model_name_field="displayName",
+        auth_mode="standard_oauth",
+        supports_manual_model_name=True,
     ),
     "github": OAuthProviderProfile(
         key="github",
@@ -80,39 +84,42 @@ _PROFILES: dict[str, OAuthProviderProfile] = {
         models_response_path="data",
         model_id_field="id",
         model_name_field="name",
+        auth_mode="standard_oauth",
     ),
     "codebuddy": OAuthProviderProfile(
         key="codebuddy",
-        display_name="CodeBuddy（腾讯云 IDE）",
+        display_name="CodeBuddy (腾讯云 IDE)",
         authorization_url_template="https://ide.cloud.tencent.com/oauth2/authorize",
         token_url_template="https://ide.cloud.tencent.com/oauth2/token",
         default_scope="openid profile",
         notes=(
-            "Tencent CodeBuddy OAuth. Verify the exact endpoints from the "
-            "official Tencent Cloud CodeBuddy documentation before use."
+            "Tencent CodeBuddy polling-login provider. Configure "
+            "OAUTH_CODEBUDDY_CLIENT_ID / SECRET first. If you also configure "
+            "OAUTH_CODEBUDDY_MODELS_ENDPOINT, the page can fetch the model list automatically; "
+            "otherwise you can still authorize first and enter the model name manually."
         ),
         api_base_url="https://api.ai.qq.com/v1",
         default_transport="openai_chat_completions",
-        models_endpoint="",   # Not publicly documented; leave empty
+        models_endpoint="",
+        auth_mode="polling_auth",
+        is_enabled=True,
     ),
     "trae": OAuthProviderProfile(
         key="trae",
-        display_name="Trae（字节跳动）",
-        authorization_url_template=(
-            "https://account.feishu.cn/open-apis/authen/v1/authorize"
-        ),
-        token_url_template=(
-            "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
-        ),
+        display_name="Trae (字节跳动)",
+        authorization_url_template="https://account.feishu.cn/open-apis/authen/v1/authorize",
+        token_url_template="https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal",
         default_scope="openid",
         notes=(
-            "ByteDance Trae / Lark open-platform OAuth. Verify the endpoints "
-            "from the official ByteDance / Lark developer documentation."
+            "ByteDance Trae / Lark open-platform OAuth skeleton. Verify the endpoint contracts "
+            "against official documentation before enabling this provider."
         ),
         api_base_url="",
         default_transport="openai_chat_completions",
         models_endpoint="",
         requires_base_url=True,
+        auth_mode="custom_callback",
+        is_enabled=False,
     ),
     "codex": OAuthProviderProfile(
         key="codex",
@@ -121,14 +128,16 @@ _PROFILES: dict[str, OAuthProviderProfile] = {
         token_url_template="https://auth.openai.com/oauth/token",
         default_scope="openid offline_access",
         notes=(
-            "OpenAI Codex platform OAuth. Verify current endpoint URLs with "
-            "OpenAI documentation; they may change without notice."
+            "OpenAI Codex provider skeleton. Configure OAUTH_CODEX_CLIENT_ID / SECRET and verify "
+            "the current OAuth endpoints against official OpenAI documentation before enabling it."
         ),
         api_base_url="https://api.openai.com/v1",
         default_transport="openai_chat_completions",
         models_endpoint="https://api.openai.com/v1/models",
         models_response_path="data",
         model_id_field="id",
+        auth_mode="custom_callback",
+        is_enabled=False,
     ),
     "generic": OAuthProviderProfile(
         key="generic",
@@ -136,10 +145,10 @@ _PROFILES: dict[str, OAuthProviderProfile] = {
         authorization_url_template="",
         token_url_template="",
         default_scope="",
-        notes=(
-            "Manual configuration for any RFC 6749-compliant OAuth 2.0 provider."
-        ),
+        notes="Manual configuration for any RFC 6749-compliant OAuth 2.0 provider.",
         requires_base_url=True,
+        auth_mode="standard_oauth",
+        is_enabled=False,
     ),
 }
 
@@ -168,6 +177,9 @@ def list_profiles() -> list[dict]:
             "default_transport": p.default_transport,
             "has_model_listing": bool(p.models_endpoint),
             "requires_base_url": p.requires_base_url,
+            "auth_mode": p.auth_mode,
+            "supports_manual_model_name": p.supports_manual_model_name,
+            "is_enabled": p.is_enabled,
         }
         for p in _PROFILES.values()
     ]

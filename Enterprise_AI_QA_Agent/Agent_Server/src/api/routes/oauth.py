@@ -347,10 +347,9 @@ async def oauth_callback(request: Request):
     if error:
       detail = error_description or error
       oauth_svc = request.app.state.oauth_token_service
-      from src.application.models.oauth_token_service import _CompletedFlow
-      oauth_svc._completed[state] = _CompletedFlow(
-          status="failed",
-          error=f"Provider rejected authorization: {detail}",
+      oauth_svc.mark_failed_flow(
+          state,
+          f"Provider rejected authorization: {detail}",
       )
       return HTMLResponse(
           content=_FAILURE_HTML.format(error=detail),
@@ -368,7 +367,7 @@ async def oauth_callback(request: Request):
     oauth_svc = request.app.state.oauth_token_service
     await oauth_svc.handle_callback(code=code, state=state)
 
-    result = oauth_svc._completed.get(state)
+    result = oauth_svc.get_completed_flow(state)
     if result and result.status == "failed":
       return HTMLResponse(
           content=_FAILURE_HTML.format(error=result.error),
@@ -415,4 +414,4 @@ async def list_oauth_models(
 async def get_oauth_status(state: str, request: Request):
     """Poll for the result of an OAuth flow."""
     oauth_svc = request.app.state.oauth_token_service
-    return oauth_svc.get_flow_status(state)
+    return await oauth_svc.get_flow_status(state)
