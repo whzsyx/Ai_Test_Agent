@@ -160,6 +160,7 @@ async def lifespan(app: FastAPI):
         session_store=store,
         transcript_hygiene_service=transcript_hygiene_service,
         artifact_storage_service=artifact_storage_service,
+        api_docs_service=api_docs_service,
     )
     graph = build_agent_graph(
         agent_registry=agent_registry,

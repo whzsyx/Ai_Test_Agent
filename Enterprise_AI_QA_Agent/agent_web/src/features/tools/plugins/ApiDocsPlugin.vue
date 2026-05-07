@@ -31,6 +31,7 @@ const uploadMode = ref<ImportMode>("local");
 const uploadFile = ref<File | null>(null);
 const uploadTitle = ref("");
 const uploadProjectName = ref("");
+const uploadProjectUrl = ref("");
 const remoteUrl = ref("");
 const selectedIntegrationId = ref("");
 const integrationDocumentUrl = ref("");
@@ -41,6 +42,7 @@ const integrationImportLoading = ref(false);
 
 const editTitle = ref("");
 const editProjectName = ref("");
+const editProjectUrl = ref("");
 
 const hasDocs = computed(() => docs.value.length > 0);
 const importableIntegrations = computed(() =>
@@ -135,6 +137,7 @@ function resetUploadForm() {
   uploadFile.value = null;
   uploadTitle.value = "";
   uploadProjectName.value = "";
+  uploadProjectUrl.value = "";
   remoteUrl.value = "";
   selectedIntegrationId.value = "";
   integrationDocumentUrl.value = "";
@@ -146,11 +149,13 @@ function resetUploadForm() {
 function resetPreviewForm() {
   editTitle.value = "";
   editProjectName.value = "";
+  editProjectUrl.value = "";
 }
 
 function syncPreviewForm(doc: ApiDocRecord | null) {
   editTitle.value = doc?.title || "";
   editProjectName.value = doc?.project_name || "";
+  editProjectUrl.value = doc?.project_url || "";
 }
 
 function upsertDoc(doc: ApiDocRecord) {
@@ -269,6 +274,7 @@ async function submitUpload() {
         source: "tools_api_docs_local",
         title: uploadTitle.value.trim() || null,
         project_name: uploadProjectName.value.trim() || null,
+        project_url: uploadProjectUrl.value.trim() || null,
       });
     } else if (uploadMode.value === "url") {
       if (!remoteUrl.value.trim()) {
@@ -279,6 +285,7 @@ async function submitUpload() {
         url: remoteUrl.value.trim(),
         title: uploadTitle.value.trim() || null,
         project_name: uploadProjectName.value.trim() || null,
+        project_url: uploadProjectUrl.value.trim() || null,
         source: "tools_api_docs_url",
       });
     } else {
@@ -294,6 +301,7 @@ async function submitUpload() {
         integration_id: selectedIntegrationId.value,
         title: uploadTitle.value.trim() || null,
         project_name: uploadProjectName.value.trim() || null,
+        project_url: uploadProjectUrl.value.trim() || null,
         document_url: integrationDocumentUrl.value.trim() || null,
         workspace_id: selectedWorkspaceId.value || null,
         import_source_id: selectedImportSourceId.value || null,
@@ -341,6 +349,7 @@ async function saveDocMetadata() {
     const updated = await api.updateApiDoc(selectedDoc.value.id, {
       title: editTitle.value.trim() || null,
       project_name: editProjectName.value.trim() || null,
+      project_url: editProjectUrl.value.trim() || null,
     });
     selectedDoc.value = updated;
     syncPreviewForm(updated);
@@ -431,7 +440,7 @@ onBeforeUnmount(() => {
       <div>
         <h3 class="section-title">API 接口文档</h3>
         <p class="head-desc">
-          统一管理 OpenAPI、Swagger、Postman 和 Markdown 文档，并为后续接口测试模式维护所属项目与导入来源。
+          统一管理 OpenAPI、Swagger、Postman 和 Markdown 文档；结构化接口文档导入后会转成 Markdown 保存，便于预览、检索和后续接口测试复用。
         </p>
       </div>
     </div>
@@ -487,6 +496,10 @@ onBeforeUnmount(() => {
             <div class="meta-item">
               <i class="fa-solid fa-diagram-project"></i>
               <span>{{ doc.project_name || "未设置所属项目" }}</span>
+            </div>
+            <div class="meta-item">
+              <i class="fa-solid fa-globe"></i>
+              <span>{{ doc.project_url || "未设置项目 URL" }}</span>
             </div>
             <div class="meta-item">
               <i class="fa-solid fa-database"></i>
@@ -545,10 +558,18 @@ onBeforeUnmount(() => {
                   可直接输入新项目名，也可复用已有项目：{{ projectNameSuggestions.join(" / ") }}
                 </small>
               </label>
+              <label class="field-block">
+                <span>项目 URL / Base URL</span>
+                <input v-model="editProjectUrl" placeholder="例如：https://api.example.com 或 http://127.0.0.1:8003">
+                <small class="field-hint">
+                  保存后会写入 Markdown，模型检索接口时可拼出完整调用地址。
+                </small>
+              </label>
             </div>
 
             <div class="preview-meta-grid">
               <div><strong>所属项目：</strong>{{ selectedDoc.project_name || "未设置" }}</div>
+              <div><strong>项目 URL：</strong>{{ selectedDoc.project_url || "未设置" }}</div>
               <div><strong>内容类型：</strong>{{ selectedDoc.content_type }}</div>
               <div><strong>上传来源：</strong>{{ selectedDoc.source }}</div>
               <div><strong>更新时间：</strong>{{ formatServerDateTime(selectedDoc.updated_at) }}</div>
@@ -589,16 +610,16 @@ onBeforeUnmount(() => {
             <label class="upload-drop">
               <i class="fa-solid fa-file-arrow-up"></i>
               <strong>{{ uploadFile?.name || "选择要导入的本地文档文件" }}</strong>
-              <span>推荐上传 JSON / YAML / Markdown / TXT / Postman Collection</span>
-              <input type="file" accept=".json,.yaml,.yml,.txt,.md,.csv,.xml,.html" @change="onUploadFileChange">
+              <span>推荐上传 OpenAPI JSON/YAML、Postman Collection、HAR 或 Markdown，导入后统一保存为 Markdown</span>
+              <input type="file" accept=".json,.yaml,.yml,.har,.txt,.md,.log,.pdf" @change="onUploadFileChange">
             </label>
           </template>
 
           <template v-else-if="uploadMode === 'url'">
             <label class="field-block modal-field">
               <span>文档 URL</span>
-              <input v-model="remoteUrl" placeholder="例如：https://example.com/openapi.json">
-              <small class="field-hint">后端会直接拉取远程文档并纳入统一管理。</small>
+              <input v-model="remoteUrl" placeholder="例如：http://127.0.0.1:8003/docs 或 https://example.com/openapi.json">
+              <small class="field-hint">支持 OpenAPI JSON/YAML、Swagger UI /docs、Postman JSON；后端会自动定位接口源并转换成 Markdown 保存。</small>
             </label>
           </template>
 
@@ -674,6 +695,14 @@ onBeforeUnmount(() => {
               />
               <small class="field-hint">
                 可直接输入新项目名，也可从已有项目中复用
+              </small>
+            </label>
+
+            <label class="field-block modal-field">
+              <span>项目 URL / Base URL（建议填写）</span>
+              <input v-model="uploadProjectUrl" placeholder="例如：https://api.example.com 或 http://127.0.0.1:8003">
+              <small class="field-hint">
+                用于写入 Markdown，帮助模型把接口路径拼成真实调用地址。
               </small>
             </label>
           </div>
@@ -963,6 +992,11 @@ onBeforeUnmount(() => {
   background: rgba(59, 130, 246, 0.06);
   color: #1e3a8a;
   font-size: 13px;
+}
+
+.integration-inline-hint--success {
+  background: rgba(22, 163, 74, 0.08);
+  color: #166534;
 }
 
 .preview-code-shell {

@@ -18,6 +18,7 @@ from typing import Any
 from src.application.context.memory_runtime_service import MemoryRuntimeService
 from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.documents.api_docs_service import ApiDocsService
 from src.application.exploration.ui_graph_store import UIGraphStore
 from src.modes.code_review_mode import build_code_review_campaign
 from src.modes.code_review_mode.project_source import (
@@ -78,6 +79,7 @@ class ToolRuntimeService:
         session_store: SessionStore | None = None,
         transcript_hygiene_service: TranscriptHygieneService | None = None,
         artifact_storage_service: ArtifactStorageService | None = None,
+        api_docs_service: ApiDocsService | None = None,
         coordinator_runtime_service=None,
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
@@ -88,6 +90,7 @@ class ToolRuntimeService:
         self._memory_runtime_service = memory_runtime_service
         self._tool_job_service = tool_job_service
         self._artifact_storage_service = artifact_storage_service
+        self._api_docs_service = api_docs_service
         self._session_store = session_store
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
@@ -113,6 +116,7 @@ class ToolRuntimeService:
             "workflow-router": self._run_workflow_router,
             "subagent-dispatch": self._run_subagent_dispatch,
             "knowledge-rag": self._run_knowledge_rag,
+            "api-docs-library": self._run_api_docs_library,
             "attachment-reader": self._run_attachment_reader,
             "session-history": self._run_session_history,
             "session-timeline": self._run_session_timeline,
@@ -363,6 +367,118 @@ class ToolRuntimeService:
             "summary": f"Retrieved {len(selected)} knowledge chunks for query '{query}'.",
             "chunks": selected,
             "query": query,
+        }
+
+    async def _run_api_docs_library(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        service = self._require_api_docs_service()
+        action = str(arguments.get("action") or "list").strip().lower()
+        if action in {"files", "documents", "docs"}:
+            action = "list"
+        if action in {"get", "show", "inspect"}:
+            action = "detail"
+        if action in {"find", "lookup"}:
+            action = "search"
+
+        limit = _clamp_int(arguments.get("limit"), default=10, minimum=1, maximum=50)
+        max_chars = _clamp_int(arguments.get("max_chars"), default=4000, minimum=500, maximum=20000)
+        include_preview = bool(arguments.get("include_preview", False))
+
+        if action == "list":
+            documents = await service.list_documents()
+            selected = documents[:limit]
+            return {
+                "status": "completed",
+                "ok": True,
+                "summary": f"Found {len(documents)} imported API document(s).",
+                "action": "list",
+                "documents": [
+                    self._api_doc_summary(document, include_preview=include_preview, max_chars=max_chars)
+                    for document in selected
+                ],
+                "metrics": {
+                    "document_count": len(documents),
+                    "returned_count": len(selected),
+                },
+            }
+
+        if action == "detail":
+            doc_id = str(arguments.get("doc_id") or "").strip()
+            query = str(arguments.get("query") or "").strip()
+            if not doc_id and query:
+                resolved = await service.search_documents(query=query, limit=1, max_chars=800)
+                matches = resolved.get("matches") if isinstance(resolved.get("matches"), list) else []
+                if matches and isinstance(matches[0], dict):
+                    doc_id = str(matches[0].get("doc_id") or "")
+            if not doc_id:
+                return {
+                    "status": "failed",
+                    "ok": False,
+                    "summary": "API Docs Library detail requires doc_id, or a query that can identify one document.",
+                    "action": "detail",
+                    "error": "missing_doc_id",
+                }
+
+            content_result = await service.read_document_content(doc_id, max_chars=max_chars)
+            document = dict(content_result.get("document") or {})
+            endpoint_result = await service.search_documents(doc_id=doc_id, limit=50, max_chars=800)
+            endpoint_index = [
+                {
+                    "method": item.get("method"),
+                    "path": item.get("path"),
+                    "full_url": item.get("full_url"),
+                    "summary": item.get("summary"),
+                }
+                for item in endpoint_result.get("matches", [])
+                if isinstance(item, dict) and item.get("match_type") == "endpoint"
+            ]
+            document["endpoint_index"] = endpoint_index
+            document["content_preview"] = str(content_result.get("content") or "")
+            document["content_preview_truncated"] = bool(content_result.get("truncated"))
+            document["content_full_length"] = content_result.get("full_length")
+            if content_result.get("read_error"):
+                document["read_error"] = content_result.get("read_error")
+            return {
+                "status": "completed",
+                "ok": True,
+                "summary": f"Loaded API document detail for '{document.get('title') or doc_id}'.",
+                "action": "detail",
+                "document": document,
+                "metrics": {
+                    "endpoint_count": len(endpoint_index),
+                    "content_full_length": content_result.get("full_length"),
+                },
+            }
+
+        if action == "search":
+            query = str(arguments.get("query") or context.normalized_input or context.user_message or "").strip()
+            result = await service.search_documents(
+                query=query,
+                doc_id=str(arguments.get("doc_id") or "").strip() or None,
+                project_name=str(arguments.get("project_name") or "").strip() or None,
+                project_url=str(arguments.get("project_url") or "").strip() or None,
+                method=str(arguments.get("method") or "").strip() or None,
+                path=str(arguments.get("path") or "").strip() or None,
+                limit=limit,
+                include_preview=include_preview,
+                max_chars=max_chars,
+            )
+            return {
+                "status": "completed",
+                "ok": True,
+                "action": "search",
+                **result,
+            }
+
+        return {
+            "status": "failed",
+            "ok": False,
+            "summary": "Unknown API Docs Library action. Use one of: list, detail, search.",
+            "action": action,
+            "error": "unknown_action",
         }
 
     async def _run_subagent_dispatch(
@@ -2600,6 +2716,34 @@ class ToolRuntimeService:
         if not host:
             return ""
         return f"{username}@{host}" if username else host
+
+    def _api_doc_summary(
+        self,
+        document,
+        *,
+        include_preview: bool,
+        max_chars: int,
+    ) -> dict[str, Any]:
+        item = document.model_dump(mode="json") if hasattr(document, "model_dump") else dict(document)
+        preview = str(item.get("preview_text") or "")
+        if include_preview and preview:
+            item["preview_text"] = preview[:max_chars]
+            item["preview_truncated"] = bool(item.get("preview_truncated")) or len(preview) > max_chars
+        else:
+            item.pop("preview_text", None)
+        metadata = item.get("metadata")
+        if isinstance(metadata, dict):
+            item["metadata"] = {
+                "original_filename": metadata.get("original_filename"),
+                "converted_to_markdown": metadata.get("converted_to_markdown"),
+                "project_url": metadata.get("project_url"),
+            }
+        return item
+
+    def _require_api_docs_service(self) -> ApiDocsService:
+        if self._api_docs_service is None:
+            raise RuntimeError("API docs service is not configured.")
+        return self._api_docs_service
 
     def _require_mcp_runtime(self) -> MCPRuntimeService:
         if self._mcp_runtime_service is None:

@@ -12,6 +12,11 @@ function artifactCount(output: Record<string, unknown>) {
   return Array.isArray(artifacts) ? artifacts.length : 0;
 }
 
+function fileArtifactLabel(output: Record<string, unknown>) {
+  const count = artifactCount(output);
+  return count > 0 ? `${count} 个文件` : "无文件";
+}
+
 function metricCount(output: Record<string, unknown>) {
   const metrics = output?.metrics;
   return metrics && typeof metrics === "object" && !Array.isArray(metrics)
@@ -74,8 +79,8 @@ function statusLabel(status: string) {
             <dd>{{ statusLabel(tool.status) }}</dd>
           </div>
           <div>
-            <dt>产物</dt>
-            <dd>{{ artifactCount(tool.output) }}</dd>
+            <dt>文件产物</dt>
+            <dd>{{ fileArtifactLabel(tool.output) }}</dd>
           </div>
           <div>
             <dt>指标</dt>

@@ -104,6 +104,72 @@ class ToolRegistry:
                 ),
                 handler_key="knowledge-rag",
             ),
+            "api-docs-library": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="api-docs-library",
+                    name="API Docs Library",
+                    description=(
+                        "List imported API documentation/test files, inspect one file's details, and precisely search "
+                        "endpoint paths, methods, titles, projects, and generated Markdown content. Use this before "
+                        "Knowledge RAG when the user asks questions like '我有哪些接口文档', '查看接口文档详情', or '查找登录接口'."
+                    ),
+                    category="knowledge",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "description": "One of list, detail, or search.",
+                                "enum": ["list", "detail", "search"],
+                            },
+                            "doc_id": {
+                                "type": "string",
+                                "description": "Document id returned by action=list, required for action=detail unless query can identify one.",
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Search text, document title, endpoint keyword, or combined text such as 'POST /login'.",
+                            },
+                            "project_name": {
+                                "type": "string",
+                                "description": "Optional project name filter.",
+                            },
+                            "project_url": {
+                                "type": "string",
+                                "description": "Optional project/base URL filter.",
+                            },
+                            "method": {
+                                "type": "string",
+                                "description": "Optional HTTP method filter, such as GET or POST.",
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Optional endpoint path or path fragment filter, such as /api/users.",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of documents or matches to return.",
+                                "default": 10,
+                            },
+                            "include_preview": {
+                                "type": "boolean",
+                                "description": "Whether to include Markdown preview snippets in list/search results.",
+                                "default": False,
+                            },
+                            "max_chars": {
+                                "type": "integer",
+                                "description": "Maximum preview or excerpt characters to return.",
+                                "default": 4000,
+                            },
+                        },
+                        "required": ["action"],
+                    },
+                    output_schema={"documents": "array", "document": "object", "matches": "array"},
+                    tags=["api", "docs", "testing", "retrieval"],
+                ),
+                handler_key="api-docs-library",
+            ),
             "attachment-reader": ToolModule(
                 descriptor=ToolDescriptor(
                     key="attachment-reader",

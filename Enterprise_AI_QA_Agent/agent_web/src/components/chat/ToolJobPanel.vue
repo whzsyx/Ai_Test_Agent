@@ -25,6 +25,10 @@ function artifactPreview(artifact: { label?: string | null; artifact_type: strin
   return artifact.label || artifact.artifact_type || artifact.path;
 }
 
+function fileArtifactLabel(count: number) {
+  return count > 0 ? `${count} 个文件产物` : "无文件产物";
+}
+
 function statusLabel(status: string) {
   switch (status) {
     case "queued":
@@ -58,7 +62,7 @@ function statusLabel(status: string) {
     <div class="observability-head">
       <div>
         <strong>工具任务</strong>
-        <p>展示当前会话的真实执行任务，以及已经落库的运行产物。</p>
+        <p>展示当前会话的真实执行任务，以及已经落库的文件产物。</p>
       </div>
       <span class="registry-tag light">{{ jobs.length }} 个任务</span>
     </div>
@@ -79,7 +83,7 @@ function statusLabel(status: string) {
         <p>{{ job.summary }}</p>
         <div class="tool-job-item-meta">
           <span>{{ statusLabel(job.status) }}</span>
-          <span>{{ job.artifact_count }} 个产物</span>
+          <span>{{ fileArtifactLabel(job.artifact_count) }}</span>
         </div>
       </button>
     </div>
@@ -112,14 +116,14 @@ function statusLabel(status: string) {
     </div>
 
     <div class="tool-artifact-strip">
-      <strong>运行产物</strong>
+      <strong>文件产物</strong>
       <div v-if="artifacts.length" class="tool-artifact-list">
         <article v-for="artifact in artifacts" :key="artifact.id" class="tool-artifact-item">
           <strong>{{ artifactPreview(artifact) }}</strong>
           <p>{{ artifact.path }}</p>
         </article>
       </div>
-      <div v-else class="settings-empty">当前还没有已存储的产物。</div>
+      <div v-else class="settings-empty">当前还没有已存储的文件产物。</div>
     </div>
   </section>
 </template>

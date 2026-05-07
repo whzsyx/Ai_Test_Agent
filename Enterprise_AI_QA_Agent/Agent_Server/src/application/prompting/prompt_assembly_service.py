@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from src.modes.api_testing_mode.prompt_contract import API_TESTING_PROMPT_CONTRACT
 from src.modes.ui_automation_mode.prompt_contract import UI_AUTOMATION_PROMPT_CONTRACT
 from src.schemas.prompting import PromptAssemblyResult, PromptSection
 
@@ -151,6 +152,17 @@ class PromptAssemblyService:
                     cache_scope="dynamic",
                     priority=50,
                     content=UI_AUTOMATION_PROMPT_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "api-testing-agent":
+            sections.append(
+                PromptSection(
+                    key="api_testing_contract",
+                    title="API Testing Contract",
+                    source="prompt_assembly.api_testing",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=API_TESTING_PROMPT_CONTRACT,
                 )
             )
 

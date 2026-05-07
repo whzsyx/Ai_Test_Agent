@@ -74,7 +74,7 @@ class ObservationRuntimeService:
             return "cli_execution"
         if tool_key == "report-writer":
             return "report_artifact"
-        if tool_key == "knowledge-rag":
+        if tool_key in {"knowledge-rag", "api-docs-library"}:
             return "knowledge_hit"
         if tool_key == "session-history":
             return "history_fact"
@@ -83,7 +83,7 @@ class ObservationRuntimeService:
     def _scope_for_tool(self, tool_key: str) -> ObservationScope:
         if tool_key in {"ui-page-explorer", "browser-automation", "browser-control", "dom-inspector"}:
             return "page"
-        if tool_key in {"api-tester", "report-writer", "file-artifact-manager"}:
+        if tool_key in {"api-tester", "api-docs-library", "report-writer", "file-artifact-manager"}:
             return "artifact"
         return "session"
 
@@ -95,6 +95,13 @@ class ObservationRuntimeService:
         if tool_key == "api-tester":
             endpoint = str(output.get("endpoint") or output.get("url") or "").strip()
             return endpoint or None
+        if tool_key == "api-docs-library":
+            document = output.get("document") if isinstance(output.get("document"), dict) else {}
+            if document:
+                return str(document.get("storage_uri") or document.get("title") or "").strip() or None
+            matches = output.get("matches") if isinstance(output.get("matches"), list) else []
+            if matches and isinstance(matches[0], dict):
+                return str(matches[0].get("full_url") or matches[0].get("path") or matches[0].get("title") or "").strip() or None
         artifact_items = output.get("artifacts")
         if isinstance(artifact_items, list) and artifact_items:
             first_artifact = artifact_items[0]

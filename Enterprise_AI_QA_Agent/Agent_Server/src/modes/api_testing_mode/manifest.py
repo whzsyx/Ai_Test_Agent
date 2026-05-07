@@ -12,6 +12,7 @@ MODE_MANIFEST = {
     "default_skill_keys": ["api-validation", "assertion-design"],
     "registered_tool_keys": [
         "api-test-runner",
+        "api-docs-library",
         "api-tester",
         "knowledge-rag",
         "report-writer",

@@ -10,6 +10,7 @@ class ApiDocRecord(BaseModel):
     title: str
     filename: str
     project_name: str | None = None
+    project_url: str | None = None
     source: str = "manual_upload"
     format_label: str = "其他文档"
     content_type: str = "application/octet-stream"
@@ -33,17 +34,20 @@ class ApiDocUploadRequest(BaseModel):
     source: str = "manual_upload"
     title: str | None = None
     project_name: str | None = None
+    project_url: str | None = None
 
 
 class ApiDocUpdateRequest(BaseModel):
     title: str | None = None
     project_name: str | None = None
+    project_url: str | None = None
 
 
 class ApiDocImportUrlRequest(BaseModel):
     url: str
     title: str | None = None
     project_name: str | None = None
+    project_url: str | None = None
     source: str = "tools_api_docs_url"
 
 
@@ -51,6 +55,7 @@ class ApiDocImportIntegrationRequest(BaseModel):
     integration_id: str
     title: str | None = None
     project_name: str | None = None
+    project_url: str | None = None
     document_url: str | None = None
     workspace_id: str | None = None
     import_source_id: str | None = None

@@ -341,7 +341,7 @@ class AgentRegistry:
                     role="tester",
                     summary="Run API contract, status, and payload validation workflows.",
                     description="Dedicated mode agent for API interface testing with focused verification output.",
-                    supported_tools=["api-test-runner", "api-tester", "knowledge-rag", "report-writer"],
+                    supported_tools=["api-test-runner", "api-docs-library", "api-tester", "knowledge-rag", "report-writer"],
                     supported_skills=["api-validation", "assertion-design"],
                     supported_models=["gpt-5.4", "deepseek-reasoner", "claude-sonnet-4"],
                     default_model="gpt-5.4",

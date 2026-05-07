@@ -749,6 +749,7 @@ export interface ApiDocRecord {
   title: string;
   filename: string;
   project_name?: string | null;
+  project_url?: string | null;
   source: string;
   format_label: string;
   content_type: string;
@@ -772,17 +773,20 @@ export interface ApiDocUploadRequest {
   source?: string;
   title?: string | null;
   project_name?: string | null;
+  project_url?: string | null;
 }
 
 export interface ApiDocUpdateRequest {
   title?: string | null;
   project_name?: string | null;
+  project_url?: string | null;
 }
 
 export interface ApiDocImportUrlRequest {
   url: string;
   title?: string | null;
   project_name?: string | null;
+  project_url?: string | null;
   source?: string;
 }
 
@@ -790,6 +794,7 @@ export interface ApiDocImportIntegrationRequest {
   integration_id: string;
   title?: string | null;
   project_name?: string | null;
+  project_url?: string | null;
   document_url?: string | null;
   workspace_id?: string | null;
   import_source_id?: string | null;

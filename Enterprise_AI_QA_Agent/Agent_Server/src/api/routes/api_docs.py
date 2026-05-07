@@ -35,6 +35,7 @@ async def upload_api_doc(payload: ApiDocUploadRequest, request: Request):
             source=payload.source,
             title=payload.title,
             project_name=payload.project_name,
+            project_url=payload.project_url,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -47,6 +48,7 @@ async def update_api_doc(doc_id: str, payload: ApiDocUpdateRequest, request: Req
             doc_id,
             title=payload.title,
             project_name=payload.project_name,
+            project_url=payload.project_url,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -59,6 +61,7 @@ async def import_api_doc_from_url(payload: ApiDocImportUrlRequest, request: Requ
             url=payload.url,
             title=payload.title,
             project_name=payload.project_name,
+            project_url=payload.project_url,
             source=payload.source,
         )
     except Exception as exc:
@@ -84,11 +87,14 @@ async def import_api_doc_from_integration(payload: ApiDocImportIntegrationReques
                 source=payload.source,
                 title=payload.title or import_request.title,
                 project_name=payload.project_name or import_request.project_name,
+                project_url=payload.project_url or integration.base_url,
+                content_type=import_request.content_type,
             )
         return await request.app.state.api_docs_service.import_document_from_integration(
             integration=integration,
             title=payload.title,
             project_name=payload.project_name,
+            project_url=payload.project_url,
             document_url=import_request.document_url,
             source=payload.source,
             headers=import_request.headers,
