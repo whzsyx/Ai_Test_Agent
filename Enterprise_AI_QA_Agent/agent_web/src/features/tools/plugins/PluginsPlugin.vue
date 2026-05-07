@@ -77,7 +77,7 @@ const formUsername = ref("");
 const formPassword = ref("");
 
 const mcpCreateMode = ref<MCPPresetMode>("manual");
-const mcpJsonText = ref(`{
+const mcpJsonPlaceholder = `{
   "mcpServers": {
     "postman-mcp": {
       "url": "https://mcp.postman.com/mcp",
@@ -86,7 +86,8 @@ const mcpJsonText = ref(`{
       }
     }
   }
-}`);
+}`;
+const mcpJsonText = ref("");
 const mcpAdvancedOpen = ref(false);
 const apiAdvancedOpen = ref(false);
 
@@ -135,6 +136,7 @@ function resetForm(kind: IntegrationKind = "api") {
   formPassword.value = "";
   testResult.value = null;
   mcpCreateMode.value = "manual";
+  mcpJsonText.value = "";
   mcpAdvancedOpen.value = false;
   apiAdvancedOpen.value = false;
 }
@@ -409,7 +411,11 @@ async function importMcpFromJson() {
   saving.value = true;
   error.value = "";
   try {
-    const parsed = JSON.parse(mcpJsonText.value) as unknown;
+    const rawJson = mcpJsonText.value.trim();
+    if (!rawJson) {
+      throw new Error("请先粘贴 MCP JSON 配置");
+    }
+    const parsed = JSON.parse(rawJson) as unknown;
     const entries = extractJsonServerEntries(parsed);
     if (!entries.length) {
       throw new Error("没有可导入的 MCP 配置");
@@ -856,6 +862,7 @@ onBeforeUnmount(() => {
                   rows="6"
                   spellcheck="false"
                   class="mcp-json-textarea"
+                  :placeholder="mcpJsonPlaceholder"
                 ></textarea>
                 <p class="json-hint">
                   支持粘贴 OpenCowork 风格的 <code>{ "mcpServers": { ... } }</code>，也支持直接粘贴单个服务器对象。

@@ -367,27 +367,57 @@ onMounted(() => {
 
 .task-tabs {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
   background: var(--surface-muted);
-  padding: 4px;
-  border-radius: 8px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  box-sizing: border-box;
 }
 
 .tab-btn {
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 126px;
+  height: 42px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
   background: transparent;
-  padding: 6px 16px;
+  padding: 0 18px;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
-  border-radius: 6px;
+  border-radius: 9px;
   cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 
 .tab-btn.active {
   background: var(--surface);
   color: var(--text);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.tab-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 -1px 0 color-mix(in srgb, var(--border) 72%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .task-filters {
@@ -607,6 +637,14 @@ onMounted(() => {
 
   .search-box input {
     width: 100%;
+  }
+
+  .task-tabs {
+    overflow-x: auto;
+  }
+
+  .tab-btn {
+    min-width: 112px;
   }
 }
 </style>
