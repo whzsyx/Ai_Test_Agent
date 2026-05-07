@@ -19,7 +19,9 @@
   --sidebar-bg: #ffffff;
   --topbar-bg: #ffffff;
   --console-bg: rgba(255, 255, 255, 0.96);
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  --app-font-family: Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  --app-font-size-scale: 1;
+  font-family: var(--app-font-family);
 }
 
 :root[data-theme="dark"] {
@@ -59,8 +61,18 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
+  font-size: calc(14px * var(--app-font-size-scale));
   overflow: hidden;
   transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+:root[data-reduce-motion="true"] *,
+:root[data-reduce-motion="true"] *::before,
+:root[data-reduce-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.001ms !important;
 }
 
 button,

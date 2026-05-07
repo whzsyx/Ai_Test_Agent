@@ -1,13 +1,14 @@
 import { markRaw, type Component } from "vue";
 
 import EmailSettingsPlugin from "./plugins/EmailSettingsPlugin.vue";
+import GeneralSettingsPlugin from "./plugins/GeneralSettingsPlugin.vue";
 import ModelSettingsPlugin from "./plugins/ModelSettingsPlugin.vue";
 import PlatformSettingsPlugin from "./plugins/PlatformSettingsPlugin.vue";
 import ChannelSettingsPlugin from "./plugins/ChannelSettingsPlugin.vue";
 import StorageSettingsPlugin from "./plugins/StorageSettingsPlugin.vue";
 import AboutSystemPlugin from "./plugins/AboutSystemPlugin.vue";
 
-export type SettingsPluginKey = "model" | "email" | "platform" | "channel" | "storage" | "about";
+export type SettingsPluginKey = "general" | "model" | "email" | "platform" | "channel" | "storage" | "about";
 
 export interface SettingsPluginDefinition {
   key: SettingsPluginKey;
@@ -18,6 +19,12 @@ export interface SettingsPluginDefinition {
 }
 
 export const settingsPlugins: SettingsPluginDefinition[] = [
+  {
+    key: "general",
+    label: "通用设置",
+    summary: "管理语言、通知、字体与数据管理偏好",
+    component: markRaw(GeneralSettingsPlugin),
+  },
   {
     key: "model",
     label: "模型设置",
