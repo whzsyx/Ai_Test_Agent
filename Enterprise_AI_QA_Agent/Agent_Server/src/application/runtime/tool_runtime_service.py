@@ -35,6 +35,7 @@ from src.application.testing.ui_exploration_service import UIExplorationService
 from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.modes.ui_automation_mode.runtime import UIAutomationModeRuntime
+from src.modes.api_testing_mode.runtime import ApiTestingModeRuntime
 from src.runtime.store import SessionStore
 from src.schemas.agent import ToolDescriptor
 from src.schemas.model_config import ModelConfigRecord
@@ -111,6 +112,10 @@ class ToolRuntimeService:
         self._ui_automation_mode_runtime = UIAutomationModeRuntime(
             memory_runtime_service=memory_runtime_service,
             ui_exploration_service=self._ui_exploration_service,
+        )
+        self._api_testing_mode_runtime = ApiTestingModeRuntime(
+            api_docs_service=api_docs_service,
+            settings=settings,
         )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
@@ -1868,25 +1873,7 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        request_context = (
-            context.context_bundle.get("api_testing_request")
-            if isinstance(context.context_bundle.get("api_testing_request"), dict)
-            else {}
-        )
-        endpoint = str(arguments.get("endpoint") or request_context.get("endpoint") or "").strip()
-        method = str(arguments.get("method") or request_context.get("method") or "").strip().upper()
-        objective = str(arguments.get("objective") or request_context.get("objective") or context.user_message).strip()
-        verification_focus = str(arguments.get("verification_focus") or request_context.get("verification_focus") or "general").strip()
-        return {
-            "status": "partial",
-            "summary": "API testing mode scaffold is registered. Dedicated contract and assertion flows can now be attached to this entry tool.",
-            "endpoint": endpoint,
-            "method": method,
-            "objective": objective,
-            "verification_focus": verification_focus,
-            "checks": [],
-            "next_steps": ["Bind this tool to API contract checks, payload assertions, and report generation."],
-        }
+        return await self._api_testing_mode_runtime.handle(arguments, context)
 
     async def _run_security_scan_runner(
         self,

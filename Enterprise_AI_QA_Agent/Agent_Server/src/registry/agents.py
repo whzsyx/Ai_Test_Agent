@@ -348,6 +348,90 @@ class AgentRegistry:
                     tags=["testing", "api"],
                 )
             ),
+            "api-executor-worker": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="api-executor-worker",
+                    name="API Executor Worker",
+                    role="worker",
+                    summary="Execute ready API test tasks from the task pool with HTTP calls and assertion evaluation.",
+                    description="Parallel execution worker for API testing campaigns. Receives dispatched tasks, sends HTTP requests, evaluates assertions, and returns structured results.",
+                    supported_tools=["api-tester", "api-docs-library", "knowledge-rag", "session-history", "observation-search", "report-writer"],
+                    supported_skills=["api-validation", "assertion-design"],
+                    supported_models=["gpt-5.4", "deepseek-reasoner", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "api", "worker", "execution"],
+                )
+            ),
+            "api-project-clarifier": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="api-project-clarifier",
+                    name="API Project Clarifier",
+                    role="planner",
+                    summary="Explain and rank candidate projects when API testing scope is ambiguous.",
+                    description="Presents project candidates with rationale, helps the user pick the correct project scope before any test execution begins.",
+                    supported_tools=["api-docs-library", "knowledge-rag", "session-history"],
+                    supported_skills=["api-validation"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "api", "clarification"],
+                )
+            ),
+            "api-doc-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="api-doc-analyst",
+                    name="API Doc Analyst",
+                    role="planner",
+                    summary="Analyze document coverage and endpoint grouping after project selection.",
+                    description="Reads API documentation structure, identifies endpoint groups, auth requirements, and coverage gaps to inform campaign planning.",
+                    supported_tools=["api-docs-library", "knowledge-rag", "session-history", "report-writer"],
+                    supported_skills=["api-validation", "assertion-design"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4", "deepseek-reasoner"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "api", "analysis"],
+                )
+            ),
+            "api-suite-planner": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="api-suite-planner",
+                    name="API Suite Planner",
+                    role="planner",
+                    summary="Convert user objectives into campaign scope and assertion strategy.",
+                    description="Transforms high-level testing goals into concrete endpoint selections, assertion types, and execution ordering for the campaign.",
+                    supported_tools=["api-docs-library", "api-test-runner", "knowledge-rag", "session-history", "report-writer"],
+                    supported_skills=["api-validation", "assertion-design"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4", "deepseek-reasoner"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "api", "planning"],
+                )
+            ),
+            "api-precondition-planner": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="api-precondition-planner",
+                    name="API Precondition Planner",
+                    role="planner",
+                    summary="Plan auth, preconditions, data dependencies, and readiness checks.",
+                    description="Identifies authentication requirements, test data seeds, environment readiness, and dependency chains before campaign execution.",
+                    supported_tools=["api-docs-library", "knowledge-rag", "session-history"],
+                    supported_skills=["api-validation"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "api", "precondition"],
+                )
+            ),
+            "api-failure-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="api-failure-analyst",
+                    name="API Failure Analyst",
+                    role="verifier",
+                    summary="Analyze API test failures, determine retryability, and identify root causes.",
+                    description="Reviews failed API test tasks, classifies failure types (auth/timeout/server/assertion), suggests fixes, and determines if failures are transient or permanent.",
+                    supported_tools=["api-docs-library", "knowledge-rag", "session-history", "observation-search", "report-writer"],
+                    supported_skills=["api-validation", "assertion-design"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4", "deepseek-reasoner"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "api", "failure-analysis"],
+                )
+            ),
             "security-testing-agent": AgentModule(
                 descriptor=AgentDescriptor(
                     key="security-testing-agent",

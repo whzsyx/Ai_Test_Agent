@@ -8,7 +8,16 @@ MODE_MANIFEST = {
     "category": "testing",
     "is_test_mode": True,
     "default_agent_key": "api-testing-agent",
-    "allowed_agent_keys": ["api-testing-agent", "report-analyst"],
+    "allowed_agent_keys": [
+        "api-testing-agent",
+        "api-executor-worker",
+        "api-project-clarifier",
+        "api-doc-analyst",
+        "api-suite-planner",
+        "api-precondition-planner",
+        "api-failure-analyst",
+        "report-analyst",
+    ],
     "default_skill_keys": ["api-validation", "assertion-design"],
     "registered_tool_keys": [
         "api-test-runner",
