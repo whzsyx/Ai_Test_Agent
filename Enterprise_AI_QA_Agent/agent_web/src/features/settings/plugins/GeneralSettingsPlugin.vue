@@ -32,11 +32,6 @@ const languageOptions = [
   { value: "th-TH", label: "ไทย" },
 ];
 
-const modelLanguageOptions = computed(() => [
-  { value: "follow-system", label: t("settings.follow_system_language") },
-  ...languageOptions,
-]);
-
 const fontFamilyOptions = computed<Array<{ value: AppFontFamily; label: string; detail: string }>>(() => [
   { value: "system", label: t("settings.font_family_system"), detail: t("settings.font_family_system_desc") },
   { value: "sans", label: t("settings.font_family_sans"), detail: t("settings.font_family_sans_desc") },
@@ -130,13 +125,6 @@ const permissionLabel = computed(() => {
 
 const languageLabel = computed(() => {
   return languageOptions.find((item) => item.value === draft.value.language)?.label ?? draft.value.language;
-});
-
-const modelOutputLanguageLabel = computed(() => {
-    return (
-    modelLanguageOptions.value.find((item) => item.value === draft.value.modelOutputLanguage)?.label ??
-    draft.value.modelOutputLanguage
-  );
 });
 
 const fontFamilyLabel = computed(() => {
@@ -238,7 +226,7 @@ async function handleDataAction(key: string, title: string) {
           <div class="general-eyebrow">Workspace Preferences</div>
           <h1 class="general-title">{{ t("settings.general") }}</h1>
           <p class="general-desc">
-            {{ t("settings.language_desc") }}
+            {{ t("settings.system_language_desc") }}
           </p>
         </div>
       </div>
@@ -249,10 +237,6 @@ async function handleDataAction(key: string, title: string) {
       <div class="meta-item">
         <span class="meta-label">{{ t("settings.system_language") }}</span>
         <span class="meta-value">{{ languageLabel }}</span>
-      </div>
-      <div class="meta-item">
-        <span class="meta-label">{{ t("settings.model_language") }}</span>
-        <span class="meta-value">{{ modelOutputLanguageLabel }}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">{{ t("settings.notify_title") }}</span>
@@ -273,40 +257,21 @@ async function handleDataAction(key: string, title: string) {
       <section class="general-section">
         <div class="section-header">
           <h2 class="section-title">{{ t("settings.language_title") }}</h2>
-          <p class="section-desc">{{ t("settings.language_desc") }}</p>
+          <p class="section-desc">{{ t("settings.system_language_desc") }}</p>
         </div>
-        <div class="list-container">
+        <div class="list-container" style="max-width: 480px;">
           <div class="list-item">
             <div class="list-item__icon"><i class="fa-solid fa-language"></i></div>
             <div class="list-item__content">
-              <label class="select-field">
+              <label class="select-field select-field--compact">
                 <div class="field-header">
                   <h3>{{ t("settings.system_language") }}</h3>
-                  <p>{{ t("settings.system_language_desc") }}</p>
                 </div>
                 <n-select
                   v-model:value="draft.language"
                   filterable
-                  size="large"
+                  size="medium"
                   :options="languageOptions"
-                  placeholder=""
-                />
-              </label>
-            </div>
-          </div>
-          <div class="list-item">
-            <div class="list-item__icon"><i class="fa-solid fa-robot"></i></div>
-            <div class="list-item__content">
-              <label class="select-field">
-                <div class="field-header">
-                  <h3>{{ t("settings.model_language") }}</h3>
-                  <p>{{ t("settings.model_language_desc") }}</p>
-                </div>
-                <n-select
-                  v-model:value="draft.modelOutputLanguage"
-                  filterable
-                  size="large"
-                  :options="modelLanguageOptions"
                   placeholder=""
                 />
               </label>

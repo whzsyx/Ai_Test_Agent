@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { NDialogProvider, NMessageProvider } from "naive-ui";
+import { NConfigProvider, NDialogProvider, NMessageProvider } from "naive-ui";
+import type { GlobalThemeOverrides } from "naive-ui";
 
 import CodeReviewProgressPanel from "./components/chat/CodeReviewProgressPanel.vue";
 import EventConsolePanel from "./components/chat/EventConsolePanel.vue";
@@ -14,6 +15,18 @@ import AppTopBar from "./components/layout/AppTopBar.vue";
 import { getLocale, t } from "./services/i18n";
 import { useAppStore } from "./stores/app";
 import { useSessionStore } from "./stores/session";
+
+const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: "#111827",
+    primaryColorHover: "#000000",
+    primaryColorPressed: "#000000",
+    primaryColorSuppl: "#111827",
+    textColorBase: "#1F2937",
+    textColor2: "#6B7280",
+    borderColor: "#E5E7EB",
+  },
+};
 
 const route = useRoute();
 const appStore = useAppStore();
@@ -123,6 +136,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <n-config-provider :theme-overrides="themeOverrides">
   <n-message-provider>
     <n-dialog-provider>
       <div class="prototype-shell">
@@ -197,4 +211,5 @@ onBeforeUnmount(() => {
       </div>
     </n-dialog-provider>
   </n-message-provider>
+  </n-config-provider>
 </template>
