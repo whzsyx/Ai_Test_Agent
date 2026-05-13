@@ -2,6 +2,7 @@
 import { NModal, NDrawer } from "naive-ui";
 import { onMounted, ref } from "vue";
 import { api } from "../../../services/api";
+import { t } from "../../../services/i18n";
 import type { SkillDescriptor } from "../../../types";
 
 const skills = ref<SkillDescriptor[]>([]);
@@ -23,7 +24,7 @@ async function loadSkills() {
   try {
     skills.value = await api.listSkills();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "读取 Skills 失败";
+    errorMessage.value = error instanceof Error ? error.message : t("skills.load_failed");
   } finally {
     loading.value = false;
   }
@@ -54,11 +55,11 @@ async function saveSkill() {
   successMessage.value = "";
   try {
     const saved = await api.upsertSkill(editorKey.value.trim(), { content: editorContent.value });
-    successMessage.value = `已保存 ${saved.key}`;
+    successMessage.value = `${t("skills.saved_prefix")} ${saved.key}`;
     await loadSkills();
     await selectSkill(saved);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "保存 Skill 失败";
+    errorMessage.value = error instanceof Error ? error.message : t("skills.save_failed");
   } finally {
     saving.value = false;
   }
@@ -67,7 +68,7 @@ async function saveSkill() {
 function requestDeleteSkill(skill: SkillDescriptor, event: MouseEvent) {
   event.stopPropagation();
   if (!skill.installed) {
-    errorMessage.value = "内置回退 Skill 不能删除";
+    errorMessage.value = t("skills.builtin_cannot_delete");
     return;
   }
   skillPendingDelete.value = skill;
@@ -92,7 +93,7 @@ async function confirmDeleteSkill() {
   successMessage.value = "";
   try {
     await api.deleteSkill(skill.key);
-    successMessage.value = `已删除 ${skill.key}`;
+    successMessage.value = `${t("skills.deleted_prefix")} ${skill.key}`;
     if (selectedSkill.value?.key === skill.key) {
       selectedSkill.value = null;
       editorKey.value = "";
@@ -102,7 +103,7 @@ async function confirmDeleteSkill() {
     deleteConfirmOpen.value = false;
     skillPendingDelete.value = null;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "删除 Skill 失败";
+    errorMessage.value = error instanceof Error ? error.message : t("skills.delete_failed");
   } finally {
     deletingSkillKey.value = "";
   }
@@ -115,9 +116,9 @@ onMounted(loadSkills);
   <div class="tools-tab-pane">
     <div class="pane-header">
       <div>
-        <h3 class="section-title">已安装 Skills</h3>
+        <h3 class="section-title">{{ t("skills.installed_title") }}</h3>
         <p class="head-desc">
-          统一从 Agent_Server/src/SKILLS 读取和管理。支持安装本地目录、SKILL.md、zip 或 URL。
+          {{ t("skills.installed_desc") }}
         </p>
       </div>
     </div>
@@ -139,7 +140,7 @@ onMounted(loadSkills);
             <div class="skill-head">
               <h4>{{ skill.name || skill.key }}</h4>
               <span class="skill-state" :class="skill.installed ? 'enabled' : 'disabled'">
-                {{ skill.installed ? "src/SKILLS" : "内置回退" }}
+                {{ skill.installed ? "src/SKILLS" : t("skills.builtin_fallback") }}
               </span>
             </div>
             <p>{{ skill.description || skill.summary }}</p>
@@ -152,8 +153,8 @@ onMounted(loadSkills);
             v-if="skill.installed"
             class="skill-delete-btn"
             :disabled="deletingSkillKey === skill.key"
-            :aria-label="`删除 ${skill.key}`"
-            :title="`删除 ${skill.key}`"
+            :aria-label="`${t('common.delete')} ${skill.key}`"
+            :title="`${t('common.delete')} ${skill.key}`"
             @click="requestDeleteSkill(skill, $event)"
           >
             <i class="fa-regular fa-trash-can"></i>
@@ -164,16 +165,16 @@ onMounted(loadSkills);
       <NDrawer v-model:show="editorOpen" :width="500" placement="right">
         <aside class="editor-panel">
           <div class="editor-head">
-            <h4>Skill 编辑器</h4>
+            <h4>{{ t("skills.editor_title") }}</h4>
             <button class="icon-btn" @click="editorOpen = false"><i class="fa-solid fa-xmark"></i></button>
           </div>
           <div class="editor-body">
             <label class="editor-field">
-              安装名
+              {{ t("skills.install_name") }}
               <input v-model="editorKey" placeholder="例如 playwright-cli">
             </label>
             <label class="editor-field editor-field-grow">
-              描述与内容 (Markdown)
+              {{ t("skills.content_label") }}
               <textarea
                 v-model="editorContent"
                 spellcheck="false"
@@ -188,9 +189,9 @@ onMounted(loadSkills);
             </label>
           </div>
           <div class="editor-actions">
-            <button class="secondary-btn" @click="editorOpen = false" style="margin-right: 12px;">取消</button>
+            <button class="secondary-btn" @click="editorOpen = false" style="margin-right: 12px;">{{ t("common.cancel") }}</button>
             <button :disabled="saving" class="primary-btn" @click="saveSkill">
-              {{ saving ? "保存中..." : "保存 / 创建" }}
+              {{ saving ? t("skills.saving") : t("skills.save_create") }}
             </button>
           </div>
         </aside>
@@ -209,20 +210,20 @@ onMounted(loadSkills);
           <i class="fa-solid fa-xmark"></i>
         </button>
         <div class="confirm-copy">
-          <h3>删除 Skill</h3>
+          <h3>{{ t("skills.delete_title") }}</h3>
           <p class="confirm-text">
-            确认删除 <strong>{{ skillPendingDelete?.key }}</strong>？
+            {{ t("skills.confirm_delete") }} <strong>{{ skillPendingDelete?.key }}</strong>？
           </p>
           <p class="confirm-hint">
-            将移除 Agent_Server/src/SKILLS 下的目录，并立即刷新动态注册列表。
+            {{ t("skills.delete_hint") }}
           </p>
         </div>
         <div class="confirm-actions">
           <button class="confirm-secondary" :disabled="Boolean(deletingSkillKey)" @click="closeDeleteConfirm">
-            取消
+            {{ t("common.cancel") }}
           </button>
           <button class="confirm-primary" :disabled="Boolean(deletingSkillKey)" @click="confirmDeleteSkill">
-            {{ deletingSkillKey ? "删除中..." : "确认删除" }}
+            {{ deletingSkillKey ? t("skills.deleting") : t("skills.confirm_delete_btn") }}
           </button>
         </div>
       </div>

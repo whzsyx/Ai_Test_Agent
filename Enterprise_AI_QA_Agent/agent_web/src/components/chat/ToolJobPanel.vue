@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { t } from "../../services/i18n";
 import { useSessionStore } from "../../stores/session";
 import { serverDateTimestamp } from "../../utils/datetime";
 
@@ -26,31 +27,31 @@ function artifactPreview(artifact: { label?: string | null; artifact_type: strin
 }
 
 function fileArtifactLabel(count: number) {
-  return count > 0 ? `${count} 个文件产物` : "无文件产物";
+  return count > 0 ? `${count} ${t("toolJob.file_artifacts_unit")}` : t("toolJob.no_file_artifacts");
 }
 
 function statusLabel(status: string) {
   switch (status) {
     case "queued":
-      return "排队中";
+      return t("toolJob.status_queued");
     case "running":
-      return "运行中";
+      return t("toolJob.status_running");
     case "waiting_approval":
-      return "待审批";
+      return t("toolJob.status_waiting_approval");
     case "resume_requested":
-      return "待恢复";
+      return t("toolJob.status_resume_requested");
     case "retry_requested":
-      return "待重试";
+      return t("toolJob.status_retry_requested");
     case "completed":
-      return "已完成";
+      return t("toolJob.status_completed");
     case "partial":
-      return "部分完成";
+      return t("toolJob.status_partial");
     case "failed":
-      return "失败";
+      return t("toolJob.status_failed");
     case "denied":
-      return "已拒绝";
+      return t("toolJob.status_denied");
     case "cancelled":
-      return "已取消";
+      return t("toolJob.status_cancelled");
     default:
       return status;
   }
@@ -61,10 +62,10 @@ function statusLabel(status: string) {
   <section v-if="sessionStore.session" class="observability-panel tool-job-panel">
     <div class="observability-head">
       <div>
-        <strong>工具任务</strong>
-        <p>展示当前会话的真实执行任务，以及已经落库的文件产物。</p>
+        <strong>{{ t("toolJob.title") }}</strong>
+        <p>{{ t("toolJob.desc") }}</p>
       </div>
-      <span class="registry-tag light">{{ jobs.length }} 个任务</span>
+      <span class="registry-tag light">{{ jobs.length }} {{ t("toolJob.jobs_unit") }}</span>
     </div>
 
     <div v-if="jobs.length" class="tool-job-list">
@@ -87,7 +88,7 @@ function statusLabel(status: string) {
         </div>
       </button>
     </div>
-    <div v-else class="settings-empty">当前还没有持久化的工具任务。</div>
+    <div v-else class="settings-empty">{{ t("toolJob.empty") }}</div>
 
     <div v-if="sessionStore.selectedToolJob" class="tool-job-detail">
       <div class="tool-job-detail-head">
@@ -97,33 +98,33 @@ function statusLabel(status: string) {
       <p class="settings-muted">{{ sessionStore.selectedToolJob.summary }}</p>
       <dl class="snapshot-trace-grid">
         <div>
-          <dt>任务 ID</dt>
+          <dt>{{ t("toolJob.job_id") }}</dt>
           <dd>{{ sessionStore.selectedToolJob.id }}</dd>
         </div>
         <div>
-          <dt>追踪 ID</dt>
+          <dt>{{ t("toolJob.trace_id") }}</dt>
           <dd>{{ sessionStore.selectedToolJob.trace_id }}</dd>
         </div>
         <div>
-          <dt>轮次 ID</dt>
+          <dt>{{ t("toolJob.turn_id") }}</dt>
           <dd>{{ sessionStore.selectedToolJob.turn_id }}</dd>
         </div>
         <div>
-          <dt>尝试次数</dt>
+          <dt>{{ t("toolJob.attempt_count") }}</dt>
           <dd>{{ sessionStore.selectedToolJob.attempt }}</dd>
         </div>
       </dl>
     </div>
 
     <div class="tool-artifact-strip">
-      <strong>文件产物</strong>
+      <strong>{{ t("toolJob.file_artifacts") }}</strong>
       <div v-if="artifacts.length" class="tool-artifact-list">
         <article v-for="artifact in artifacts" :key="artifact.id" class="tool-artifact-item">
           <strong>{{ artifactPreview(artifact) }}</strong>
           <p>{{ artifact.path }}</p>
         </article>
       </div>
-      <div v-else class="settings-empty">当前还没有已存储的文件产物。</div>
+      <div v-else class="settings-empty">{{ t("toolJob.no_artifacts_stored") }}</div>
     </div>
   </section>
 </template>

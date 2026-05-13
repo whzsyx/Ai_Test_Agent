@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { api } from "../services/api";
+import { t } from "../services/i18n";
 import { toolsPlugins, type ToolsPluginKey } from "../features/tools/plugins";
 import type { SkillMarketplaceItem, SkillMarketplaceSource } from "../types";
 
@@ -38,9 +39,9 @@ const activePlugin = computed(
 function installedSkillMessage(result: unknown) {
   const item = result as { key?: string; installed_count?: number; failed_count?: number; summary?: string };
   if (typeof item.installed_count === "number") {
-    return item.summary || `已安装 ${item.installed_count} 个 skill`;
+    return item.summary || t("tools.installed_count", { count: String(item.installed_count) });
   }
-  return `已安装 ${item.key || "skill"}`;
+  return t("tools.installed_key", { key: item.key || "skill" });
 }
 
 function openMarketplace() {
@@ -72,7 +73,7 @@ async function searchMarketplace() {
     marketplaceResults.value = response.items || [];
     selectedMarketplaceSkill.value = marketplaceResults.value[0] ?? null;
   } catch (error) {
-    marketplaceError.value = error instanceof Error ? error.message : "搜索技能失败";
+    marketplaceError.value = error instanceof Error ? error.message : t("tools.search_skill_failed");
   } finally {
     marketplaceLoading.value = false;
   }
@@ -101,7 +102,7 @@ async function installMarketplaceSkill(skill: SkillMarketplaceItem) {
     marketplaceMessage.value = installedSkillMessage(installed);
     skillsRefreshKey.value += 1;
   } catch (error) {
-    marketplaceError.value = error instanceof Error ? error.message : "安装技能失败";
+    marketplaceError.value = error instanceof Error ? error.message : t("tools.install_skill_failed");
   } finally {
     marketplaceInstallingId.value = "";
   }
@@ -129,7 +130,7 @@ function handleUploadFile(event: Event) {
 
 async function uploadSkillPackage() {
   if (!uploadFile.value) {
-    uploadError.value = "请选择 SKILL.md 或 zip 技能包";
+    uploadError.value = t("tools.upload_select_file");
     return;
   }
   uploadLoading.value = true;
@@ -146,7 +147,7 @@ async function uploadSkillPackage() {
     uploadMessage.value = installedSkillMessage(installed);
     skillsRefreshKey.value += 1;
   } catch (error) {
-    uploadError.value = error instanceof Error ? error.message : "上传技能包失败";
+    uploadError.value = error instanceof Error ? error.message : t("tools.upload_skill_failed");
   } finally {
     uploadLoading.value = false;
   }
@@ -159,7 +160,7 @@ function fileToBase64(file: File): Promise<string> {
       const result = String(reader.result || "");
       resolve(result.includes(",") ? result.split(",")[1] : result);
     };
-    reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+    reader.onerror = () => reject(reader.error || new Error(t("tools.read_file_failed")));
     reader.readAsDataURL(file);
   });
 }
@@ -192,20 +193,20 @@ onBeforeUnmount(() => {
   <section class="view-page tools-page">
     <div class="page-head">
       <div>
-        <h2>Skills 与工具管理</h2>
-        <p class="head-desc">管理 Agent 增强知识、漏洞扫描引擎及后端已注册工具链</p>
+        <h2>{{ t("tools.title") }}</h2>
+        <p class="head-desc">{{ t("tools.page_desc") }}</p>
       </div>
       <div class="page-head-actions">
         <template v-if="activeTab === 'skills'">
           <button class="secondary-btn" @click="openMarketplace">
-            <i class="fa-brands fa-github"></i> Github 导入
+            <i class="fa-brands fa-github"></i> {{ t("tools.github_import") }}
           </button>
           <button class="primary-btn" @click="openUpload">
-            <i class="fa-solid fa-upload"></i> 上传技能包
+            <i class="fa-solid fa-upload"></i> {{ t("tools.upload_skill_package") }}
           </button>
         </template>
         <template v-else-if="activeTab === 'apidocs'">
-          <button class="primary-btn" @click="openApiDocUpload"><i class="fa-solid fa-plus"></i> 添加文档源</button>
+          <button class="primary-btn" @click="openApiDocUpload"><i class="fa-solid fa-plus"></i> {{ t("tools.add_doc_source") }}</button>
         </template>
         <template v-else-if="activeTab === 'plugins'">
           <button
@@ -213,14 +214,14 @@ onBeforeUnmount(() => {
             class="primary-btn"
             @click="openIntegrationCreate('api')"
           >
-            <i class="fa-solid fa-plus"></i> 新增 API 接入
+            <i class="fa-solid fa-plus"></i> {{ t("tools.add_api_integration") }}
           </button>
           <button
             v-else-if="pluginsIntegrationPane === 'mcp'"
             class="primary-btn"
             @click="openIntegrationCreate('mcp')"
           >
-            <i class="fa-solid fa-plus"></i> 新增 MCP 接入
+            <i class="fa-solid fa-plus"></i> {{ t("tools.add_mcp_integration") }}
           </button>
         </template>
       </div>
@@ -235,7 +236,7 @@ onBeforeUnmount(() => {
         @click="activeTab = plugin.key"
       >
         <i :class="[`fa-${plugin.iconType}`, plugin.icon]"></i>
-        <span>{{ plugin.label }}</span>
+        <span>{{ t(plugin.labelKey) }}</span>
       </button>
     </nav>
 
@@ -250,8 +251,8 @@ onBeforeUnmount(() => {
       <section class="tools-modal marketplace-modal">
         <header class="tools-modal-head">
           <div>
-            <h3>导入 Skills</h3>
-            <p>从 Anthropic 官方仓库或 SkillsMP 搜索、下载并动态注册到 src/SKILLS。</p>
+            <h3>{{ t("tools.import_skills") }}</h3>
+            <p>{{ t("tools.import_skills_desc") }}</p>
           </div>
           <button class="icon-btn" @click="closeMarketplace"><i class="fa-solid fa-xmark"></i></button>
         </header>
@@ -268,11 +269,11 @@ onBeforeUnmount(() => {
         <div class="marketplace-search">
           <input
             v-model="marketplaceQuery"
-            placeholder="搜索 skill，例如 playwright、browser、pdf..."
+            :placeholder="t('tools.search_skill_placeholder')"
             @keydown.enter="searchMarketplace"
           >
           <button class="primary-btn" :disabled="marketplaceLoading" @click="searchMarketplace">
-            {{ marketplaceLoading ? "搜索中..." : "搜索" }}
+            {{ marketplaceLoading ? t("tools.searching") : t("common.search") }}
           </button>
         </div>
 
@@ -289,11 +290,11 @@ onBeforeUnmount(() => {
               @click="selectedMarketplaceSkill = skill"
             >
               <strong>{{ skill.name || skill.id }}</strong>
-              <span>{{ skill.description || "暂无描述" }}</span>
+              <span>{{ skill.description || t("tools.no_description") }}</span>
               <small>{{ skill.source }} / {{ skill.id }}</small>
             </button>
             <div v-if="!marketplaceLoading && !marketplaceResults.length" class="marketplace-empty">
-              输入关键词后搜索可安装的 Skills。
+              {{ t("tools.search_hint") }}
             </div>
           </div>
 
@@ -307,33 +308,33 @@ onBeforeUnmount(() => {
               </div>
               
               <div class="preview-scroll-area">
-                <p class="preview-desc">{{ selectedMarketplaceSkill.description || "暂无描述" }}</p>
+                <p class="preview-desc">{{ selectedMarketplaceSkill.description || t("tools.no_description") }}</p>
                 <pre v-if="selectedMarketplaceSkill.content">{{ selectedMarketplaceSkill.content }}</pre>
               </div>
 
               <div class="preview-actions">
                 <label class="install-name-field">
-                  安装名
+                  {{ t("tools.install_name") }}
                   <input v-model="marketplaceInstallKey" :placeholder="selectedMarketplaceSkill.key || selectedMarketplaceSkill.id">
                 </label>
                 <div class="preview-actions-row">
                   <label class="check-row">
                     <input v-model="marketplaceOverwrite" type="checkbox">
-                    覆盖同名 skill
+                    {{ t("tools.overwrite_skill") }}
                   </label>
                   <button
                     class="primary-btn"
                     :disabled="marketplaceInstallingId === selectedMarketplaceSkill.id"
                     @click="installMarketplaceSkill(selectedMarketplaceSkill)"
                   >
-                    {{ marketplaceInstallingId === selectedMarketplaceSkill.id ? "安装中..." : "安装 Skill" }}
+                    {{ marketplaceInstallingId === selectedMarketplaceSkill.id ? t("tools.installing") : t("tools.install_skill") }}
                   </button>
                 </div>
               </div>
             </template>
             <div v-else class="marketplace-empty">
               <i class="fa-solid fa-cube" style="font-size: 32px; margin-bottom: 12px; opacity: 0.5;"></i>
-              <div>选择一个搜索结果查看详情</div>
+              <div>{{ t("tools.select_result_hint") }}</div>
             </div>
           </aside>
         </div>
@@ -344,35 +345,35 @@ onBeforeUnmount(() => {
       <section class="tools-modal upload-modal">
         <header class="tools-modal-head">
           <div>
-            <h3>上传技能包</h3>
-            <p>支持单个 SKILL.md 或包含 SKILL.md 的 zip，安装后会立即动态注册。</p>
+            <h3>{{ t("tools.upload_skill_package") }}</h3>
+            <p>{{ t("tools.upload_skill_desc") }}</p>
           </div>
           <button class="icon-btn" @click="closeUpload"><i class="fa-solid fa-xmark"></i></button>
         </header>
 
         <label class="upload-drop">
           <i class="fa-solid fa-file-arrow-up"></i>
-          <strong>{{ uploadFile?.name || "选择 SKILL.md / zip 文件" }}</strong>
-          <span>文件会上传到后端并安装到 Agent_Server/src/SKILLS</span>
+          <strong>{{ uploadFile?.name || t("tools.select_skill_file") }}</strong>
+          <span>{{ t("tools.upload_target_desc") }}</span>
           <input type="file" accept=".md,.zip" @change="handleUploadFile">
         </label>
 
         <label class="upload-field">
-          可选安装名
-          <input v-model="uploadKey" placeholder="例如 playwright-cli">
+          {{ t("tools.optional_install_name") }}
+          <input v-model="uploadKey" :placeholder="t('tools.install_name_placeholder')">
         </label>
         <label class="check-row">
           <input v-model="uploadOverwrite" type="checkbox">
-          覆盖同名 skill
+          {{ t("tools.overwrite_skill") }}
         </label>
 
         <div v-if="uploadError" class="modal-notice error">{{ uploadError }}</div>
         <div v-if="uploadMessage" class="modal-notice success">{{ uploadMessage }}</div>
 
         <div class="modal-actions">
-          <button class="secondary-btn" @click="closeUpload">取消</button>
+          <button class="secondary-btn" @click="closeUpload">{{ t("common.cancel") }}</button>
           <button class="primary-btn" :disabled="uploadLoading" @click="uploadSkillPackage">
-            {{ uploadLoading ? "上传中..." : "上传并安装" }}
+            {{ uploadLoading ? t("tools.uploading") : t("tools.upload_and_install") }}
           </button>
         </div>
       </section>

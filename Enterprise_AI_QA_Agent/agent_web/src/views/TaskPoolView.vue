@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { api } from "../services/api";
+import { t } from "../services/i18n";
 import type { SessionDetail, SessionSummary, WorkerDispatchRecord } from "../types";
 import { formatServerDateTime, serverDateTimestamp } from "../utils/datetime";
 
@@ -59,10 +60,10 @@ const tabs = computed(() => {
   const completed = rows.value.filter((row) => row.session.status === "completed").length;
   const failed = rows.value.filter((row) => row.session.status === "failed").length;
   return [
-    { id: "all" as TaskTab, label: `全部（${all}）` },
-    { id: "running" as TaskTab, label: `运行中（${running}）` },
-    { id: "completed" as TaskTab, label: `已完成（${completed}）` },
-    { id: "failed" as TaskTab, label: `失败（${failed}）` },
+    { id: "all" as TaskTab, label: `${t("taskpool.tab_all")}（${all}）` },
+    { id: "running" as TaskTab, label: `${t("taskpool.tab_running")}（${running}）` },
+    { id: "completed" as TaskTab, label: `${t("taskpool.tab_completed")}（${completed}）` },
+    { id: "failed" as TaskTab, label: `${t("taskpool.tab_failed")}（${failed}）` },
   ];
 });
 
@@ -82,26 +83,26 @@ function parentSessionIdFromSession(session: SessionDetail): string {
 }
 
 function statusLabel(status: string): string {
-  if (status === "waiting_approval") return "待审批";
-  if (status === "completed") return "已完成";
-  if (status === "failed") return "失败";
-  if (status === "running") return "运行中";
-  if (status === "interrupted") return "已中断";
-  return "空闲";
+  if (status === "waiting_approval") return t("taskpool.status_waiting_approval");
+  if (status === "completed") return t("taskpool.status_completed");
+  if (status === "failed") return t("taskpool.status_failed");
+  if (status === "running") return t("taskpool.status_running");
+  if (status === "interrupted") return t("taskpool.status_interrupted");
+  return t("taskpool.status_idle");
 }
 
 function modeLabel(row: TaskRow): string {
   if (row.session.mode_key === "code_review") {
-    return "代码审批";
+    return t("taskpool.mode_code_review");
   }
   if (row.isBackgroundChild) {
-    return "后台子任务";
+    return t("taskpool.mode_background_child");
   }
-  return String(row.session.mode_key || "默认模式");
+  return String(row.session.mode_key || t("mode.default"));
 }
 
 function taskKind(row: TaskRow): string {
-  return row.isBackgroundChild ? "子会话" : "父会话";
+  return row.isBackgroundChild ? t("taskpool.kind_child") : t("taskpool.kind_parent");
 }
 
 function formatDateTime(value: string): string {
@@ -110,14 +111,14 @@ function formatDateTime(value: string): string {
 
 function workerStats(row: TaskRow): string {
   if (!row.workerDispatches.length) {
-    return row.isBackgroundChild ? "暂无子任务记录" : "暂无派发记录";
+    return row.isBackgroundChild ? t("taskpool.no_subtask_records") : t("taskpool.no_dispatch_records");
   }
   const running = row.workerDispatches.filter((item) =>
     ["running", "waiting_approval"].includes(String(item.status || "").trim()),
   ).length;
   const failed = row.workerDispatches.filter((item) => String(item.status || "").trim() === "failed").length;
   const completed = row.workerDispatches.length - running - failed;
-  return `已完成 ${completed} / 运行中 ${running} / 失败 ${failed}`;
+  return `${t("taskpool.status_completed")} ${completed} / ${t("taskpool.status_running")} ${running} / ${t("taskpool.status_failed")} ${failed}`;
 }
 
 function openReport(row: TaskRow) {
@@ -151,7 +152,7 @@ async function loadTasks() {
       };
     });
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : "加载任务列表失败。";
+    error.value = loadError instanceof Error ? loadError.message : t("taskpool.load_failed");
   } finally {
     loading.value = false;
   }
@@ -166,25 +167,25 @@ onMounted(() => {
   <section class="view-page task-page">
     <header class="page-head">
       <div class="head-content">
-        <h2>任务池</h2>
+        <h2>{{ t("taskpool.title") }}</h2>
         <p class="head-desc">
-          展示当前工作区的真实后台会话与代码审批任务。
+          {{ t("taskpool.page_desc") }}
         </p>
       </div>
       <div class="head-actions">
         <div class="search-box">
           <i class="fa-solid fa-search"></i>
-          <input v-model="search" type="text" placeholder="按会话 ID、标题、模式搜索..." />
+          <input v-model="search" type="text" :placeholder="t('taskpool.search_placeholder')" />
         </div>
         <button class="primary-btn" :disabled="loading" @click="loadTasks">
           <i class="fa-solid fa-rotate-right"></i>
-          刷新
+          {{ t("taskpool.refresh") }}
         </button>
       </div>
     </header>
 
     <div v-if="error" class="empty-state error-state">
-      <strong>任务池加载失败。</strong>
+      <strong>{{ t("taskpool.load_error_title") }}</strong>
       <p>{{ error }}</p>
     </div>
 
@@ -203,32 +204,32 @@ onMounted(() => {
         </div>
 
         <div class="task-filters">
-          <span class="filter-pill">最近 {{ rows.length }} 条会话</span>
-          <span class="filter-pill">模式：code_review + background_task</span>
+          <span class="filter-pill">{{ t("taskpool.recent_sessions", { count: String(rows.length) }) }}</span>
+          <span class="filter-pill">{{ t("taskpool.filter_modes") }}</span>
         </div>
       </div>
 
       <div v-if="loading && !rows.length" class="empty-state table-empty">
-        <strong>正在加载任务会话...</strong>
-        <p>工作台正在同步最近的任务数据。</p>
+        <strong>{{ t("taskpool.loading_sessions") }}</strong>
+        <p>{{ t("taskpool.loading_sessions_desc") }}</p>
       </div>
 
       <div v-else-if="!filteredRows.length" class="empty-state table-empty">
-        <strong>没有匹配的任务。</strong>
-        <p>请尝试其他筛选条件，或先发起一次代码审批任务。</p>
+        <strong>{{ t("taskpool.no_match") }}</strong>
+        <p>{{ t("taskpool.no_match_desc") }}</p>
       </div>
 
       <div v-else class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <th class="col-id">会话</th>
-              <th class="col-name">标题</th>
-              <th class="col-type">任务类型</th>
-              <th class="col-model">Agent / 模式</th>
-              <th class="col-status">状态</th>
-              <th class="col-stats">执行统计</th>
-              <th class="col-actions align-right">操作</th>
+              <th class="col-id">{{ t("taskpool.col_session") }}</th>
+              <th class="col-name">{{ t("taskpool.col_title") }}</th>
+              <th class="col-type">{{ t("taskpool.col_type") }}</th>
+              <th class="col-model">{{ t("taskpool.col_agent_mode") }}</th>
+              <th class="col-status">{{ t("taskpool.col_status") }}</th>
+              <th class="col-stats">{{ t("taskpool.col_stats") }}</th>
+              <th class="col-actions align-right">{{ t("taskpool.col_actions") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -242,7 +243,7 @@ onMounted(() => {
             >
               <td class="col-id mono strong">
                 {{ row.session.id.slice(0, 8) }}
-                <div v-if="row.parentSessionId" class="sub-meta">父会话={{ row.parentSessionId.slice(0, 8) }}</div>
+                <div v-if="row.parentSessionId" class="sub-meta">{{ t("taskpool.parent_session") }}={{ row.parentSessionId.slice(0, 8) }}</div>
               </td>
               <td class="col-name">
                 <div class="strong">{{ row.session.title }}</div>
@@ -268,10 +269,10 @@ onMounted(() => {
               </td>
               <td class="col-stats">
                 <div>{{ workerStats(row) }}</div>
-                <div class="sub-meta">{{ row.workerDispatches.length }} 条派发记录</div>
+                <div class="sub-meta">{{ row.workerDispatches.length }} {{ t("taskpool.dispatch_records") }}</div>
               </td>
               <td class="col-actions align-right">
-                <button class="action-btn" title="打开报告页" @click="openReport(row)">
+                <button class="action-btn" :title="t('taskpool.open_report')" @click="openReport(row)">
                   <i class="fa-solid fa-arrow-up-right-from-square"></i>
                 </button>
               </td>

@@ -298,4 +298,4 @@ app.include_router(oauth_router, prefix=settings.api_v1_prefix)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("src.main:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("src.main:app", host="127.0.0.1", port=1032, reload=False)

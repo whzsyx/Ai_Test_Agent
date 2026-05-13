@@ -10,7 +10,7 @@ export type ToolsPluginKey = "skills" | "apidocs" | "scanners" | "registry" | "p
 
 export interface ToolsPluginDefinition {
   key: ToolsPluginKey;
-  label: string;
+  labelKey: string;
   icon: string;
   iconType: string;
   component: Component;
@@ -19,35 +19,35 @@ export interface ToolsPluginDefinition {
 export const toolsPlugins: ToolsPluginDefinition[] = [
   {
     key: "skills",
-    label: "增强技能 (Skills)",
+    labelKey: "tools.skills",
     icon: "fa-book-journal-whills",
     iconType: "solid",
     component: markRaw(SkillsPlugin),
   },
   {
     key: "apidocs",
-    label: "API 接口文档",
+    labelKey: "tools.apidocs",
     icon: "fa-file-code",
     iconType: "solid",
     component: markRaw(ApiDocsPlugin),
   },
   {
     key: "scanners",
-    label: "安全扫描引擎",
+    labelKey: "tools.scanners",
     icon: "fa-shield-halved",
     iconType: "solid",
     component: markRaw(ScannersPlugin),
   },
   {
     key: "registry",
-    label: "后端注册服务",
+    labelKey: "tools.registry",
     icon: "fa-server",
     iconType: "solid",
     component: markRaw(RegistryPlugin),
   },
   {
     key: "plugins",
-    label: "插件导入",
+    labelKey: "tools.plugins",
     icon: "fa-puzzle-piece",
     iconType: "solid",
     component: markRaw(PluginsPlugin),

@@ -1,5 +1,8 @@
 import { defineStore } from "pinia";
 
+import { api } from "../services/api";
+import { setLocale } from "../services/i18n";
+
 export type SystemLanguage = string;
 export type ModelOutputLanguage = string;
 export type AppFontFamily = "system" | "sans" | "chinese" | "serif" | "mono";
@@ -20,6 +23,8 @@ export interface GeneralSettingsSnapshot {
 
 interface GeneralSettingsState extends GeneralSettingsSnapshot {
   notificationPermissionStatus: DesktopNotificationPermission;
+  backendAvailable: boolean;
+  syncError: string;
 }
 
 const STORAGE_KEY = "enterprise-ai-qa-agent-general-settings";
@@ -99,18 +104,20 @@ function normalizeSettings(value: unknown): GeneralSettingsSnapshot {
   };
 }
 
-function persistSettings(settings: GeneralSettingsSnapshot) {
-  if (typeof window === "undefined") {
-    return;
-  }
+function persistToLocalStorage(settings: GeneralSettingsSnapshot) {
+  if (typeof window === "undefined") return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }
 
-function applySettingsToDocument(settings: GeneralSettingsSnapshot) {
-  if (typeof document === "undefined") {
-    return;
-  }
+function readFromLocalStorage(): GeneralSettingsSnapshot | null {
+  if (typeof window === "undefined") return null;
+  const saved = window.localStorage.getItem(STORAGE_KEY);
+  if (!saved) return null;
+  try { return normalizeSettings(JSON.parse(saved)); } catch { return null; }
+}
 
+function applySettingsToDocument(settings: GeneralSettingsSnapshot) {
+  if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.lang = settings.language;
   root.dataset.appLanguage = settings.language;
@@ -119,12 +126,16 @@ function applySettingsToDocument(settings: GeneralSettingsSnapshot) {
   root.dataset.reduceMotion = settings.reduceMotion ? "true" : "false";
   root.style.setProperty("--app-font-family", fontFamilyMap[settings.fontFamily]);
   root.style.setProperty("--app-font-size-scale", fontSizeScaleMap[settings.fontSize]);
+  // Sync i18n locale.
+  setLocale(settings.language);
 }
 
 export const useGeneralSettingsStore = defineStore("generalSettings", {
   state: (): GeneralSettingsState => ({
     ...defaultSettings,
     notificationPermissionStatus: readDesktopPermission(),
+    backendAvailable: false,
+    syncError: "",
   }),
   getters: {
     hasDesktopNotificationSupport(state): boolean {
@@ -136,56 +147,81 @@ export const useGeneralSettingsStore = defineStore("generalSettings", {
     settingsSnapshot(state): GeneralSettingsSnapshot {
       return normalizeSettings(state);
     },
+    lastSavedAt(state): string {
+      return state.lastSavedAt;
+    },
   },
   actions: {
-    hydrateGeneralSettings() {
-      let nextSettings = { ...defaultSettings };
-
-      if (typeof window !== "undefined") {
-        const savedSettings = window.localStorage.getItem(STORAGE_KEY);
-        if (savedSettings) {
-          try {
-            nextSettings = normalizeSettings(JSON.parse(savedSettings));
-          } catch {
-            nextSettings = { ...defaultSettings };
-          }
+    async hydrateGeneralSettings() {
+      // Priority: backend > localStorage > defaults.
+      try {
+        const backendData = await api.getGeneralSettings();
+        if (backendData && typeof backendData === "object" && (backendData as Record<string, unknown>).lastSavedAt) {
+          const settings = normalizeSettings(backendData);
+          this.$patch({ ...settings, notificationPermissionStatus: readDesktopPermission(), backendAvailable: true, syncError: "" });
+          persistToLocalStorage(settings);
+          applySettingsToDocument(settings);
+          return;
         }
-      }
+      } catch { /* backend unavailable */ }
 
-      this.$patch({
-        ...nextSettings,
-        notificationPermissionStatus: readDesktopPermission(),
-      });
+      const localSettings = readFromLocalStorage();
+      const nextSettings = localSettings || { ...defaultSettings };
+      this.$patch({ ...nextSettings, notificationPermissionStatus: readDesktopPermission(), backendAvailable: false, syncError: "" });
       applySettingsToDocument(nextSettings);
+
+      if (localSettings && localSettings.lastSavedAt) {
+        this._tryMigrateToBackend(localSettings);
+      }
     },
-    saveGeneralSettings(patch: Partial<GeneralSettingsSnapshot>) {
+
+    async saveGeneralSettings(patch: Partial<GeneralSettingsSnapshot>) {
       const nextSettings = normalizeSettings({
         ...this.settingsSnapshot,
         ...patch,
         lastSavedAt: new Date().toISOString(),
       });
       this.$patch(nextSettings);
-      persistSettings(nextSettings);
       applySettingsToDocument(nextSettings);
+      persistToLocalStorage(nextSettings);
+
+      try {
+        await api.saveGeneralSettings(nextSettings as unknown as Record<string, unknown>);
+        this.backendAvailable = true;
+        this.syncError = "";
+      } catch (error) {
+        this.backendAvailable = false;
+        this.syncError = error instanceof Error ? error.message : "保存到后端失败，已保存到本地。";
+      }
     },
-    resetGeneralSettings() {
-      const nextSettings = normalizeSettings({
-        ...defaultSettings,
-        lastSavedAt: new Date().toISOString(),
-      });
+
+    async resetGeneralSettings() {
+      const nextSettings = normalizeSettings({ ...defaultSettings, lastSavedAt: new Date().toISOString() });
       this.$patch(nextSettings);
-      persistSettings(nextSettings);
       applySettingsToDocument(nextSettings);
+      persistToLocalStorage(nextSettings);
+      try {
+        await api.saveGeneralSettings(nextSettings as unknown as Record<string, unknown>);
+        this.backendAvailable = true;
+        this.syncError = "";
+      } catch { this.backendAvailable = false; }
     },
+
     async requestNotificationPermission(): Promise<DesktopNotificationPermission> {
       if (typeof window === "undefined" || !("Notification" in window)) {
         this.notificationPermissionStatus = "unsupported";
         return "unsupported";
       }
-
       const permission = await window.Notification.requestPermission();
       this.notificationPermissionStatus = permission;
       return permission;
+    },
+
+    async _tryMigrateToBackend(settings: GeneralSettingsSnapshot) {
+      try {
+        await api.saveGeneralSettings(settings as unknown as Record<string, unknown>);
+        this.backendAvailable = true;
+      } catch { /* silent */ }
     },
   },
 });

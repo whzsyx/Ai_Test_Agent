@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMessage, NSelect } from "naive-ui";
 
 import { api } from "../../../services/api";
+import { t } from "../../../services/i18n";
 import type {
   ApiDocRecord,
   IntegrationImportSourceDescriptor,
@@ -74,21 +75,21 @@ const integrationImportHint = computed(() => {
     return "";
   }
   if (integrationImportLoading.value) {
-    return "正在加载可导入的工作区和接口文档...";
+    return t("apiDocs.hint_loading_sources");
   }
   if (!integrationImportCatalog.value) {
     return "";
   }
   if (integrationImportCatalog.value.supports_workspace_selection && !workspaceOptions.value.length) {
-    return "这个 MCP 接入已启用工作区导入模式，但还没有配置任何可用工作区。";
+    return t("apiDocs.hint_no_workspaces");
   }
   if (integrationImportCatalog.value.supports_workspace_selection && workspaceOptions.value.length && !selectedWorkspaceId.value) {
-    return "请先选择工作区，再选择该工作区下的接口文档。";
+    return t("apiDocs.hint_select_workspace");
   }
   if (!filteredImportSources.value.length) {
     return selectedIntegration.value.kind === "mcp"
-      ? "当前接入还没有可导入的接口文档源。"
-      : "当前接入没有可导入的文档地址，请补充默认文档地址或导入源配置。";
+      ? t("apiDocs.hint_no_mcp_sources")
+      : t("apiDocs.hint_no_api_sources");
   }
   return "";
 });
@@ -201,7 +202,7 @@ function fileToBase64(file: File): Promise<string> {
       const result = String(reader.result || "");
       resolve(result.includes(",") ? result.split(",")[1] : result);
     };
-    reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+    reader.onerror = () => reject(reader.error || new Error(t("apiDocs.read_file_failed")));
     reader.readAsDataURL(file);
   });
 }
@@ -212,7 +213,7 @@ async function loadDocs() {
   try {
     docs.value = await api.listApiDocs();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "加载 API 文档失败";
+    error.value = err instanceof Error ? err.message : t("apiDocs.load_docs_failed");
   } finally {
     loading.value = false;
   }
@@ -252,7 +253,7 @@ async function loadIntegrationImportCatalog(integrationId: string, workspaceId?:
     }
   } catch (err) {
     integrationImportCatalog.value = null;
-    toast.error(err instanceof Error ? err.message : "加载接入导入源失败");
+    toast.error(err instanceof Error ? err.message : t("apiDocs.load_import_sources_failed"));
   } finally {
     integrationImportLoading.value = false;
   }
@@ -264,7 +265,7 @@ async function submitUpload() {
     let created: ApiDocRecord;
     if (uploadMode.value === "local") {
       if (!uploadFile.value) {
-        toast.error("请选择要导入的本地 API 文档文件");
+        toast.error(t("apiDocs.select_local_file"));
         return;
       }
       const contentBase64 = await fileToBase64(uploadFile.value);
@@ -278,7 +279,7 @@ async function submitUpload() {
       });
     } else if (uploadMode.value === "url") {
       if (!remoteUrl.value.trim()) {
-        toast.error("请填写要导入的文档 URL");
+        toast.error(t("apiDocs.enter_doc_url"));
         return;
       }
       created = await api.importApiDocFromUrl({
@@ -290,11 +291,11 @@ async function submitUpload() {
       });
     } else {
       if (!selectedIntegrationId.value) {
-        toast.error("请选择一个第三方接入源");
+        toast.error(t("apiDocs.select_integration"));
         return;
       }
       if (!canSubmitIntegrationImport.value) {
-        toast.error(integrationImportHint.value || "当前接入还没有准备好可导入的接口文档源");
+        toast.error(integrationImportHint.value || t("apiDocs.integration_not_ready"));
         return;
       }
       created = await api.importApiDocFromIntegration({
@@ -311,10 +312,10 @@ async function submitUpload() {
 
     upsertDoc(created);
     await loadDocs();
-    toast.success("API 文档已导入并加入文档管理", { duration: 2200 });
+    toast.success(t("apiDocs.imported_success"), { duration: 2200 });
     setTimeout(() => closeUpload(), 280);
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "导入 API 文档失败");
+    toast.error(err instanceof Error ? err.message : t("apiDocs.import_failed"));
   } finally {
     uploadLoading.value = false;
   }
@@ -328,7 +329,7 @@ async function openPreview(docId: string) {
     selectedDoc.value = await api.getApiDoc(docId);
     syncPreviewForm(selectedDoc.value);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : "加载文档详情失败";
+    const detail = err instanceof Error ? err.message : t("apiDocs.load_detail_failed");
     error.value = detail;
     selectedDoc.value = null;
     resetPreviewForm();
@@ -354,9 +355,9 @@ async function saveDocMetadata() {
     selectedDoc.value = updated;
     syncPreviewForm(updated);
     upsertDoc(updated);
-    toast.success("API 文档信息已更新", { duration: 2200 });
+    toast.success(t("apiDocs.doc_updated"), { duration: 2200 });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : "更新 API 文档失败";
+    const detail = err instanceof Error ? err.message : t("apiDocs.update_failed");
     error.value = detail;
     toast.error(detail);
   } finally {
@@ -377,9 +378,9 @@ async function deleteDoc(doc: ApiDocRecord) {
     if (selectedDoc.value?.id === doc.id) {
       closePreview();
     }
-    toast.success(`已删除文档：${doc.title}`, { duration: 2200 });
+    toast.success(`${t("apiDocs.deleted_doc")}: ${doc.title}`, { duration: 2200 });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : "删除文档失败";
+    const detail = err instanceof Error ? err.message : t("apiDocs.delete_failed");
     error.value = detail;
     toast.error(detail);
   } finally {
@@ -438,28 +439,28 @@ onBeforeUnmount(() => {
   <div class="tools-tab-pane">
     <div class="pane-header">
       <div>
-        <h3 class="section-title">API 接口文档</h3>
+        <h3 class="section-title">{{ t("apiDocs.title") }}</h3>
         <p class="head-desc">
-          统一管理 OpenAPI、Swagger、Postman 和 Markdown 文档；结构化接口文档导入后会转成 Markdown 保存，便于预览、检索和后续接口测试复用。
+          {{ t("apiDocs.desc") }}
         </p>
       </div>
     </div>
 
     <div v-if="loading && !hasDocs" class="api-doc-empty">
       <i class="fa-solid fa-spinner fa-spin"></i>
-      <span>正在加载 API 文档列表...</span>
+      <span>{{ t("apiDocs.loading") }}</span>
     </div>
 
     <div v-else-if="error && !hasDocs" class="api-doc-empty api-doc-empty--error">
       <i class="fa-solid fa-circle-exclamation"></i>
-      <strong>加载失败</strong>
+      <strong>{{ t("apiDocs.load_failed") }}</strong>
       <span>{{ error }}</span>
     </div>
 
     <div v-else-if="!hasDocs" class="api-doc-empty">
       <i class="fa-solid fa-file-circle-plus"></i>
-      <strong>还没有导入任何 API 文档</strong>
-      <span>支持本地文件、URL 地址，以及第三方接入源导入。</span>
+      <strong>{{ t("apiDocs.no_docs") }}</strong>
+      <span>{{ t("apiDocs.no_docs_hint") }}</span>
     </div>
 
     <div v-else class="api-docs-list">
@@ -469,13 +470,13 @@ onBeforeUnmount(() => {
             <i class="fa-solid" :class="doc.format_label.includes('Postman') ? 'fa-rocket' : 'fa-file-code'"></i>
           </div>
           <div class="api-doc-actions">
-            <button class="icon-btn" title="查看文档详情" @click="openPreview(doc.id)">
+            <button class="icon-btn" title="{{ t('apiDocs.view_detail') }}" @click="openPreview(doc.id)">
               <i class="fa-regular fa-eye"></i>
             </button>
             <button
               class="icon-btn danger"
               :disabled="deletingId === doc.id"
-              title="删除文档"
+              :title="t('apiDocs.delete_doc')"
               @click="deleteDoc(doc)"
             >
               <i class="fa-solid" :class="deletingId === doc.id ? 'fa-spinner fa-spin' : 'fa-trash-can'"></i>
@@ -495,19 +496,19 @@ onBeforeUnmount(() => {
           <div class="api-doc-meta">
             <div class="meta-item">
               <i class="fa-solid fa-diagram-project"></i>
-              <span>{{ doc.project_name || "未设置所属项目" }}</span>
+              <span>{{ doc.project_name || t("apiDocs.no_project") }}</span>
             </div>
             <div class="meta-item">
               <i class="fa-solid fa-globe"></i>
-              <span>{{ doc.project_url || "未设置项目 URL" }}</span>
+              <span>{{ doc.project_url || t("apiDocs.no_project_url") }}</span>
             </div>
             <div class="meta-item">
               <i class="fa-solid fa-database"></i>
-              <span>MinIO 存储 · {{ formatBytes(doc.size_bytes) }}</span>
+              <span>MinIO · {{ formatBytes(doc.size_bytes) }}</span>
             </div>
             <div class="meta-item" v-if="doc.endpoint_count !== null && doc.endpoint_count !== undefined">
               <i class="fa-solid fa-link"></i>
-              <span>{{ doc.endpoint_count }} 个接口</span>
+              <span>{{ doc.endpoint_count }} {{ t("apiDocs.endpoints_unit") }}</span>
             </div>
             <div class="meta-item">
               <i class="fa-regular fa-clock"></i>
@@ -522,12 +523,12 @@ onBeforeUnmount(() => {
       <section class="tools-modal api-doc-preview-modal">
         <header class="tools-modal-head">
           <div>
-            <h3>{{ selectedDoc?.title || "文档内容预览" }}</h3>
+            <h3>{{ selectedDoc?.title || t("apiDocs.preview_title") }}</h3>
             <p v-if="selectedDoc">{{ selectedDoc.filename }} · {{ selectedDoc.format_label }}</p>
           </div>
           <div class="tools-modal-head-actions">
             <button v-if="selectedDoc" class="primary-btn head-save-btn" :disabled="savingMetadata" @click="saveDocMetadata">
-              {{ savingMetadata ? "保存中..." : "保存文档信息" }}
+              {{ savingMetadata ? t("apiDocs.saving") : t("apiDocs.save_doc_info") }}
             </button>
             <button class="icon-btn" @click="closePreview"><i class="fa-solid fa-xmark"></i></button>
           </div>
@@ -536,53 +537,53 @@ onBeforeUnmount(() => {
         <div class="tools-modal-body">
           <div v-if="previewLoading" class="api-doc-empty">
             <i class="fa-solid fa-spinner fa-spin"></i>
-            <span>正在加载文档详情...</span>
+            <span>{{ t("apiDocs.loading_detail") }}</span>
           </div>
           <template v-else-if="selectedDoc">
             <div class="preview-form-grid">
               <label class="field-block">
-                <span>文档标题</span>
-                <input v-model="editTitle" placeholder="例如：用户中心 OpenAPI v2">
+                <span>{{ t("apiDocs.form_title") }}</span>
+                <input v-model="editTitle" placeholder="e.g. User Center OpenAPI v2">
               </label>
               <label class="field-block">
-                <span>所属项目</span>
+                <span>{{ t("apiDocs.form_project") }}</span>
                 <n-select
                   v-model:value="editProjectName"
                   filterable
                   tag
                   :options="projectNameOptions"
-                  placeholder="例如：mall-order-service"
+                  placeholder="e.g. mall-order-service"
                   class="custom-select"
                 />
                 <small v-if="projectNameSuggestions.length" class="field-hint">
-                  可直接输入新项目名，也可复用已有项目：{{ projectNameSuggestions.join(" / ") }}
+                  {{ t("apiDocs.hint_project_reuse", { list: projectNameSuggestions.join(" / ") }) }}
                 </small>
               </label>
               <label class="field-block">
-                <span>项目 URL / Base URL</span>
-                <input v-model="editProjectUrl" placeholder="例如：https://api.example.com 或 http://127.0.0.1:8003">
+                <span>{{ t("apiDocs.form_project_url") }}</span>
+                <input v-model="editProjectUrl" placeholder="e.g. https://api.example.com">
                 <small class="field-hint">
-                  保存后会写入 Markdown，模型检索接口时可拼出完整调用地址。
+                  {{ t("apiDocs.hint_project_url") }}
                 </small>
               </label>
             </div>
 
             <div class="preview-meta-grid">
-              <div><strong>所属项目：</strong>{{ selectedDoc.project_name || "未设置" }}</div>
-              <div><strong>项目 URL：</strong>{{ selectedDoc.project_url || "未设置" }}</div>
-              <div><strong>内容类型：</strong>{{ selectedDoc.content_type }}</div>
-              <div><strong>上传来源：</strong>{{ selectedDoc.source }}</div>
-              <div><strong>更新时间：</strong>{{ formatServerDateTime(selectedDoc.updated_at) }}</div>
+              <div><strong>{{ t("apiDocs.meta_project") }}</strong>{{ selectedDoc.project_name || t("apiDocs.not_set") }}</div>
+              <div><strong>{{ t("apiDocs.meta_project_url") }}</strong>{{ selectedDoc.project_url || t("apiDocs.not_set") }}</div>
+              <div><strong>{{ t("apiDocs.meta_content_type") }}</strong>{{ selectedDoc.content_type }}</div>
+              <div><strong>{{ t("apiDocs.meta_source") }}</strong>{{ selectedDoc.source }}</div>
+              <div><strong>{{ t("apiDocs.meta_updated_at") }}</strong>{{ formatServerDateTime(selectedDoc.updated_at) }}</div>
               <div><strong>MinIO URI：</strong>{{ selectedDoc.storage_uri }}</div>
             </div>
 
             <div v-if="selectedDoc.preview_error" class="preview-inline-error">{{ selectedDoc.preview_error }}</div>
             <div v-else class="preview-code-shell">
               <div class="preview-toolbar">
-                <span>文件内容</span>
-                <span v-if="selectedDoc.preview_truncated">已截断显示前 20000 个字符</span>
+                <span>{{ t("apiDocs.file_content") }}</span>
+                <span v-if="selectedDoc.preview_truncated">{{ t("apiDocs.preview_truncated") }}</span>
               </div>
-              <pre class="preview-code"><code>{{ selectedDoc.preview_text || "该文档暂时没有可预览内容。" }}</code></pre>
+              <pre class="preview-code"><code>{{ selectedDoc.preview_text || t("apiDocs.no_preview_content") }}</code></pre>
             </div>
           </template>
         </div>
@@ -593,72 +594,72 @@ onBeforeUnmount(() => {
       <section class="tools-modal upload-modal">
         <header class="tools-modal-head">
           <div>
-            <h3>导入 API 文档</h3>
-            <p>支持本地文件导入、URL 地址导入，以及通过第三方接入源导入文档。</p>
+            <h3>{{ t("apiDocs.import_title") }}</h3>
+            <p>{{ t("apiDocs.import_desc") }}</p>
           </div>
           <button class="icon-btn" @click="closeUpload"><i class="fa-solid fa-xmark"></i></button>
         </header>
 
         <div class="tools-modal-body">
           <div class="import-mode-tabs">
-            <button :class="{ active: uploadMode === 'local' }" @click="uploadMode = 'local'">本地文件导入</button>
-            <button :class="{ active: uploadMode === 'url' }" @click="uploadMode = 'url'">URL 地址导入</button>
-            <button :class="{ active: uploadMode === 'integration' }" @click="uploadMode = 'integration'">第三方平台接入</button>
+            <button :class="{ active: uploadMode === 'local' }" @click="uploadMode = 'local'">{{ t("apiDocs.mode_local") }}</button>
+            <button :class="{ active: uploadMode === 'url' }" @click="uploadMode = 'url'">{{ t("apiDocs.mode_url") }}</button>
+            <button :class="{ active: uploadMode === 'integration' }" @click="uploadMode = 'integration'">{{ t("apiDocs.mode_integration") }}</button>
           </div>
 
           <template v-if="uploadMode === 'local'">
             <label class="upload-drop">
               <i class="fa-solid fa-file-arrow-up"></i>
-              <strong>{{ uploadFile?.name || "选择要导入的本地文档文件" }}</strong>
-              <span>推荐上传 OpenAPI JSON/YAML、Postman Collection、HAR 或 Markdown，导入后统一保存为 Markdown</span>
+              <strong>{{ uploadFile?.name || t("apiDocs.select_local_file") }}</strong>
+              <span>{{ t("apiDocs.upload_format_hint") }}</span>
               <input type="file" accept=".json,.yaml,.yml,.har,.txt,.md,.log,.pdf" @change="onUploadFileChange">
             </label>
           </template>
 
           <template v-else-if="uploadMode === 'url'">
             <label class="field-block modal-field">
-              <span>文档 URL</span>
-              <input v-model="remoteUrl" placeholder="例如：http://127.0.0.1:8003/docs 或 https://example.com/openapi.json">
-              <small class="field-hint">支持 OpenAPI JSON/YAML、Swagger UI /docs、Postman JSON；后端会自动定位接口源并转换成 Markdown 保存。</small>
+              <span>{{ t("apiDocs.form_doc_url") }}</span>
+              <input v-model="remoteUrl" placeholder="e.g. http://127.0.0.1:8003/docs">
+              <small class="field-hint">{{ t("apiDocs.hint_url_format") }}</small>
             </label>
           </template>
 
           <template v-else>
             <label class="field-block modal-field">
-              <span>选择接入源</span>
+              <span>{{ t("apiDocs.select_source") }}</span>
               <select v-model="selectedIntegrationId">
-                <option value="">请选择接入源</option>
+                <option value="">{{ t("apiDocs.ph_select_source") }}</option>
                 <option v-for="integration in importableIntegrations" :key="integration.id" :value="integration.id">
                   {{ integration.name }} · {{ integration.kind.toUpperCase() }}
                 </option>
               </select>
-              <small class="field-hint">这里会展示“插件导入”页中已启用的 MCP / API 接入。</small>
+              <small class="field-hint">{{ t("apiDocs.hint_source") }}</small>
             </label>
 
             <div v-if="selectedIntegration" class="integration-brief">
-              <div><strong>类型：</strong>{{ selectedIntegration.kind.toUpperCase() }}</div>
-              <div><strong>默认项目：</strong>{{ selectedIntegration.project_name || "未设置" }}</div>
+              <div><strong>{{ t("apiDocs.meta_type") }}</strong>{{ selectedIntegration.kind.toUpperCase() }}</div>
+              <div><strong>{{ t("apiDocs.meta_default_project") }}</strong>{{ selectedIntegration.project_name || t("apiDocs.not_set") }}</div>
               <div>
-                <strong>{{ selectedIntegrationIsMcp ? "MCP 服务地址" : "默认文档地址" }}：</strong>
-                {{ selectedIntegrationIsMcp ? (selectedIntegration.endpoint_url || "未设置") : (selectedIntegration.document_url || "未设置") }}
+                <strong>{{ selectedIntegrationIsMcp ? t("apiDocs.meta_mcp_endpoint") : t("apiDocs.meta_default_doc_url") }}：</strong>
+                {{ selectedIntegrationIsMcp ? (selectedIntegration.endpoint_url || t("apiDocs.not_set")) : (selectedIntegration.document_url || t("apiDocs.not_set")) }}
               </div>
             </div>
 
             <label v-if="workspaceOptions.length" class="field-block modal-field">
-              <span>选择工作区</span>
+              <span>{{ t("apiDocs.select_workspace") }}</span>
               <select v-model="selectedWorkspaceId" :disabled="integrationImportLoading">
-                <option value="">请选择工作区</option>
+                <option value="">{{ t("apiDocs.ph_select_workspace") }}</option>
                 <option v-for="workspace in workspaceOptions" :key="workspace.id" :value="workspace.id">
-                  {{ workspace.name }} · {{ workspace.document_count }} 份文档
+                  {{ workspace.name }} · {{ workspace.document_count }} {{ t("apiDocs.docs_unit") }}
                 </option>
               </select>
-              <small class="field-hint">MCP 导入会先定位工作区，再从该工作区导入接口文档。</small>
+              <small class="field-hint">{{ t("apiDocs.hint_workspace") }}</small>
             </label>
 
             <label v-if="filteredImportSources.length" class="field-block modal-field">
-              <span>{{ selectedIntegrationIsMcp ? "选择接口文档" : "选择导入源" }}</span>
+              <span>{{ selectedIntegrationIsMcp ? t("apiDocs.select_api_doc") : t("apiDocs.select_import_source") }}</span>
               <select v-model="selectedImportSourceId" :disabled="integrationImportLoading">
-                <option value="">请选择</option>
+                <option value="">{{ t("apiDocs.ph_select") }}</option>
                 <option v-for="source in filteredImportSources" :key="source.id" :value="source.id">
                   {{ source.label }}<template v-if="source.project_name"> · {{ source.project_name }}</template>
                 </option>
@@ -667,8 +668,8 @@ onBeforeUnmount(() => {
             </label>
 
             <label v-if="!selectedIntegrationIsMcp" class="field-block modal-field">
-              <span>文档地址覆盖（可选）</span>
-              <input v-model="integrationDocumentUrl" placeholder="留空则使用接入源默认文档地址">
+              <span>{{ t("apiDocs.doc_url_override") }}</span>
+              <input v-model="integrationDocumentUrl" :placeholder="t('apiDocs.ph_doc_url_override')">
             </label>
 
             <div v-if="integrationImportHint" class="integration-inline-hint">
@@ -678,39 +679,39 @@ onBeforeUnmount(() => {
 
           <div class="upload-form-grid">
             <label class="field-block modal-field">
-              <span>文档标题（可选）</span>
-              <input v-model="uploadTitle" placeholder="例如：用户中心 OpenAPI v2">
+              <span>{{ t("apiDocs.form_title_optional") }}</span>
+              <input v-model="uploadTitle" placeholder="e.g. User Center OpenAPI v2">
             </label>
 
             <label class="field-block modal-field">
-              <span>所属项目（建议填写）</span>
+              <span>{{ t("apiDocs.form_project_recommended") }}</span>
               <n-select
                 v-model:value="uploadProjectName"
                 filterable
                 tag
                 :options="projectNameOptions"
-                placeholder="例如：mall-order-service"
+                placeholder="e.g. mall-order-service"
                 class="custom-select"
                 :to="false"
               />
               <small class="field-hint">
-                可直接输入新项目名，也可从已有项目中复用
+                {{ t("apiDocs.hint_project_reuse_short") }}
               </small>
             </label>
 
             <label class="field-block modal-field">
-              <span>项目 URL / Base URL（建议填写）</span>
-              <input v-model="uploadProjectUrl" placeholder="例如：https://api.example.com 或 http://127.0.0.1:8003">
+              <span>{{ t("apiDocs.form_project_url_recommended") }}</span>
+              <input v-model="uploadProjectUrl" placeholder="e.g. https://api.example.com">
               <small class="field-hint">
-                用于写入 Markdown，帮助模型把接口路径拼成真实调用地址。
+                {{ t("apiDocs.hint_upload_project_url") }}
               </small>
             </label>
           </div>
 
           <div class="modal-actions">
-            <button class="secondary-btn" @click="closeUpload">取消</button>
+            <button class="secondary-btn" @click="closeUpload">{{ t("common.cancel") }}</button>
             <button class="primary-btn" :disabled="uploadLoading || !canSubmitIntegrationImport" @click="submitUpload">
-              {{ uploadLoading ? "导入中..." : "开始导入" }}
+              {{ uploadLoading ? t("apiDocs.importing") : t("apiDocs.start_import") }}
             </button>
           </div>
         </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { t } from "../../services/i18n";
 import { useSessionStore } from "../../stores/session";
 
 const sessionStore = useSessionStore();
@@ -13,17 +14,17 @@ const sessionStatus = computed(() => sessionStore.watcherPhase ?? sessionStore.s
 const phaseLabel = computed(() => {
   switch (sessionStore.watcherPhase) {
     case "running":
-      return "运行中";
+      return t("runtime.running");
     case "waiting_approval":
-      return "待审批";
+      return t("runtime.waiting_approval");
     case "interrupted":
-      return "已中断";
+      return t("runtime.interrupted");
     case "failed":
-      return "阻塞中";
+      return t("runtime.blocked");
     case "completed":
-      return "已完成";
+      return t("runtime.completed");
     default:
-      return "空闲";
+      return t("runtime.idle");
   }
 });
 
@@ -61,10 +62,10 @@ const compactMeta = computed(() => {
 });
 
 const statRows = computed(() => [
-  { label: "状态", value: sessionStatusLabel(sessionStatus.value) },
-  { label: "同步", value: sessionStore.watcherLastSyncLabel || "--:--:--" },
-  { label: "审批", value: String(pendingApprovalCount.value) },
-  { label: "子任务", value: String(workerDispatchCount.value) },
+  { label: t("runtime.status"), value: sessionStatusLabel(sessionStatus.value) },
+  { label: t("runtime.sync"), value: sessionStore.watcherLastSyncLabel || "--:--:--" },
+  { label: t("runtime.approvals"), value: String(pendingApprovalCount.value) },
+  { label: t("runtime.subtasks"), value: String(workerDispatchCount.value) },
 ]);
 
 function toneForStatus(status: string) {
@@ -78,17 +79,17 @@ function toneForStatus(status: string) {
 function sessionStatusLabel(status: string) {
   switch (status) {
     case "running":
-      return "运行中";
+      return t("runtime.running");
     case "waiting_approval":
-      return "待审批";
+      return t("runtime.waiting_approval");
     case "interrupted":
-      return "已中断";
+      return t("runtime.interrupted");
     case "completed":
-      return "已完成";
+      return t("runtime.completed");
     case "failed":
-      return "失败";
+      return t("runtime.failed");
     default:
-      return "空闲";
+      return t("runtime.idle");
   }
 }
 </script>

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 
 import { api } from "../services/api";
+import { t } from "../services/i18n";
 import type {
   AgentDescriptor,
   HealthResponse,
@@ -64,12 +65,12 @@ export const useAppStore = defineStore("app", {
         backendOnline
           ? buildCheck(
               "backend",
-              "后端服务",
+              t("status.backend"),
               "online",
-              `后端服务运行正常，环境 ${state.health?.environment ?? "unknown"}`,
+              t("status.backend_online", { env: state.health?.environment ?? "unknown" }),
               state.health?.name ?? "API",
             )
-          : buildCheck("backend", "后端服务", "offline", "健康检查接口未响应，后端尚未启动或代理未连通"),
+          : buildCheck("backend", t("status.backend"), "offline", t("status.backend_offline")),
       );
 
       checks.push(
@@ -77,13 +78,13 @@ export const useAppStore = defineStore("app", {
           ? state.agents.length > 0
             ? buildCheck(
                 "agents",
-                "Agent 注册",
+                t("status.agents"),
                 "online",
-                `已注册 ${state.agents.length} 个 Agent`,
+                t("status.agents_online", { count: state.agents.length }),
                 `${state.agents.length} agents`,
               )
-            : buildCheck("agents", "Agent 注册", "degraded", "后端已连接，但当前没有可用 Agent")
-          : buildCheck("agents", "Agent 注册", "offline", "无法读取 Agent 注册表"),
+            : buildCheck("agents", t("status.agents"), "degraded", t("status.agents_degraded"))
+          : buildCheck("agents", t("status.agents"), "offline", t("status.agents_offline")),
       );
 
       checks.push(
@@ -91,28 +92,28 @@ export const useAppStore = defineStore("app", {
           ? state.tools.length > 0
             ? buildCheck(
                 "tools",
-                "工具注册",
+                t("status.tools"),
                 "online",
-                `已注册 ${state.tools.length} 个工具`,
+                t("status.tools_online", { count: state.tools.length }),
                 `${state.tools.length} tools`,
               )
-            : buildCheck("tools", "工具注册", "degraded", "后端已连接，但当前没有可用工具")
-          : buildCheck("tools", "工具注册", "offline", "无法读取工具注册表"),
+            : buildCheck("tools", t("status.tools"), "degraded", t("status.tools_degraded"))
+          : buildCheck("tools", t("status.tools"), "offline", t("status.tools_offline")),
       );
 
       if (!backendOnline) {
-        checks.push(buildCheck("knowledge", "知识库连接", "offline", "后端未在线，暂时无法确认知识库状态"));
+        checks.push(buildCheck("knowledge", t("status.knowledge"), "offline", t("status.knowledge_offline_backend")));
       } else if (!knowledgeEnabled) {
         checks.push(
-          buildCheck("knowledge", "知识库连接", "offline", "知识库已被显式关闭，当前不会建立远端连接", "disabled"),
+          buildCheck("knowledge", t("status.knowledge"), "offline", t("status.knowledge_disabled"), "disabled"),
         );
       } else if (isOnlineMemoryBackend(memoryBackend)) {
         checks.push(
           buildCheck(
             "knowledge",
-            "知识库连接",
+            t("status.knowledge"),
             "online",
-            `知识库已连接，记忆后端 ${memoryBackend}，图谱后端 ${uiGraphBackend}`,
+            t("status.knowledge_online", { memoryBackend, uiGraphBackend }),
             memoryTarget || knowledgeTarget || `${sessionBackend} / ${toolJobBackend}`,
           ),
         );
@@ -120,9 +121,9 @@ export const useAppStore = defineStore("app", {
         checks.push(
           buildCheck(
             "knowledge",
-            "知识库连接",
+            t("status.knowledge"),
             "offline",
-            `记忆后端 ${memoryBackend} 不可用，请检查 PostgreSQL/向量扩展或后端配置`,
+            t("status.knowledge_unavailable", { memoryBackend }),
             memoryTarget || knowledgeTarget || memoryBackend,
           ),
         );
@@ -130,15 +131,15 @@ export const useAppStore = defineStore("app", {
         checks.push(
           buildCheck(
             "knowledge",
-            "知识库连接",
+            t("status.knowledge"),
             "offline",
-            "未连接到远端知识库，当前仅回退到本地内存缓存，不视为知识库已连接",
+            t("status.knowledge_local_memory"),
             "local_memory",
           ),
         );
       } else {
         checks.push(
-          buildCheck("knowledge", "知识库连接", "offline", "知识库后端状态未知，请检查 memory backend 配置", memoryBackend),
+          buildCheck("knowledge", t("status.knowledge"), "offline", t("status.knowledge_unknown"), memoryBackend),
         );
       }
 
@@ -147,7 +148,12 @@ export const useAppStore = defineStore("app", {
       const hasOffline = checks.some((check) => check.status === "offline");
       const hasDegraded = checks.some((check) => check.status === "degraded");
       const tone: ServiceCheckStatus = hasOffline ? "offline" : hasDegraded ? "degraded" : "online";
-      const label = tone === "online" ? "系统就绪" : tone === "degraded" ? "部分未就绪" : "服务离线";
+      const label =
+        tone === "online"
+          ? t("status.ready")
+          : tone === "degraded"
+            ? t("status.partial")
+            : t("status.offline");
 
       return {
         label,

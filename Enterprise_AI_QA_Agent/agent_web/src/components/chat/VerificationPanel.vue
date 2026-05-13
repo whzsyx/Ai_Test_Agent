@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { t } from "../../services/i18n";
 import { useSessionStore } from "../../stores/session";
 
 const sessionStore = useSessionStore();
@@ -22,13 +23,13 @@ function tone(status: string) {
 function statusLabel(status: string) {
   switch (status) {
     case "passed":
-      return "通过";
+      return t("verification.passed");
     case "failed":
-      return "失败";
+      return t("verification.failed");
     case "partial":
-      return "部分通过";
+      return t("verification.partial");
     case "not_run":
-      return "未执行";
+      return t("verification.not_run");
     default:
       return status;
   }
@@ -39,10 +40,10 @@ function statusLabel(status: string) {
   <section v-if="sessionStore.session" class="observability-panel verification-panel">
     <div class="observability-head">
       <div>
-        <strong>验证结果</strong>
-        <p>这里展示从执行证据中独立派生出的结构化验证结论。</p>
+        <strong>{{ t("verification.title") }}</strong>
+        <p>{{ t("verification.desc") }}</p>
       </div>
-      <span class="registry-tag light">{{ results.length }} 条结果</span>
+      <span class="registry-tag light">{{ results.length }} {{ t("verification.results_unit") }}</span>
     </div>
 
     <div v-if="results.length" class="tool-activity-list">
@@ -56,29 +57,29 @@ function statusLabel(status: string) {
         </div>
         <dl class="tool-activity-grid">
           <div>
-            <dt>状态</dt>
+            <dt>{{ t("verification.status") }}</dt>
             <dd>{{ statusLabel(item.status) }}</dd>
           </div>
           <div>
-            <dt>断言数</dt>
+            <dt>{{ t("verification.assertion_count") }}</dt>
             <dd>{{ item.assertion_count }}</dd>
           </div>
           <div>
-            <dt>通过</dt>
+            <dt>{{ t("verification.passed") }}</dt>
             <dd>{{ item.passed_count }}</dd>
           </div>
           <div>
-            <dt>失败</dt>
+            <dt>{{ t("verification.failed") }}</dt>
             <dd>{{ item.failed_count }}</dd>
           </div>
           <div v-if="item.evidence?.length">
-            <dt>证据</dt>
+            <dt>{{ t("verification.evidence") }}</dt>
             <dd>{{ item.evidence.length }}</dd>
           </div>
         </dl>
       </article>
     </div>
 
-    <div v-else class="settings-empty">当前还没有记录到验证结果。</div>
+    <div v-else class="settings-empty">{{ t("verification.empty") }}</div>
   </section>
 </template>

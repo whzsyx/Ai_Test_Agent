@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { NSelect, type SelectOption } from "naive-ui";
 
 import { api } from "../../../services/api";
+import { t } from "../../../services/i18n";
 import type {
   ModelCapabilities,
   ModelCapabilitiesOverride,
@@ -55,17 +56,17 @@ const oauthSelectedModelId = ref<string | null>(null);
 const oauthCustomBaseUrl = ref("");
 
 const capabilityOptions: CapabilityOption[] = [
-  { key: "tool_calling", label: "工具调用", hint: "允许模型发起工具调用" },
-  { key: "vision", label: "视觉识别", hint: "支持图片理解与视觉输入" },
-  { key: "reasoning", label: "推理模式", hint: "支持更长链路的推理输出" },
-  { key: "multi_image", label: "多图输入", hint: "同一轮可输入多张图片" },
-  { key: "file_input", label: "文件输入", hint: "支持文件或附件类输入" },
-  { key: "pdf_input", label: "PDF 输入", hint: "支持 PDF 文档输入" },
-  { key: "json_mode", label: "JSON 模式", hint: "支持结构化 JSON 输出" },
-  { key: "streaming", label: "流式响应", hint: "支持流式输出消息" },
-  { key: "parallel_tool_calls", label: "并行工具", hint: "支持并行工具调用" },
-  { key: "image_url_input", label: "图片 URL", hint: "支持图片链接输入" },
-  { key: "image_base64_input", label: "Base64 图片", hint: "支持 Base64 图片输入" },
+  { key: "tool_calling", label: t("modelSettings.cap_tool_calling"), hint: t("modelSettings.cap_tool_calling_hint") },
+  { key: "vision", label: t("modelSettings.cap_vision"), hint: t("modelSettings.cap_vision_hint") },
+  { key: "reasoning", label: t("modelSettings.cap_reasoning"), hint: t("modelSettings.cap_reasoning_hint") },
+  { key: "multi_image", label: t("modelSettings.cap_multi_image"), hint: t("modelSettings.cap_multi_image_hint") },
+  { key: "file_input", label: t("modelSettings.cap_file_input"), hint: t("modelSettings.cap_file_input_hint") },
+  { key: "pdf_input", label: t("modelSettings.cap_pdf_input"), hint: t("modelSettings.cap_pdf_input_hint") },
+  { key: "json_mode", label: t("modelSettings.cap_json_mode"), hint: t("modelSettings.cap_json_mode_hint") },
+  { key: "streaming", label: t("modelSettings.cap_streaming"), hint: t("modelSettings.cap_streaming_hint") },
+  { key: "parallel_tool_calls", label: t("modelSettings.cap_parallel_tools"), hint: t("modelSettings.cap_parallel_tools_hint") },
+  { key: "image_url_input", label: t("modelSettings.cap_image_url"), hint: t("modelSettings.cap_image_url_hint") },
+  { key: "image_base64_input", label: t("modelSettings.cap_image_base64"), hint: t("modelSettings.cap_image_base64_hint") },
 ];
 
 const baseCapabilities: ModelCapabilities = {
@@ -180,7 +181,7 @@ async function loadSettings() {
   try {
     modelConfigs.value = await api.listModelConfigs();
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "加载模型设置失败。");
+    showMessage("error", err instanceof Error ? err.message : t("modelSettings.load_failed"));
   } finally {
     loading.value = false;
   }
@@ -322,29 +323,29 @@ function hasCapabilityOverrides(overrides: ModelCapabilitiesOverride | undefined
 async function saveModel() {
   if (isOAuth.value && oauthHasModelListing.value && oauthAvailableModels.value.length > 0) {
     if (!oauthSelectedModelId.value?.trim()) {
-      showMessage("error", "请先获取可用模型并在列表中选择要使用的模型。");
+      showMessage("error", t("modelSettings.select_model_first"));
       return;
     }
     modelDraft.model_name = oauthSelectedModelId.value.trim();
   }
 
   if (!modelDraft.model_name.trim()) {
-    showMessage("error", "配置名称不能为空。");
+    showMessage("error", t("modelSettings.name_required"));
     return;
   }
 
   if (isOAuth.value) {
     if (!modelDraft.oauth_provider) {
-      showMessage("error", "OAuth 2.0 模式需要选择提供商。");
+      showMessage("error", t("modelSettings.oauth_provider_required"));
       return;
     }
     if (oauthNeedsBaseUrl.value && !oauthCustomBaseUrl.value.trim()) {
-      showMessage("error", "该提供商需要填写资源端点 (Base URL)。");
+      showMessage("error", t("modelSettings.base_url_required"));
       return;
     }
   } else {
     if (!modelDraft.provider.trim() || !modelDraft.transport?.trim() || !modelDraft.base_url.trim()) {
-      showMessage("error", "供应商、协议和 Base URL 不能为空。");
+      showMessage("error", t("modelSettings.provider_transport_url_required"));
       return;
     }
   }
@@ -384,11 +385,11 @@ async function saveModel() {
       ? await api.editModelConfig(editingModelName.value, payload)
       : await api.updateModelConfig(payload);
 
-    showMessage("success", editingModelName.value ? `模型已更新：${saved.name}` : `模型已创建：${saved.name}`);
+    showMessage("success", editingModelName.value ? `${t("modelSettings.model_updated")}: ${saved.name}` : `${t("modelSettings.model_created")}: ${saved.name}`);
     closeEditorModal();
     await loadSettings();
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "保存模型配置失败。");
+    showMessage("error", err instanceof Error ? err.message : t("modelSettings.save_failed"));
   } finally {
     saving.value = false;
   }
@@ -403,7 +404,7 @@ async function withAction(modelName: string, action: string, runner: () => Promi
   try {
     await runner();
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "模型操作失败。");
+    showMessage("error", err instanceof Error ? err.message : t("modelSettings.action_failed"));
   } finally {
     busyActionKey.value = "";
   }
@@ -414,22 +415,22 @@ async function testConnection(item: ModelConfigPublic) {
     const result = await api.testModelConfigConnection(item.name);
     if (result.ok) {
       if (result.preview) {
-        showMessage("success", `连接测试成功：${item.name}，响应：${result.preview}`);
+        showMessage("success", `${t("modelSettings.test_success")}: ${item.name}, ${t("modelSettings.response")}: ${result.preview}`);
       } else if (result.latency_ms) {
-        showMessage("success", `连接测试成功：${item.name}，延迟 ${result.latency_ms}ms`);
+        showMessage("success", `${t("modelSettings.test_success")}: ${item.name}, ${result.latency_ms}ms`);
       } else {
-        showMessage("success", `连接测试成功：${item.name}`);
+        showMessage("success", `${t("modelSettings.test_success")}: ${item.name}`);
       }
       return;
     }
-    showMessage("error", `连接测试失败：${item.name}`);
+    showMessage("error", `${t("modelSettings.test_failed")}: ${item.name}`);
   });
 }
 
 async function activateModel(item: ModelConfigPublic) {
   await withAction(item.name, "activate", async () => {
     await api.activateModelConfig(item.name);
-    showMessage("success", `已激活模型：${item.name}`);
+    showMessage("success", `${t("modelSettings.activated")}: ${item.name}`);
     await loadSettings();
   });
 }
@@ -444,7 +445,7 @@ function onOAuthProviderChange(key: string | null) {
   }
   const profile = oauthProviders.value.find((item) => item.key === key);
   if (profile && !profile.is_enabled) {
-    showMessage("error", `${profile.display_name} 暂未开放，请先选择其他已启用的平台。`);
+    showMessage("error", `${profile.display_name} ${t("modelSettings.not_available")}`);
     modelDraft.oauth_provider = null;
     oauthAvailableModels.value = [];
     oauthSelectedModelId.value = null;
@@ -486,11 +487,11 @@ function buildOAuthRedirectUri(provider: string) {
 
 async function launchOAuth() {
   if (!modelDraft.oauth_provider) {
-    showMessage("error", "请先选择 OAuth 提供商。");
+    showMessage("error", t("modelSettings.select_oauth_provider"));
     return;
   }
   if (selectedOAuthProfile.value && !selectedOAuthProfile.value.is_enabled) {
-    showMessage("error", `${selectedOAuthProfile.value.display_name} 暂未开放授权登录。`);
+    showMessage("error", `${selectedOAuthProfile.value.display_name} ${t("modelSettings.oauth_not_available")}`);
     return;
   }
   const provider = modelDraft.oauth_provider;
@@ -516,18 +517,18 @@ async function launchOAuth() {
           if (status.refresh_token) {
             modelDraft.oauth_refresh_token = status.refresh_token;
           }
-          showMessage("success", "OAuth 授权成功！可点击「获取可用模型」选择要使用的模型。");
+          showMessage("success", t("modelSettings.oauth_success"));
         } else if (status.status === "failed") {
           stopOAuthPoll();
           oauthPolling.value = false;
-          showMessage("error", `OAuth 授权失败：${status.error || "未知错误"}`);
+          showMessage("error", `${t("modelSettings.oauth_failed")}: ${status.error || t("modelSettings.unknown_error")}`);
         }
       } catch {
         // network hiccup — keep polling
       }
     }, 2000);
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "启动 OAuth 流程失败。");
+    showMessage("error", err instanceof Error ? err.message : t("modelSettings.oauth_launch_failed"));
   }
 }
 
@@ -535,11 +536,11 @@ async function launchOAuth() {
 
 async function fetchOAuthModels() {
   if (!modelDraft.oauth_provider) {
-    showMessage("error", "请先选择 OAuth 提供商。");
+    showMessage("error", t("modelSettings.select_oauth_provider"));
     return;
   }
   if (selectedOAuthProfile.value && !selectedOAuthProfile.value.is_enabled) {
-    showMessage("error", `${selectedOAuthProfile.value.display_name} 暂未开放模型拉取能力。`);
+    showMessage("error", `${selectedOAuthProfile.value.display_name} ${t("modelSettings.model_fetch_not_available")}`);
     return;
   }
   oauthModelsFetching.value = true;
@@ -551,10 +552,10 @@ async function fetchOAuthModels() {
     );
     oauthAvailableModels.value = res.models;
     if (res.models.length === 0) {
-      showMessage("error", "未找到可用模型，请确认 .env 中凭据已配置或先完成 OAuth 授权。");
+      showMessage("error", t("modelSettings.no_models_found"));
     }
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "获取模型列表失败。");
+    showMessage("error", err instanceof Error ? err.message : t("modelSettings.fetch_models_failed"));
   } finally {
     oauthModelsFetching.value = false;
   }
@@ -568,12 +569,12 @@ function onOAuthModelSelect(modelId: string | null) {
 }
 
 async function deleteModel(item: ModelConfigPublic) {
-  const confirmed = window.confirm(`确定删除模型"${item.name}"吗？`);
+  const confirmed = window.confirm(`${t("modelSettings.confirm_delete")} "${item.name}"?`);
   if (!confirmed) return;
 
   await withAction(item.name, "delete", async () => {
     await api.deleteModelConfig(item.name);
-    showMessage("success", `已删除模型：${item.name}`);
+    showMessage("success", `${t("modelSettings.deleted")}: ${item.name}`);
     await loadSettings();
   });
 }
@@ -593,8 +594,8 @@ async function deleteModel(item: ModelConfigPublic) {
 
     <div class="settings-pane-head">
       <div>
-        <h3>模型设置</h3>
-        <p>维护当前系统可用的大模型配置，并显式区分供应商、协议与接入地址。</p>
+        <h3>{{ t("modelSettings.title") }}</h3>
+        <p>{{ t("modelSettings.desc") }}</p>
       </div>
     </div>
 
@@ -607,7 +608,7 @@ async function deleteModel(item: ModelConfigPublic) {
         >
           <div class="settings-model-card__header">
             <span v-if="item.is_active" class="settings-model-card__badge settings-model-card__badge-current">
-              当前使用
+              {{ t("modelSettings.current_use") }}
             </span>
           </div>
 
@@ -696,8 +697,8 @@ async function deleteModel(item: ModelConfigPublic) {
         <button type="button" class="settings-model-card settings-model-card-add" @click="openCreateModal">
           <div class="settings-model-card-add__icon">+</div>
           <div class="settings-model-card-add__body">
-            <strong>新增模型</strong>
-            <p>创建新的模型配置</p>
+            <strong>{{ t("modelSettings.add_model") }}</strong>
+            <p>{{ t("modelSettings.add_model_desc") }}</p>
           </div>
         </button>
       </div>
@@ -708,8 +709,8 @@ async function deleteModel(item: ModelConfigPublic) {
       <section class="settings-modal-card settings-modal-card-clean">
         <div class="settings-modal-head">
           <div>
-            <h4>{{ isEditing ? "编辑模型" : "新增模型" }}</h4>
-            <p>{{ isEditing ? "修改已有模型配置" : "创建新的模型配置" }}</p>
+            <h4>{{ isEditing ? t("modelSettings.edit_model") : t("modelSettings.add_model") }}</h4>
+            <p>{{ isEditing ? t("modelSettings.edit_model_desc") : t("modelSettings.add_model_desc") }}</p>
           </div>
           <button type="button" class="settings-modal-close" @click="closeEditorModal">×</button>
         </div>
@@ -717,7 +718,7 @@ async function deleteModel(item: ModelConfigPublic) {
         <!-- ── 认证方式切换 ──────────────────────────────────────────── -->
         <div class="form-grid two">
           <div class="full settings-auth-type-row">
-            <span class="settings-auth-type-label">认证方式</span>
+            <span class="settings-auth-type-label">{{ t("modelSettings.auth_type") }}</span>
             <div class="settings-auth-type-btns">
               <button
                 type="button"

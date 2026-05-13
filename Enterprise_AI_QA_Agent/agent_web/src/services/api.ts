@@ -475,4 +475,34 @@ export const api = {
     };
     return source;
   },
+
+  // General Settings
+  getGeneralSettings(): Promise<Record<string, unknown>> {
+    return request("/api/v1/settings/general");
+  },
+  saveGeneralSettings(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return request("/api/v1/settings/general", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Data Management
+  exportData(): Promise<Record<string, unknown>> {
+    return request("/api/v1/settings/data/export", { method: "POST" });
+  },
+  importData(): Promise<Record<string, unknown>> {
+    return request("/api/v1/settings/data/import", { method: "POST" });
+  },
+  cleanupData(payload: {
+    action: string;
+    dry_run: boolean;
+    time_range_days?: number | null;
+    confirm?: boolean;
+  }): Promise<Record<string, unknown>> {
+    return request("/api/v1/settings/data/cleanup", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
 };

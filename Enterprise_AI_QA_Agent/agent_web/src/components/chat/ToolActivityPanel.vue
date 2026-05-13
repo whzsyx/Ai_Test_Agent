@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { t } from "../../services/i18n";
 import { useSessionStore } from "../../stores/session";
 
 const sessionStore = useSessionStore();
@@ -14,7 +15,7 @@ function artifactCount(output: Record<string, unknown>) {
 
 function fileArtifactLabel(output: Record<string, unknown>) {
   const count = artifactCount(output);
-  return count > 0 ? `${count} 个文件` : "无文件";
+  return count > 0 ? `${count} ${t("toolActivity.files_unit")}` : t("toolActivity.no_files");
 }
 
 function metricCount(output: Record<string, unknown>) {
@@ -34,15 +35,15 @@ function tone(status: string) {
 function statusLabel(status: string) {
   switch (status) {
     case "completed":
-      return "已完成";
+      return t("toolActivity.status_completed");
     case "partial":
-      return "部分完成";
+      return t("toolActivity.status_partial");
     case "waiting_approval":
-      return "待审批";
+      return t("toolActivity.status_waiting_approval");
     case "denied":
-      return "已拒绝";
+      return t("toolActivity.status_denied");
     case "failed":
-      return "失败";
+      return t("toolActivity.status_failed");
     default:
       return status;
   }
@@ -53,10 +54,10 @@ function statusLabel(status: string) {
   <section v-if="sessionStore.session" class="observability-panel tool-activity-panel">
     <div class="observability-head">
       <div>
-        <strong>工具活动</strong>
-        <p>展示当前快照中最近一次记录的工具执行情况。</p>
+        <strong>{{ t("toolActivity.title") }}</strong>
+        <p>{{ t("toolActivity.desc") }}</p>
       </div>
-      <span class="registry-tag light">{{ toolResults.length }} 个工具</span>
+      <span class="registry-tag light">{{ toolResults.length }} {{ t("toolActivity.tools_unit") }}</span>
     </div>
 
     <div v-if="toolResults.length" class="tool-activity-list">
@@ -75,33 +76,33 @@ function statusLabel(status: string) {
 
         <dl class="tool-activity-grid">
           <div>
-            <dt>状态</dt>
+            <dt>{{ t("toolActivity.col_status") }}</dt>
             <dd>{{ statusLabel(tool.status) }}</dd>
           </div>
           <div>
-            <dt>文件产物</dt>
+            <dt>{{ t("toolActivity.col_file_artifacts") }}</dt>
             <dd>{{ fileArtifactLabel(tool.output) }}</dd>
           </div>
           <div>
-            <dt>指标</dt>
+            <dt>{{ t("toolActivity.col_metrics") }}</dt>
             <dd>{{ metricCount(tool.output) }}</dd>
           </div>
           <div v-if="tool.trace_id">
-            <dt>追踪 ID</dt>
+            <dt>{{ t("toolActivity.col_trace_id") }}</dt>
             <dd>{{ tool.trace_id }}</dd>
           </div>
           <div v-if="tool.approval_id">
-            <dt>审批单</dt>
+            <dt>{{ t("toolActivity.col_approval_id") }}</dt>
             <dd>{{ tool.approval_id }}</dd>
           </div>
           <div v-if="tool.job_id">
-            <dt>任务</dt>
+            <dt>{{ t("toolActivity.col_job_id") }}</dt>
             <dd>{{ tool.job_id }}</dd>
           </div>
         </dl>
       </article>
     </div>
 
-    <div v-else class="settings-empty">当前会话还没有记录到工具活动。</div>
+    <div v-else class="settings-empty">{{ t("toolActivity.empty") }}</div>
   </section>
 </template>

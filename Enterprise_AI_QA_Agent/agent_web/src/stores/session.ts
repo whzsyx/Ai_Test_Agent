@@ -601,6 +601,18 @@ export const useSessionStore = defineStore("session", {
           event.type === "turn.completed" ||
           event.type === "turn.failed"
         ) {
+          // Desktop notifications for key events.
+          if (event.type === "turn.completed" || event.type === "turn.failed") {
+            import("../services/desktopNotifications").then(({ notifySessionComplete }) => {
+              notifySessionComplete(event.session_id, `会话执行${event.type === "turn.completed" ? "完成" : "失败"}`);
+            });
+          }
+          if (event.type === "approval.created") {
+            const toolName = String(event.payload?.tool_name || event.payload?.tool_key || "");
+            import("../services/desktopNotifications").then(({ notifyApprovalRequired }) => {
+              notifyApprovalRequired(event.session_id, String(event.payload?.approval_id || ""), toolName);
+            });
+          }
           this.scheduleRefresh(true);
           return;
         }

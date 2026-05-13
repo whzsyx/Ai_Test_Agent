@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
+import { t } from "../../services/i18n";
 import { api } from "../../services/api";
 import { useSessionStore } from "../../stores/session";
 import type { ChatMessage, SessionDetail, ToolApprovalRequest, WorkerDispatchRecord } from "../../types";
@@ -52,47 +53,47 @@ function statusTone(status: string) {
 }
 
 function statusLabel(status: string) {
-  if (status === "completed") return "已完成";
-  if (status === "running") return "运行中";
-  if (status === "waiting_approval") return "待审批";
-  if (status === "pending") return "待启动";
-  if (status === "failed") return "失败";
-  if (status === "denied") return "已拒绝";
-  return status || "未知";
+  if (status === "completed") return t("reviewProgress.completed");
+  if (status === "running") return t("reviewProgress.running");
+  if (status === "waiting_approval") return t("reviewProgress.waiting_approval");
+  if (status === "pending") return t("reviewProgress.pending");
+  if (status === "failed") return t("reviewProgress.failed");
+  if (status === "denied") return t("reviewProgress.denied");
+  return status || t("reviewProgress.unknown");
 }
 
 function stageLabel(stage?: string, roundIndex = 0, totalRoundCount = 0) {
   if (stage === "independent_findings") {
-    return "第1轮立论";
+    return t("reviewProgress.stage_findings");
   }
   if (stage === "cross_review") {
-    return `第${roundIndex || 2}轮攻防`;
+    return t("reviewProgress.stage_cross_review", { round: String(roundIndex || 2) });
   }
   if (stage === "summary_resolution") {
     const resolvedRound = roundIndex || totalRoundCount || 0;
-    return resolvedRound ? `第${resolvedRound}轮裁决` : "总结裁决";
+    return resolvedRound ? t("reviewProgress.stage_resolution_round", { round: String(resolvedRound) }) : t("reviewProgress.stage_resolution");
   }
   if (stage === "completed") {
-    return "辩论完成";
+    return t("reviewProgress.stage_completed");
   }
-  return "待启动";
+  return t("reviewProgress.pending");
 }
 
 function roleLabel(item: WorkerDispatchRecord) {
-  if (item.is_completion_worker) return "总结 Agent";
-  if (item.dispatch_role === "debate_followup") return "攻防 Agent";
-  return "立论 Agent";
+  if (item.is_completion_worker) return t("reviewProgress.role_summary");
+  if (item.dispatch_role === "debate_followup") return t("reviewProgress.role_cross");
+  return t("reviewProgress.role_findings");
 }
 
 function shortId(value: string | undefined) {
   const normalized = String(value || "").trim();
-  if (!normalized) return "未分配";
+  if (!normalized) return t("reviewProgress.not_assigned");
   return normalized.length <= 12 ? normalized : `${normalized.slice(0, 8)}...`;
 }
 
 function formatTime(value: string | undefined) {
   const normalized = String(value || "").trim();
-  if (!normalized) return "未更新";
+  if (!normalized) return t("reviewProgress.not_updated");
   return formatServerDateTime(normalized, normalized);
 }
 
@@ -127,7 +128,7 @@ async function openTaskDetail(item: WorkerDispatchRecord) {
     selectedTaskSession.value = await api.getSession(childSessionId);
   } catch (error) {
     taskDetailError.value =
-      error instanceof Error ? error.message : "加载审查任务详情失败。";
+      error instanceof Error ? error.message : t("reviewProgress.load_detail_failed");
   } finally {
     isLoadingTaskDetail.value = false;
   }
@@ -145,8 +146,8 @@ function closeTaskDetail() {
   <section v-if="sessionStore.session" class="review-progress-panel">
     <div class="review-progress-head">
       <div>
-        <strong>审批进程查看</strong>
-        <p>聚合展示 reviewer 并行立论、多轮攻防、审批请求和总结报告的后台实时进度。</p>
+        <strong>{{ t("reviewProgress.title") }}</strong>
+        <p>{{ t("reviewProgress.desc") }}</p>
       </div>
       <span class="registry-tag light">{{ sessionStore.session.mode_key }}</span>
     </div>
@@ -155,37 +156,37 @@ function closeTaskDetail() {
       <span class="registry-tag running">
         {{ debateProgress?.stage_label || stageLabel(debateProgress?.stage, debateProgress?.current_round_index || 0, debateProgress?.total_round_count || 0) }}
       </span>
-      <span>阶段状态: {{ statusLabel(debateProgress?.status || "pending") }}</span>
+      <span>{{ t("reviewProgress.stage_status") }}: {{ statusLabel(debateProgress?.status || "pending") }}</span>
       <span v-if="debateProgress?.current_round_index">
-        当前轮次: {{ debateProgress.current_round_index }} / {{ debateProgress?.total_round_count || "?" }}
+        {{ t("reviewProgress.current_round") }}: {{ debateProgress.current_round_index }} / {{ debateProgress?.total_round_count || "?" }}
       </span>
-      <span>最近更新: {{ formatTime(debateProgress?.updated_at) }}</span>
-      <span v-if="debateProgress?.peer_review_count">参考样本: {{ debateProgress.peer_review_count }}</span>
+      <span>{{ t("reviewProgress.last_update") }}: {{ formatTime(debateProgress?.updated_at) }}</span>
+      <span v-if="debateProgress?.peer_review_count">{{ t("reviewProgress.peer_samples") }}: {{ debateProgress.peer_review_count }}</span>
     </div>
 
     <div class="review-progress-stats">
       <article class="review-progress-stat">
-        <span>审查 Agent</span>
+        <span>{{ t("reviewProgress.stat_reviewers") }}</span>
         <strong>{{ workerStats.reviewer_count }}</strong>
       </article>
       <article class="review-progress-stat">
-        <span>运行中</span>
+        <span>{{ t("reviewProgress.stat_running") }}</span>
         <strong>{{ workerStats.running_count }}</strong>
       </article>
       <article class="review-progress-stat">
-        <span>待审批</span>
+        <span>{{ t("reviewProgress.stat_approval") }}</span>
         <strong>{{ workerStats.waiting_approval_count + sessionStore.pendingApprovals.length }}</strong>
       </article>
       <article class="review-progress-stat">
-        <span>已完成</span>
+        <span>{{ t("reviewProgress.stat_completed") }}</span>
         <strong>{{ workerStats.completed_count }}</strong>
       </article>
       <article class="review-progress-stat">
-        <span>失败</span>
+        <span>{{ t("reviewProgress.stat_failed") }}</span>
         <strong>{{ workerStats.failed_count }}</strong>
       </article>
       <article class="review-progress-stat">
-        <span>报告状态</span>
+        <span>{{ t("reviewProgress.stat_report") }}</span>
         <strong>{{ statusLabel(reportMeta?.status || "pending") }}</strong>
       </article>
     </div>
@@ -193,8 +194,8 @@ function closeTaskDetail() {
     <div class="review-progress-grid">
       <section class="review-progress-card review-progress-card--tasks">
         <div class="review-progress-section-head">
-          <strong>审查任务</strong>
-          <span>{{ workerRows.length }} 项</span>
+          <strong>{{ t("reviewProgress.review_tasks") }}</strong>
+          <span>{{ workerRows.length }} {{ t("reviewProgress.items_unit") }}</span>
         </div>
         <div v-if="workerRows.length" class="review-progress-list review-progress-scroll">
           <button
@@ -218,21 +219,21 @@ function closeTaskDetail() {
               <span>Agent: {{ item.agent_key }}</span>
               <span>Task: {{ shortId(item.task_id) }}</span>
               <span>Session: {{ shortId(item.child_session_id) }}</span>
-              <span v-if="item.debate_round_index">轮次: {{ item.debate_round_index }}</span>
-                <span v-if="item.source_round_index">来源轮次: {{ item.source_round_index }}</span>
+              <span v-if="item.debate_round_index">{{ t("reviewProgress.round") }}: {{ item.debate_round_index }}</span>
+                <span v-if="item.source_round_index">{{ t("reviewProgress.source_round") }}: {{ item.source_round_index }}</span>
                 <span v-if="item.model_key">Model: {{ item.model_key }}</span>
-                <span v-if="item.completed_at">完成: {{ formatTime(item.completed_at) }}</span>
-                <span class="review-progress-item-action">点击查看详情</span>
+                <span v-if="item.completed_at">{{ t("reviewProgress.completed_at") }}: {{ formatTime(item.completed_at) }}</span>
+                <span class="review-progress-item-action">{{ t("reviewProgress.click_detail") }}</span>
               </div>
           </button>
         </div>
-        <div v-else class="settings-empty">当前还没有代码审批子任务。</div>
+        <div v-else class="settings-empty">{{ t("reviewProgress.no_tasks") }}</div>
       </section>
 
       <section class="review-progress-card review-progress-card--approvals">
         <div class="review-progress-section-head">
-          <strong>审批请求</strong>
-          <span>{{ sessionStore.pendingApprovals.length }} 条</span>
+          <strong>{{ t("reviewProgress.approval_requests") }}</strong>
+          <span>{{ sessionStore.pendingApprovals.length }} {{ t("reviewProgress.entries_unit") }}</span>
         </div>
         <div v-if="sessionStore.pendingApprovals.length" class="review-progress-list review-progress-scroll review-progress-scroll--compact">
           <article
@@ -242,29 +243,29 @@ function closeTaskDetail() {
           >
             <div class="review-progress-item-head">
               <strong>{{ approvalHeadline(approval) }}</strong>
-              <span class="registry-tag warning">人工处理</span>
+              <span class="registry-tag warning">{{ t("reviewProgress.manual_process") }}</span>
             </div>
             <div class="review-progress-item-meta">
               <span>Tool: {{ approval.tool_key }}</span>
-              <span>创建: {{ formatTime(approval.created_at) }}</span>
+              <span>{{ t("reviewProgress.created") }}: {{ formatTime(approval.created_at) }}</span>
             </div>
             <p class="review-progress-reason">{{ approval.reason }}</p>
           </article>
         </div>
-        <div v-else class="settings-empty">当前没有待处理审批。</div>
+        <div v-else class="settings-empty">{{ t("reviewProgress.no_approvals") }}</div>
       </section>
     </div>
 
     <section class="review-progress-card">
       <div class="review-progress-section-head">
-        <strong>总结报告</strong>
+        <strong>{{ t("reviewProgress.summary_report") }}</strong>
         <span>{{ statusLabel(reportMeta?.status || "pending") }}</span>
       </div>
       <div class="review-progress-report-meta">
-        <span>报告 Agent: {{ reportMeta?.agent_key || "code-review-synthesizer" }}</span>
-        <span>报告会话: {{ shortId(reportMeta?.report_session_id) }}</span>
-        <span>最近更新: {{ formatTime(reportMeta?.updated_at) }}</span>
-        <span v-if="reportMeta?.completed_at">完成时间: {{ formatTime(reportMeta.completed_at) }}</span>
+        <span>{{ t("reviewProgress.report_agent") }}: {{ reportMeta?.agent_key || "code-review-synthesizer" }}</span>
+        <span>{{ t("reviewProgress.report_session") }}: {{ shortId(reportMeta?.report_session_id) }}</span>
+        <span>{{ t("reviewProgress.last_update") }}: {{ formatTime(reportMeta?.updated_at) }}</span>
+        <span v-if="reportMeta?.completed_at">{{ t("reviewProgress.completed_at") }}: {{ formatTime(reportMeta.completed_at) }}</span>
       </div>
       <p v-if="reportMeta?.description" class="review-progress-reason">{{ reportMeta.description }}</p>
       <p v-if="reportMeta?.summary" class="review-progress-reason">{{ reportMeta.summary }}</p>
@@ -272,9 +273,9 @@ function closeTaskDetail() {
         v-else-if="pendingCompletionWorker?.description && !workerStats.completion_dispatch"
         class="review-progress-reason"
       >
-        总结 Agent 已排队，等待主持人预算内的辩论阶段全部完成后自动启动：{{ pendingCompletionWorker.description }}
+        {{ t("reviewProgress.completion_queued") }}{{ pendingCompletionWorker.description }}
       </p>
-      <div v-else class="settings-empty">当前还没有报告摘要。</div>
+      <div v-else class="settings-empty">{{ t("reviewProgress.no_report") }}</div>
     </section>
 
     <teleport to="body">
@@ -288,29 +289,29 @@ function closeTaskDetail() {
                 {{ statusLabel(selectedTask.status) }}
               </p>
             </div>
-            <button type="button" class="review-task-close" @click="closeTaskDetail">关闭</button>
+            <button type="button" class="review-task-close" @click="closeTaskDetail">{{ t("common.close") }}</button>
           </div>
 
           <div class="review-task-modal-body">
             <div class="review-task-modal-meta">
               <span>Agent: {{ selectedTask.agent_key }}</span>
               <span>Task ID: {{ selectedTask.task_id }}</span>
-              <span>子会话: {{ selectedTask.child_session_id || "未创建" }}</span>
-              <span v-if="selectedTask.debate_round_index">轮次: {{ selectedTask.debate_round_index }}</span>
-              <span v-if="selectedTask.source_round_index">来源轮次: {{ selectedTask.source_round_index }}</span>
+              <span>{{ t("reviewProgress.child_session") }}: {{ selectedTask.child_session_id || t("reviewProgress.not_created") }}</span>
+              <span v-if="selectedTask.debate_round_index">{{ t("reviewProgress.round") }}: {{ selectedTask.debate_round_index }}</span>
+              <span v-if="selectedTask.source_round_index">{{ t("reviewProgress.source_round") }}: {{ selectedTask.source_round_index }}</span>
               <span v-if="selectedTask.model_key">Model: {{ selectedTask.model_key }}</span>
-              <span v-if="selectedTask.completed_at">完成时间: {{ formatTime(selectedTask.completed_at) }}</span>
+              <span v-if="selectedTask.completed_at">{{ t("reviewProgress.completed_at") }}: {{ formatTime(selectedTask.completed_at) }}</span>
             </div>
 
-            <div v-if="isLoadingTaskDetail" class="settings-empty">正在加载任务详情...</div>
+            <div v-if="isLoadingTaskDetail" class="settings-empty">{{ t("reviewProgress.loading_detail") }}</div>
             <div v-else-if="taskDetailError" class="review-task-error">{{ taskDetailError }}</div>
             <template v-else-if="selectedTaskSession">
               <div class="review-task-session-stats">
-                <span>会话状态: {{ statusLabel(selectedTaskSession.status) }}</span>
-                <span>消息数: {{ selectedTaskSession.messages.length }}</span>
-                <span>事件数: {{ selectedTaskSession.event_count }}</span>
-                <span>快照数: {{ selectedTaskSession.snapshot_count }}</span>
-                <span>最后更新: {{ formatTime(selectedTaskSession.updated_at) }}</span>
+                <span>{{ t("reviewProgress.session_status") }}: {{ statusLabel(selectedTaskSession.status) }}</span>
+                <span>{{ t("reviewProgress.message_count") }}: {{ selectedTaskSession.messages.length }}</span>
+                <span>{{ t("reviewProgress.event_count") }}: {{ selectedTaskSession.event_count }}</span>
+                <span>{{ t("reviewProgress.snapshot_count") }}: {{ selectedTaskSession.snapshot_count }}</span>
+                <span>{{ t("reviewProgress.last_update") }}: {{ formatTime(selectedTaskSession.updated_at) }}</span>
               </div>
 
               <div class="review-task-message-list">
@@ -322,7 +323,7 @@ function closeTaskDetail() {
                   <details v-if="message.role === 'tool'" class="review-task-message-details">
                     <summary style="cursor: pointer; outline: none;">
                       <div class="review-task-message-head" style="display: inline-flex; width: calc(100% - 20px); vertical-align: top;">
-                        <strong>{{ messageRoleLabel(message.role) }} <span style="font-weight: normal; font-size: 12px; color: #6b7280; margin-left: 6px;">(点击展开/收起)</span></strong>
+                        <strong>{{ messageRoleLabel(message.role) }} <span style="font-weight: normal; font-size: 12px; color: #6b7280; margin-left: 6px;">({{ t("reviewProgress.click_expand") }})</span></strong>
                         <span>{{ formatTime(message.created_at) }}</span>
                       </div>
                     </summary>
@@ -338,7 +339,7 @@ function closeTaskDetail() {
                 </article>
               </div>
             </template>
-            <div v-else class="settings-empty">当前任务还没有可展开的子会话详情。</div>
+            <div v-else class="settings-empty">{{ t("reviewProgress.no_child_session") }}</div>
           </div>
         </section>
       </div>

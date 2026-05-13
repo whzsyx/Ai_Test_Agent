@@ -7,58 +7,69 @@ import PlatformSettingsPlugin from "./plugins/PlatformSettingsPlugin.vue";
 import ChannelSettingsPlugin from "./plugins/ChannelSettingsPlugin.vue";
 import StorageSettingsPlugin from "./plugins/StorageSettingsPlugin.vue";
 import AboutSystemPlugin from "./plugins/AboutSystemPlugin.vue";
+import { t } from "../../services/i18n";
 
 export type SettingsPluginKey = "general" | "model" | "email" | "platform" | "channel" | "storage" | "about";
 
 export interface SettingsPluginDefinition {
   key: SettingsPluginKey;
-  label: string;
+  labelKey: string;
   summary: string;
   reserved?: boolean;
   component: Component;
+  get label(): string;
+}
+
+function makePlugin(def: { key: SettingsPluginKey; labelKey: string; summary: string; reserved?: boolean; component: Component }): SettingsPluginDefinition {
+  return {
+    ...def,
+    get label() {
+      return t(def.labelKey);
+    },
+  };
 }
 
 export const settingsPlugins: SettingsPluginDefinition[] = [
-  {
+  makePlugin({
     key: "general",
-    label: "通用设置",
+    labelKey: "settings.general",
     summary: "管理语言、通知、字体与数据管理偏好",
     component: markRaw(GeneralSettingsPlugin),
-  },
-  {
+  }),
+  makePlugin({
     key: "model",
-    label: "模型设置",
+    labelKey: "settings.models",
     summary: "管理大模型配置与当前主用模型",
     component: markRaw(ModelSettingsPlugin),
-  },
-  {
+  }),
+  makePlugin({
     key: "email",
-    label: "邮件设置",
+    labelKey: "settings.email",
     summary: "配置邮件投递通道与 SMTP 能力",
     component: markRaw(EmailSettingsPlugin),
-  },
-  {
+  }),
+  makePlugin({
     key: "platform",
-    label: "管理平台接入",
+    labelKey: "settings.integrations",
     summary: "统一管理第三方平台和外部能力接入",
     component: markRaw(PlatformSettingsPlugin),
-  },
-  {
+  }),
+  makePlugin({
     key: "channel",
-    label: "通讯渠道设置",
+    labelKey: "settings.channels",
     summary: "预留通知与协作通道的统一配置入口",
     component: markRaw(ChannelSettingsPlugin),
-  },
-  {
+  }),
+  makePlugin({
     key: "storage",
-    label: "存储设置",
+    labelKey: "settings.storage",
     summary: "预留对象存储与文件归档的统一配置入口",
     component: markRaw(StorageSettingsPlugin),
-  },
-  {
+  }),
+  makePlugin({
     key: "about",
-    label: "关于系统",
+    labelKey: "settings.about",
     summary: "查看系统介绍、技术栈、开源信息与反馈入口",
     component: markRaw(AboutSystemPlugin),
-  },
+  }),
 ];

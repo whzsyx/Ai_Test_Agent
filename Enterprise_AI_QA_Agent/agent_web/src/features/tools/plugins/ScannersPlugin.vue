@@ -1,32 +1,33 @@
 <script setup lang="ts">
+import { t } from "../../../services/i18n";
 </script>
 
 <template>
   <div class="tools-tab-pane">
     <div class="pane-header">
-      <h3 class="section-title">安全与系统探测器 (Scanners)</h3>
-      <p class="head-desc">配置并查看内置与外部集成的安全扫描引擎，提供主动化的漏洞探测能力。</p>
+      <h3 class="section-title">{{ t("scanners.title") }}</h3>
+      <p class="head-desc">{{ t("scanners.desc") }}</p>
     </div>
     <div class="scanner-grid">
       <article class="scanner-card">
         <i class="fa-solid fa-satellite-dish"></i>
-        <span>Nuclei 引擎</span>
-        <small>基于模板的快速漏洞扫描</small>
+        <span>{{ t("scanners.nuclei") }}</span>
+        <small>{{ t("scanners.nuclei_desc") }}</small>
       </article>
       <article class="scanner-card">
         <i class="fa-solid fa-database"></i>
-        <span>SQLMap 注入</span>
-        <small>自动化 SQL 注入与探测</small>
+        <span>{{ t("scanners.sqlmap") }}</span>
+        <small>{{ t("scanners.sqlmap_desc") }}</small>
       </article>
       <article class="scanner-card">
         <i class="fa-solid fa-bug"></i>
-        <span>XSStrike 探测</span>
-        <small>高级 XSS 跨站模糊测试</small>
+        <span>{{ t("scanners.xsstrike") }}</span>
+        <small>{{ t("scanners.xsstrike_desc") }}</small>
       </article>
       <article class="scanner-card">
         <i class="fa-solid fa-bolt"></i>
-        <span>定制 Fuzzing</span>
-        <small>自动组装与注入 Payload</small>
+        <span>{{ t("scanners.fuzzing") }}</span>
+        <small>{{ t("scanners.fuzzing_desc") }}</small>
       </article>
     </div>
   </div>

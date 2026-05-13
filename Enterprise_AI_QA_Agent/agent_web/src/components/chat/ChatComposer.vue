@@ -5,6 +5,7 @@ import { NDropdown, useMessage } from "naive-ui";
 
 import { api } from "../../services/api";
 import { useSessionStore } from "../../stores/session";
+import { t } from "../../services/i18n";
 import type { InputAttachment, UploadedAttachmentRecord } from "../../types";
 
 const props = defineProps<{
@@ -32,17 +33,31 @@ const ALLOWED_FILE_TYPES = [
 
 const ALLOWED_EXTENSIONS = [".doc", ".docx", ".xls", ".xlsx", ".md", ".json", ".png"];
 
-const dockedPlaceholder = "给御策天检发送消息，按 Enter 快速发送，Shift+Enter 换行";
-const heroPlaceholder = "例如：帮我测试后台管理系统的登录功能，覆盖各种异常输入和边界情况";
-const busyTitle = "正在处理当前任务";
-const idleTitle = "发送指令";
-const placeholder = computed(() => (props.docked ? dockedPlaceholder : heroPlaceholder));
-const buttonTitle = computed(() => (sessionStore.isBusy ? busyTitle : idleTitle));
-const activeModeLabel = computed(() => sessionStore.activeMode?.name ?? "默认模式");
-const activeModeSummary = computed(() => sessionStore.activeMode?.summary ?? "选择当前会话的执行模式");
+const dockedPlaceholder = computed(() => t("home.placeholder_docked"));
+const heroPlaceholder = computed(() => t("home.placeholder"));
+const busyTitle = computed(() => t("home.busy"));
+const idleTitle = computed(() => t("home.idle"));
+const placeholder = computed(() => (props.docked ? dockedPlaceholder.value : heroPlaceholder.value));
+const buttonTitle = computed(() => (sessionStore.isBusy ? busyTitle.value : idleTitle.value));
+function translatedModeLabel(modeKey?: string | null, fallback?: string | null) {
+  const normalizedKey = String(modeKey || "").trim();
+  if (!normalizedKey) {
+    return fallback || t("mode.default");
+  }
+  const translationKey = `mode.${normalizedKey}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? fallback || normalizedKey : translated;
+}
+
+const activeModeLabel = computed(() =>
+  translatedModeLabel(sessionStore.activeMode?.key, sessionStore.activeMode?.name ?? t("mode.default")),
+);
+const activeModeSummary = computed(() => sessionStore.activeMode?.summary ?? t("mode.select"));
 const modeOptions = computed(() =>
   sessionStore.modes.map((mode) => ({
-    label: mode.placeholder ? `${mode.name}（占位）` : mode.name,
+    label: mode.placeholder
+      ? `${translatedModeLabel(mode.key, mode.name)} (${t("mode.placeholder_suffix")})`
+      : translatedModeLabel(mode.key, mode.name),
     key: mode.key,
   })),
 );
@@ -101,7 +116,7 @@ async function handleFileChange(event: Event) {
   }
 
   if (pendingAttachments.value.length + files.length > MAX_FILES_COUNT) {
-    message.warning(`最多只能上传 ${MAX_FILES_COUNT} 个文件，当前已选 ${pendingAttachments.value.length} 个。`);
+    message.warning(t("home.file_count_limit", { max: String(MAX_FILES_COUNT), current: String(pendingAttachments.value.length) }));
     return;
   }
 
@@ -161,9 +176,9 @@ async function handleFileChange(event: Event) {
       existingUris.add(uri);
     }
 
-    message.success(`已上传 ${uploadedDocs.length} 个文件`, { duration: 2000 });
+    message.success(t("home.upload_success", { count: String(uploadedDocs.length) }), { duration: 2000 });
   } catch (error) {
-    message.error(error instanceof Error ? error.message : "上传文件失败");
+    message.error(error instanceof Error ? error.message : t("home.upload_fail"));
   } finally {
     uploading.value = false;
   }

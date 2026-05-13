@@ -2,16 +2,17 @@
 import { computed } from "vue";
 
 import { useAppStore } from "../../stores/app";
+import { t } from "../../services/i18n";
 
 const appStore = useAppStore();
 
-const navItems = [
-  { to: "/home", icon: "fa-house", title: "首页（会话界面）" },
-  { to: "/taskpool", icon: "fa-list-check", title: "任务池" },
-  { to: "/knowledge", icon: "fa-database", title: "知识库" },
-  { to: "/tools", icon: "fa-toolbox", title: "工具库" },
-  { to: "/reports", icon: "fa-file-contract", title: "综合评估报告" },
-];
+const navItems = computed(() => [
+  { to: "/home", icon: "fa-house", title: t("nav.home") },
+  { to: "/taskpool", icon: "fa-list-check", title: t("nav.taskpool") },
+  { to: "/knowledge", icon: "fa-database", title: t("nav.knowledge") },
+  { to: "/tools", icon: "fa-toolbox", title: t("nav.tools") },
+  { to: "/reports", icon: "fa-file-contract", title: t("nav.reports") },
+]);
 
 const themeIcon = computed(() =>
   appStore.theme === "dark" ? "fa-sun" : "fa-moon",
@@ -54,7 +55,7 @@ const themeTitle = computed(() =>
       to="/settings"
       class="left-nav-user left-nav-user-link"
       active-class="left-nav-user-active"
-      title="统一系统配置"
+      :title="t('nav.settings')"
     >
       <i class="fa-solid fa-gear"></i>
     </RouterLink>

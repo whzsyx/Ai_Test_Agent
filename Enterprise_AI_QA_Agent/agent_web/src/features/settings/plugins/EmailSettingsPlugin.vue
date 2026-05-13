@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { NPopover, NSelect, type SelectOption } from "naive-ui";
 
 import { api } from "../../../services/api";
+import { t } from "../../../services/i18n";
 import type {
   EmailConfigCreateRequest,
   EmailConfigPublic,
@@ -499,7 +500,7 @@ async function loadSettings() {
   try {
     emailConfigs.value = await api.listEmailConfigs();
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "加载邮件设置失败。");
+    showMessage("error", err instanceof Error ? err.message : t("emailSettings.load_failed"));
   } finally {
     loading.value = false;
   }
@@ -548,19 +549,19 @@ function describeAuth(item: EmailConfigPublic) {
   const mode = getDeliveryMode(item);
   const provider = item.provider as EmailProvider;
   if (mode === "smtp") {
-    return item.has_api_key ? "SMTP 认证已配置" : "SMTP 认证未配置";
+    return item.has_api_key ? t("emailSettings.smtp_auth_configured") : t("emailSettings.smtp_auth_not_configured");
   }
   if (provider === "aliyun") {
-    return item.has_api_key && item.has_secret_key ? "AccessKey 已配置" : "AccessKey 未配置";
+    return item.has_api_key && item.has_secret_key ? t("emailSettings.accesskey_configured") : t("emailSettings.accesskey_not_configured");
   }
   if (provider === "tencent_ses") {
-    return item.has_api_key && item.has_secret_key ? "SecretId / Key 已配置" : "SecretId / Key 未配置";
+    return item.has_api_key && item.has_secret_key ? t("emailSettings.secretid_configured") : t("emailSettings.secretid_not_configured");
   }
-  return item.has_api_key ? "API Key 已配置" : "API Key 未配置";
+  return item.has_api_key ? t("emailSettings.apikey_configured") : t("emailSettings.apikey_not_configured");
 }
 
 function describeSenderName(item: EmailConfigPublic) {
-  return String(item.extra_config?.sender_name || "").trim() || "未设置";
+  return String(item.extra_config?.sender_name || "").trim() || t("emailSettings.not_set");
 }
 
 function actionKey(configId: number, action: string) {
@@ -687,45 +688,45 @@ function buildUpdatePayload(): EmailConfigUpdateRequest {
 
 function validateDraft() {
   if (!draft.config_name.trim()) {
-    showMessage("error", "请填写通道名称。");
+    showMessage("error", t("emailSettings.v_channel_name"));
     return false;
   }
   if (!draft.sender_email.trim()) {
-    showMessage("error", "请填写发信邮箱。");
+    showMessage("error", t("emailSettings.v_sender_email"));
     return false;
   }
   if (draft.delivery_mode === "api") {
     if (!draft.api_key.trim() && isCreateMode.value) {
-      showMessage("error", "请填写 API Key / AccessKey。");
+      showMessage("error", t("emailSettings.v_api_key"));
       return false;
     }
     if ((draft.provider === "aliyun" || draft.provider === "tencent_ses") && !draft.secret_key.trim() && isCreateMode.value) {
-      showMessage("error", "请填写 SecretKey。");
+      showMessage("error", t("emailSettings.v_secret_key"));
       return false;
     }
     if (draft.provider === "mailgun" && !draft.extra_config.sending_domain?.trim()) {
-      showMessage("error", "Mailgun 需要填写发信域名。");
+      showMessage("error", t("emailSettings.v_mailgun_domain"));
       return false;
     }
     if (draft.provider === "resend" && !draft.extra_config.sending_domain?.trim()) {
-      showMessage("error", "Resend 建议填写已验证域名。");
+      showMessage("error", t("emailSettings.v_resend_domain"));
       return false;
     }
   } else {
     if (!draft.smtp_host.trim()) {
-      showMessage("error", "请填写 SMTP Host。");
+      showMessage("error", t("emailSettings.v_smtp_host"));
       return false;
     }
     if (!draft.smtp_port) {
-      showMessage("error", "请填写 SMTP 端口。");
+      showMessage("error", t("emailSettings.v_smtp_port"));
       return false;
     }
     if (!draft.smtp_username.trim()) {
-      showMessage("error", "请填写 SMTP 用户名。");
+      showMessage("error", t("emailSettings.v_smtp_username"));
       return false;
     }
     if (!draft.api_key.trim() && isCreateMode.value) {
-      showMessage("error", "请填写 SMTP 密码。");
+      showMessage("error", t("emailSettings.v_smtp_password"));
       return false;
     }
   }
@@ -748,7 +749,7 @@ async function saveEmail() {
     closeEditorModal();
     await loadSettings();
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "保存邮件配置失败。");
+    showMessage("error", err instanceof Error ? err.message : t("emailSettings.save_failed"));
   } finally {
     saving.value = false;
   }
@@ -759,7 +760,7 @@ async function withAction(configId: number, action: string, runner: () => Promis
   try {
     await runner();
   } catch (err) {
-    showMessage("error", err instanceof Error ? err.message : "邮件通道操作失败。");
+    showMessage("error", err instanceof Error ? err.message : t("emailSettings.action_failed"));
   } finally {
     busyActionKey.value = "";
   }
@@ -828,8 +829,8 @@ function secretKeyLabel(provider: EmailProvider) {
 
     <div class="settings-pane-head">
       <div>
-        <h3>邮件设置</h3>
-        <p>邮件通道按提供商独立建模。新增时先选择提供商，再切换对应配置表单。</p>
+        <h3>{{ t("emailSettings.title") }}</h3>
+        <p>{{ t("emailSettings.desc") }}</p>
       </div>
     </div>
 
@@ -842,10 +843,10 @@ function secretKeyLabel(provider: EmailProvider) {
         >
           <div class="settings-model-card__header">
             <span class="settings-model-card__badge" :class="item.enabled ? 'settings-model-card__badge-current' : ''">
-              {{ item.enabled ? "已启用" : "已停用" }}
+              {{ item.enabled ? t("emailSettings.enabled") : t("emailSettings.disabled") }}
             </span>
             <span v-if="item.is_default" class="settings-model-card__badge settings-model-card__badge-current">
-              默认通道
+              {{ t("emailSettings.default_channel") }}
             </span>
           </div>
 
@@ -860,7 +861,7 @@ function secretKeyLabel(provider: EmailProvider) {
 
           <div class="settings-model-card__provider-row">
             <i class="fa-solid fa-envelope"></i>
-            <span>{{ item.sender_email || "未配置发信邮箱" }}</span>
+            <span>{{ item.sender_email || t("emailSettings.no_sender_email") }}</span>
           </div>
 
           <div class="settings-model-card__provider-row">
@@ -869,12 +870,12 @@ function secretKeyLabel(provider: EmailProvider) {
           </div>
 
           <div class="settings-model-card__stat">
-            <span>认证状态</span>
+            <span>{{ t("emailSettings.auth_status") }}</span>
             <strong>{{ describeAuth(item) }}</strong>
           </div>
 
           <div class="settings-model-card__stat">
-            <span>发件人名称</span>
+            <span>{{ t("emailSettings.sender_name") }}</span>
             <strong>{{ describeSenderName(item) }}</strong>
           </div>
 
@@ -943,8 +944,8 @@ function secretKeyLabel(provider: EmailProvider) {
         >
           <span class="settings-model-card-add__icon">+</span>
           <div class="settings-model-card-add__body">
-            <strong>新增邮件通道</strong>
-            <p>根据提供商动态切换表单，创建新的邮件推送配置。</p>
+            <strong>{{ t("emailSettings.add_channel") }}</strong>
+            <p>{{ t("emailSettings.add_card_desc") }}</p>
           </div>
         </button>
       </div>
@@ -954,9 +955,9 @@ function secretKeyLabel(provider: EmailProvider) {
       <div class="settings-modal-card settings-modal-card-clean">
         <div class="settings-modal-head">
           <div>
-            <h4>{{ isCreateMode ? "新增邮件通道" : "编辑邮件通道" }}</h4>
+            <h4>{{ isCreateMode ? t("emailSettings.add_channel") : t("emailSettings.edit_channel") }}</h4>
             <p>
-              {{ isCreateMode ? "先选择提供商，再填写该提供商对应的核心配置。" : "根据当前提供商调整配置，切换接入方式会同步切换字段。" }}
+              {{ isCreateMode ? t("emailSettings.add_channel_desc") : t("emailSettings.edit_channel_desc") }}
             </p>
           </div>
           <button class="settings-modal-close" type="button" @click="closeEditorModal">
@@ -969,7 +970,7 @@ function secretKeyLabel(provider: EmailProvider) {
             <template #trigger>
               <button class="settings-email-tip-btn" type="button">
                 <i class="fa-solid fa-circle-info"></i>
-                <span>配置说明</span>
+                <span>{{ t("emailSettings.config_guide") }}</span>
               </button>
             </template>
             <div class="settings-email-popover settings-email-popover-wide">

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import { api } from "../services/api";
+import { t } from "../services/i18n";
 import { formatServerDateTime } from "../utils/datetime";
 import type {
   SessionDetail,
@@ -146,31 +147,31 @@ function reportSessionIdFromEntry(entry: {
 }
 
 function gradeForSession(entry: ReportEntry): string {
-  if (entry.session.status === "failed") return "较差";
-  if (entry.session.status === "running" || entry.session.status === "waiting_approval") return "进行中";
-  if (entry.verifications.some((item) => item.status === "failed")) return "需关注";
-  if (entry.verifications.some((item) => item.status === "partial")) return "需关注";
-  return "良好";
+  if (entry.session.status === "failed") return t("reports.grade_poor");
+  if (entry.session.status === "running" || entry.session.status === "waiting_approval") return t("reports.grade_in_progress");
+  if (entry.verifications.some((item) => item.status === "failed")) return t("reports.grade_attention");
+  if (entry.verifications.some((item) => item.status === "partial")) return t("reports.grade_attention");
+  return t("reports.grade_good");
 }
 
 function gradeTone(grade: string): string {
-  if (grade === "较差") return "badge-red";
-  if (grade === "需关注") return "badge-yellow";
-  if (grade === "进行中") return "badge-blue";
+  if (grade === t("reports.grade_poor")) return "badge-red";
+  if (grade === t("reports.grade_attention")) return "badge-yellow";
+  if (grade === t("reports.grade_in_progress")) return "badge-blue";
   return "badge-green";
 }
 
 function statusLabel(status: string): string {
-  if (status === "waiting_approval") return "待审批";
-  if (status === "completed") return "已完成";
-  if (status === "failed") return "失败";
-  if (status === "running") return "运行中";
-  if (status === "interrupted") return "已中断";
-  return "空闲";
+  if (status === "waiting_approval") return t("taskpool.status_waiting_approval");
+  if (status === "completed") return t("taskpool.status_completed");
+  if (status === "failed") return t("taskpool.status_failed");
+  if (status === "running") return t("taskpool.status_running");
+  if (status === "interrupted") return t("taskpool.status_interrupted");
+  return t("taskpool.status_idle");
 }
 
 function artifactLabel(artifact: ToolArtifactRecord): string {
-  return artifact.label || artifact.artifact_type || "产物";
+  return artifact.label || artifact.artifact_type || t("reports.artifact");
 }
 
 function formatDateTime(value: string): string {
@@ -501,7 +502,7 @@ async function loadReports(forceRefresh = false) {
     selectedSessionId.value = normalizeSelectedSessionId(result.entries, selectedSessionId.value);
     writeReportsCache(result.entries, selectedSessionId.value);
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : "加载报告失败。";
+    error.value = loadError instanceof Error ? loadError.message : t("reports.load_failed");
   } finally {
     loading.value = false;
   }
@@ -528,7 +529,7 @@ async function loadMoreReports() {
     selectedSessionId.value = normalizeSelectedSessionId(merged, selectedSessionId.value);
     writeReportsCache(merged, selectedSessionId.value);
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : "加载更多报告失败。";
+    error.value = loadError instanceof Error ? loadError.message : t("reports.load_more_failed");
   } finally {
     loadingMore.value = false;
   }
@@ -553,38 +554,38 @@ onMounted(() => {
   <section class="view-page report-page">
     <header class="page-head">
       <div class="head-content">
-        <h2>报告中心</h2>
+        <h2>{{ t("reports.title") }}</h2>
         <p class="head-desc">
-          查看代码审批会话、辩论总结和最终报告产物。
+          {{ t("reports.page_desc") }}
         </p>
       </div>
       <div class="head-actions">
         <button class="primary-btn" :disabled="loading" @click="loadReports(true)">
           <i class="fa-solid fa-rotate-right"></i>
-          刷新
+          {{ t("reports.refresh") }}
         </button>
       </div>
     </header>
 
     <div v-if="error && !reports.length" class="empty-state error-state">
-      <strong>报告加载失败。</strong>
+      <strong>{{ t("reports.load_error_title") }}</strong>
       <p>{{ error }}</p>
     </div>
 
     <div v-else-if="loading && !reports.length" class="empty-state">
-      <strong>正在加载报告...</strong>
-      <p>工作台正在汇总最近的代码审批会话。</p>
+      <strong>{{ t("reports.loading") }}</strong>
+      <p>{{ t("reports.loading_desc") }}</p>
     </div>
 
     <div v-else-if="!reports.length" class="empty-state">
-      <strong>暂时还没有代码审批报告。</strong>
-      <p>发起一次代码审批后，已完成的报告会显示在这里。</p>
+      <strong>{{ t("reports.no_reports") }}</strong>
+      <p>{{ t("reports.no_reports_desc") }}</p>
     </div>
 
     <div v-else class="report-layout">
       <aside class="report-sidebar">
         <div class="sidebar-header">
-          <h3>代码审批批次</h3>
+          <h3>{{ t("reports.review_batches") }}</h3>
         </div>
         <div class="batch-list" @scroll="handleBatchListScroll">
           <article
@@ -607,21 +608,21 @@ onMounted(() => {
             <div class="batch-stats">
               <span class="stat pass">
                 <i class="fa-solid fa-layer-group"></i>
-                {{ entry.workerDispatches.length }} 个任务
+                {{ entry.workerDispatches.length }} {{ t("reports.tasks_unit") }}
               </span>
               <span class="stat fail">
                 <i class="fa-solid fa-shield-halved"></i>
-                {{ entry.verifications.length }} 条校验
+                {{ entry.verifications.length }} {{ t("reports.verifications_unit") }}
               </span>
             </div>
           </article>
 
           <div v-if="loadingMore" class="batch-list-footer">
             <i class="fa-solid fa-spinner fa-spin"></i>
-            <span>正在加载更多报告...</span>
+            <span>{{ t("reports.loading_more") }}</span>
           </div>
           <div v-else-if="!hasMore" class="batch-list-footer muted">
-            <span>已加载全部报告</span>
+            <span>{{ t("reports.all_loaded") }}</span>
           </div>
         </div>
       </aside>
@@ -643,27 +644,27 @@ onMounted(() => {
 
         <div class="report-kpis">
           <article class="kpi-card">
-            <span class="kpi-label">审查任务</span>
+            <span class="kpi-label">{{ t("reports.kpi_review_tasks") }}</span>
             <strong>{{ selectedWorkerSummary.total }}</strong>
             <p>
-              已完成 {{ selectedWorkerSummary.completed }} /
-              运行中 {{ selectedWorkerSummary.running }} /
-              失败 {{ selectedWorkerSummary.failed }}
+              {{ t("taskpool.status_completed") }} {{ selectedWorkerSummary.completed }} /
+              {{ t("taskpool.status_running") }} {{ selectedWorkerSummary.running }} /
+              {{ t("taskpool.status_failed") }} {{ selectedWorkerSummary.failed }}
             </p>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">报告产物</span>
+            <span class="kpi-label">{{ t("reports.kpi_artifacts") }}</span>
             <strong>{{ selectedReport.reportArtifacts.length + selectedReport.artifacts.length }}</strong>
-            <p>合并显示父会话和总结会话的产物。</p>
+            <p>{{ t("reports.kpi_artifacts_desc") }}</p>
           </article>
           <article class="kpi-card">
-            <span class="kpi-label">报告会话</span>
-            <strong>{{ selectedReport.reportSession ? "已就绪" : "待生成" }}</strong>
+            <span class="kpi-label">{{ t("reports.kpi_report_session") }}</span>
+            <strong>{{ selectedReport.reportSession ? t("reports.session_ready") : t("reports.session_pending") }}</strong>
             <p>
               {{
                 selectedReport.reportSession
                   ? `#${selectedReport.reportSession.id.slice(0, 8)}`
-                  : "总结 Agent 尚未完成。"
+                  : t("reports.session_not_complete")
               }}
             </p>
           </article>
@@ -672,7 +673,7 @@ onMounted(() => {
         <div class="detail-content">
           <section class="content-section">
             <div class="section-header">
-              <h4>摘要</h4>
+              <h4>{{ t("reports.section_summary") }}</h4>
               <span class="subtitle mono">code_review_report</span>
             </div>
             <div class="summary-card">
@@ -682,15 +683,15 @@ onMounted(() => {
                 v-html="selectedReportBodyHtml"
               ></div>
               <p v-else class="summary-body muted">
-                暂无内联报告正文，报告会话可能仍在运行中。
+                {{ t("reports.no_report_body") }}
               </p>
             </div>
           </section>
 
           <section class="content-section">
             <div class="section-header">
-              <h4>审查任务</h4>
-              <span class="subtitle mono">评审辩论会话</span>
+              <h4>{{ t("reports.section_review_tasks") }}</h4>
+              <span class="subtitle mono">{{ t("reports.review_debate_sessions") }}</span>
             </div>
             <div class="worker-grid">
               <article
@@ -717,8 +718,8 @@ onMounted(() => {
 
           <section class="content-section">
             <div class="section-header">
-              <h4>报告产物</h4>
-              <span class="subtitle mono">已存储的报告输出</span>
+              <h4>{{ t("reports.section_artifacts") }}</h4>
+              <span class="subtitle mono">{{ t("reports.stored_outputs") }}</span>
             </div>
             <div class="artifact-list">
               <article
@@ -740,8 +741,8 @@ onMounted(() => {
 
           <section class="content-section">
             <div class="section-header">
-              <h4>校验结果</h4>
-              <span class="subtitle mono">会话校验结果</span>
+              <h4>{{ t("reports.section_verification") }}</h4>
+              <span class="subtitle mono">{{ t("reports.session_verifications") }}</span>
             </div>
             <div v-if="selectedReport.verifications.length" class="verification-list">
               <article
@@ -759,7 +760,7 @@ onMounted(() => {
               </article>
             </div>
             <div v-else class="summary-card">
-              <p class="summary-body muted">当前会话还没有记录校验结果。</p>
+              <p class="summary-body muted">{{ t("reports.no_verifications") }}</p>
             </div>
           </section>
         </div>

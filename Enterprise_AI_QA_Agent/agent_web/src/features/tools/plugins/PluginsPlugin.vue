@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMessage } from "naive-ui";
 
 import { api } from "../../../services/api";
+import { t } from "../../../services/i18n";
 import type {
   IntegrationCreateRequest,
   IntegrationKind,
@@ -96,7 +97,7 @@ const apiIntegrations = computed(() => integrations.value.filter((item) => item.
 const providerSummary = computed(() =>
   mcpProviders.value.map((provider) => ({
     key: provider.key,
-    label: `${provider.name}${provider.supports_document_import ? " · 支持文档导入" : ""}`,
+    label: `${provider.name}${provider.supports_document_import ? ` · ${t("plugins.supports_doc_import")}` : ""}`,
   })),
 );
 
@@ -104,7 +105,7 @@ const canUseJsonImport = computed(() => formKind.value === "mcp" && !editingId.v
 
 const managedToolsModalTitle = computed(() => {
   const key = managedToolsModalKey.value;
-  if (!key) return "MCP 工具";
+  if (!key) return t("plugins.mcp_tools");
   return managedMcpServers.value.find((s) => s.key === key)?.name ?? key;
 });
 
@@ -163,12 +164,12 @@ function parseJsonMap(label: string, raw: string): Record<string, string> {
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`${label} 必须是 JSON 对象`);
+      throw new Error(`${label} ${t("plugins.must_be_json_object")}`);
     }
 
     return normalizeUnknownMap(parsed);
   } catch (err) {
-    throw new Error(err instanceof Error ? err.message : `${label} 解析失败`);
+    throw new Error(err instanceof Error ? err.message : `${label} ${t("plugins.parse_failed")}`);
   }
 }
 
@@ -187,12 +188,12 @@ function parseHeaderLines(raw: string): Record<string, string> {
     }
     const separatorIndex = normalized.indexOf(":");
     if (separatorIndex <= 0) {
-      throw new Error(`请求头格式不正确：${normalized}`);
+      throw new Error(`${t("plugins.header_format_error")}${normalized}`);
     }
     const key = normalized.slice(0, separatorIndex).trim();
     const value = normalized.slice(separatorIndex + 1).trim();
     if (!key || !value) {
-      throw new Error(`请求头格式不正确：${normalized}`);
+      throw new Error(`${t("plugins.header_format_error")}${normalized}`);
     }
     result[key] = value;
   }
@@ -226,8 +227,8 @@ function buildPayload(): IntegrationCreateRequest {
   const headers =
     formKind.value === "mcp" && mcpCreateMode.value === "manual"
       ? parseHeaderLines(formHeadersLines.value)
-      : parseJsonMap("请求头", formHeadersJson.value);
-  const env = parseJsonMap("环境变量", formEnvJson.value);
+      : parseJsonMap(t("plugins.label_headers"), formHeadersJson.value);
+  const env = parseJsonMap(t("plugins.label_env"), formEnvJson.value);
   const payload: IntegrationCreateRequest = {
     name: formName.value.trim(),
     kind: formKind.value,
@@ -273,18 +274,18 @@ function buildPayload(): IntegrationCreateRequest {
   }
 
   if (!payload.name) {
-    throw new Error("接入名称不能为空");
+    throw new Error(t("plugins.name_required"));
   }
 
   if (formKind.value === "mcp") {
     if (formTransport.value === "stdio" && !payload.command) {
-      throw new Error("stdio 方式需要填写启动命令");
+      throw new Error(t("plugins.stdio_command_required"));
     }
     if (formTransport.value !== "stdio" && !payload.endpoint_url) {
-      throw new Error("远程 MCP 需要填写 Endpoint URL");
+      throw new Error(t("plugins.endpoint_url_required"));
     }
   } else if (!payload.base_url) {
-    throw new Error("API 接入需要填写 Base URL");
+    throw new Error(t("plugins.base_url_required"));
   }
 
   return payload;
@@ -354,7 +355,7 @@ function normalizeJsonTransport(config: RawMcpJsonConfig): IntegrationTransport 
 
 function extractJsonServerEntries(parsed: unknown): Array<[string, RawMcpJsonConfig]> {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("JSON 导入内容必须是对象");
+    throw new Error(t("plugins.json_must_be_object"));
   }
 
   const root = parsed as Record<string, unknown>;
@@ -373,7 +374,7 @@ function extractJsonServerEntries(parsed: unknown): Array<[string, RawMcpJsonCon
     return entries as Array<[string, RawMcpJsonConfig]>;
   }
 
-  throw new Error("没有在 JSON 中找到可导入的 MCP 配置");
+  throw new Error(t("plugins.no_importable_config"));
 }
 
 function buildPayloadFromJsonEntry(name: string, config: RawMcpJsonConfig): IntegrationCreateRequest {
@@ -413,32 +414,32 @@ async function importMcpFromJson() {
   try {
     const rawJson = mcpJsonText.value.trim();
     if (!rawJson) {
-      throw new Error("请先粘贴 MCP JSON 配置");
+      throw new Error(t("plugins.paste_json_first"));
     }
     const parsed = JSON.parse(rawJson) as unknown;
     const entries = extractJsonServerEntries(parsed);
     if (!entries.length) {
-      throw new Error("没有可导入的 MCP 配置");
+      throw new Error(t("plugins.no_importable_config"));
     }
 
     const created: IntegrationRecord[] = [];
     for (const [name, config] of entries) {
       const payload = buildPayloadFromJsonEntry(name, config);
       if (payload.transport === "stdio" && !payload.command) {
-        throw new Error(`MCP ${name} 缺少 command，无法按 stdio 导入`);
+        throw new Error(`MCP ${name} ${t("plugins.missing_command_stdio")}`);
       }
       if (payload.transport !== "stdio" && !payload.endpoint_url) {
-        throw new Error(`MCP ${name} 缺少 url / endpoint_url`);
+        throw new Error(`MCP ${name} ${t("plugins.missing_url")}`);
       }
       created.push(await api.createIntegration(payload));
     }
 
     integrations.value = [...created, ...integrations.value].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     await loadData();
-    toast.success(`已导入 ${created.length} 个 MCP 配置`, { duration: 2200 });
+    toast.success(`${t("plugins.imported_count", { count: String(created.length) })}`, { duration: 2200 });
     closeModal();
   } catch (err) {
-    const detail = err instanceof Error ? err.message : "JSON 导入失败";
+    const detail = err instanceof Error ? err.message : t("plugins.json_import_failed");
     toast.error(detail);
   } finally {
     saving.value = false;
@@ -458,7 +459,7 @@ async function loadData() {
     managedMcpServers.value = managedItems;
     mcpProviders.value = providerItems;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "加载第三方接入失败";
+    error.value = err instanceof Error ? err.message : t("plugins.load_failed");
   } finally {
     loading.value = false;
   }
@@ -491,11 +492,11 @@ async function saveIntegration() {
       ? await api.updateIntegration(editingId.value, payload)
       : await api.createIntegration(payload);
     upsertIntegration(saved);
-    toast.success(editingId.value ? "接入已更新" : "接入已创建", { duration: 2200 });
+    toast.success(editingId.value ? t("plugins.updated") : t("plugins.created"), { duration: 2200 });
     await loadData();
     closeModal();
   } catch (err) {
-    const detail = err instanceof Error ? err.message : "保存接入失败";
+    const detail = err instanceof Error ? err.message : t("plugins.save_failed");
     toast.error(detail);
   } finally {
     saving.value = false;
@@ -511,9 +512,9 @@ async function deleteIntegration(record: IntegrationRecord) {
     await api.deleteIntegration(record.id);
     integrations.value = integrations.value.filter((item) => item.id !== record.id);
     await loadData();
-    toast.success(`已删除接入：${record.name}`, { duration: 2200 });
+    toast.success(`${t("plugins.deleted")}: ${record.name}`, { duration: 2200 });
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "删除接入失败");
+    toast.error(err instanceof Error ? err.message : t("plugins.delete_failed"));
   } finally {
     deletingId.value = "";
   }
@@ -526,7 +527,7 @@ async function testIntegration(record: IntegrationRecord) {
     testResult.value = result;
     toast[result.ok ? "success" : "warning"](result.message, { duration: 2600 });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : "测试接入失败";
+    const detail = err instanceof Error ? err.message : t("plugins.test_failed");
     testResult.value = {
       ok: false,
       message: detail,
@@ -551,7 +552,7 @@ async function openManagedToolsModal(server: ManagedMCPServerDescriptor) {
       [server.key]: response.tools,
     };
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "加载 MCP 工具失败");
+    toast.error(err instanceof Error ? err.message : t("plugins.load_tools_failed"));
     closeManagedToolsModal();
   } finally {
     toolsLoadingKey.value = "";
@@ -573,7 +574,7 @@ async function testManagedServer(server: ManagedMCPServerDescriptor) {
     const text = `${result.message} · ${meta}`;
     toast[result.ok ? "success" : "warning"](text, { duration: 3200 });
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : "统一 MCP 测试失败");
+    toast.error(err instanceof Error ? err.message : t("plugins.managed_test_failed"));
   } finally {
     managedTestingKey.value = "";
   }
@@ -609,26 +610,26 @@ onBeforeUnmount(() => {
   <div class="tools-tab-pane">
     <div class="pane-header">
       <div class="header-left">
-        <h3 class="section-title">第三方平台接入</h3>
-        <p class="head-desc">统一管理 API 接入、外部 MCP 接入，以及系统内置和外部 MCP 的可用能力。</p>
+        <h3 class="section-title">{{ t("plugins.title") }}</h3>
+        <p class="head-desc">{{ t("plugins.desc") }}</p>
       </div>
     </div>
 
     <div class="main-tabs">
       <button :class="{ active: activeTab === 'api' }" @click="activeTab = 'api'">
-        API 接入 <span class="count">{{ apiIntegrations.length }}</span>
+        {{ t("plugins.tab_api") }} <span class="count">{{ apiIntegrations.length }}</span>
       </button>
       <button :class="{ active: activeTab === 'mcp' }" @click="activeTab = 'mcp'">
-        MCP 接入 <span class="count">{{ mcpIntegrations.length }}</span>
+        {{ t("plugins.tab_mcp") }} <span class="count">{{ mcpIntegrations.length }}</span>
       </button>
       <button :class="{ active: activeTab === 'managed' }" @click="activeTab = 'managed'">
-        统一 MCP <span class="count">{{ managedMcpServers.length }}</span>
+        {{ t("plugins.tab_managed") }} <span class="count">{{ managedMcpServers.length }}</span>
       </button>
     </div>
 
     <div v-if="loading" class="plugins-empty">
       <i class="fa-solid fa-spinner fa-spin"></i>
-      <p>正在加载接入和 MCP 管理信息...</p>
+      <p>{{ t("plugins.loading") }}</p>
     </div>
     <div v-else-if="error" class="plugins-empty plugins-empty--error">
       <i class="fa-solid fa-circle-exclamation"></i>
@@ -643,29 +644,29 @@ onBeforeUnmount(() => {
                 <span class="status-dot" :class="{ active: item.enabled }"></span>
                 <h5>{{ item.name }}</h5>
               </div>
-              <span class="meta-badge">{{ item.enabled ? "已启用" : "已停用" }}</span>
+              <span class="meta-badge">{{ item.enabled ? t("plugins.enabled") : t("plugins.disabled") }}</span>
             </div>
-            <p class="card-desc">{{ item.description || "暂无说明" }}</p>
+            <p class="card-desc">{{ item.description || t("plugins.no_description") }}</p>
             <div class="integration-meta">
-              <div class="meta-item"><i class="fa-solid fa-link"></i> {{ item.base_url || "未设置 Base URL" }}</div>
-              <div class="meta-item"><i class="fa-solid fa-book"></i> {{ item.document_url || "未设置文档地址" }}</div>
+              <div class="meta-item"><i class="fa-solid fa-link"></i> {{ item.base_url || t("plugins.no_base_url") }}</div>
+              <div class="meta-item"><i class="fa-solid fa-book"></i> {{ item.document_url || t("plugins.no_doc_url") }}</div>
               <div class="meta-item"><i class="fa-solid fa-key"></i> {{ item.auth_type }}</div>
-              <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ item.project_name || "未设置所属项目" }}</div>
+              <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ item.project_name || t("plugins.no_project") }}</div>
             </div>
             <div class="integration-actions">
-              <button class="ghost-btn" @click="openEdit(item)">编辑</button>
+              <button class="ghost-btn" @click="openEdit(item)">{{ t("common.edit") }}</button>
               <button class="ghost-btn" :disabled="testingId === item.id" @click="testIntegration(item)">
-                {{ testingId === item.id ? "测试中..." : "测试连接" }}
+                {{ testingId === item.id ? t("plugins.testing") : t("plugins.test_connection") }}
               </button>
               <button class="ghost-btn danger" :disabled="deletingId === item.id" @click="deleteIntegration(item)">
-                {{ deletingId === item.id ? "删除中..." : "删除" }}
+                {{ deletingId === item.id ? t("plugins.deleting") : t("common.delete") }}
               </button>
             </div>
           </article>
         </div>
         <div v-else class="plugins-empty">
           <i class="fa-solid fa-cloud-slash"></i>
-          <p>还没有配置 API 接入。</p>
+          <p>{{ t("plugins.no_api") }}</p>
         </div>
       </section>
 
@@ -679,27 +680,27 @@ onBeforeUnmount(() => {
               </div>
               <span class="meta-badge">{{ item.transport || "unknown" }}</span>
             </div>
-            <p class="card-desc">{{ item.description || "暂无说明" }}</p>
+            <p class="card-desc">{{ item.description || t("plugins.no_description") }}</p>
             <div class="integration-meta">
-              <div class="meta-item"><i class="fa-solid fa-network-wired"></i> {{ item.endpoint_url || item.command || "未设置连接信息" }}</div>
-              <div class="meta-item"><i class="fa-solid fa-book"></i> {{ item.document_url || "未设置文档地址" }}</div>
-              <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ item.project_name || "未设置所属项目" }}</div>
-              <div class="meta-item"><i class="fa-solid fa-screwdriver-wrench"></i> {{ item.capabilities.join(", ") || "未填写能力" }}</div>
+              <div class="meta-item"><i class="fa-solid fa-network-wired"></i> {{ item.endpoint_url || item.command || t("plugins.no_connection") }}</div>
+              <div class="meta-item"><i class="fa-solid fa-book"></i> {{ item.document_url || t("plugins.no_doc_url") }}</div>
+              <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ item.project_name || t("plugins.no_project") }}</div>
+              <div class="meta-item"><i class="fa-solid fa-screwdriver-wrench"></i> {{ item.capabilities.join(", ") || t("plugins.no_capabilities") }}</div>
             </div>
             <div class="integration-actions">
-              <button class="ghost-btn" @click="openEdit(item)">编辑</button>
+              <button class="ghost-btn" @click="openEdit(item)">{{ t("common.edit") }}</button>
               <button class="ghost-btn" :disabled="testingId === item.id" @click="testIntegration(item)">
-                {{ testingId === item.id ? "测试中..." : "测试连接" }}
+                {{ testingId === item.id ? t("plugins.testing") : t("plugins.test_connection") }}
               </button>
               <button class="ghost-btn danger" :disabled="deletingId === item.id" @click="deleteIntegration(item)">
-                {{ deletingId === item.id ? "删除中..." : "删除" }}
+                {{ deletingId === item.id ? t("plugins.deleting") : t("common.delete") }}
               </button>
             </div>
           </article>
         </div>
         <div v-else class="plugins-empty">
           <i class="fa-solid fa-plug-circle-xmark"></i>
-          <p>还没有配置外部 MCP 接入。</p>
+          <p>{{ t("plugins.no_mcp") }}</p>
         </div>
       </section>
 
@@ -721,8 +722,8 @@ onBeforeUnmount(() => {
             <div class="integration-meta">
               <div class="meta-item"><i class="fa-solid fa-shuffle"></i> {{ server.transport }}</div>
               <div class="meta-item"><i class="fa-solid fa-signal"></i> {{ server.status }}</div>
-              <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ server.project_name || "未设置所属项目" }}</div>
-              <div class="meta-item"><i class="fa-solid fa-book"></i> {{ server.endpoint_url || server.document_url || "无远端地址" }}</div>
+              <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ server.project_name || t("plugins.no_project") }}</div>
+              <div class="meta-item"><i class="fa-solid fa-book"></i> {{ server.endpoint_url || server.document_url || t("plugins.no_remote_url") }}</div>
             </div>
             <div class="tag-row">
               <span v-for="capability in server.capabilities" :key="capability">{{ capability }}</span>
@@ -731,7 +732,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="managed-card-footer">
-              <div class="managed-action-bar" role="group" aria-label="MCP 操作">
+              <div class="managed-action-bar" role="group" :aria-label="t('plugins.mcp_actions')">
                 <button
                   type="button"
                   class="managed-action-btn managed-action-btn--tools"
@@ -739,7 +740,7 @@ onBeforeUnmount(() => {
                   @click="openManagedToolsModal(server)"
                 >
                   <i class="fa-solid fa-layer-group" aria-hidden="true"></i>
-                  <span>{{ toolsLoadingKey === server.key ? "加载中…" : "查看工具" }}</span>
+                  <span>{{ toolsLoadingKey === server.key ? t("plugins.loading_tools") : t("plugins.view_tools") }}</span>
                 </button>
                 <button
                   type="button"
@@ -748,7 +749,7 @@ onBeforeUnmount(() => {
                   @click="testManagedServer(server)"
                 >
                   <i class="fa-solid fa-plug-circle-check" aria-hidden="true"></i>
-                  <span>{{ managedTestingKey === server.key ? "测试中…" : "统一测试" }}</span>
+                  <span>{{ managedTestingKey === server.key ? t("plugins.testing") : t("plugins.unified_test") }}</span>
                 </button>
               </div>
             </div>
@@ -756,7 +757,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-else class="plugins-empty">
           <i class="fa-solid fa-diagram-project"></i>
-          <p>当前还没有可管理的 MCP 服务。</p>
+          <p>{{ t("plugins.no_managed") }}</p>
         </div>
       </section>
     </template>
@@ -765,9 +766,9 @@ onBeforeUnmount(() => {
       <section class="tools-modal integration-modal">
         <header class="tools-modal-head">
           <div>
-            <h3>{{ editingId ? "编辑接入" : `新增 ${formKind === 'mcp' ? 'MCP' : 'API'} 接入` }}</h3>
+            <h3>{{ editingId ? t("plugins.edit_integration") : `${t("plugins.new_integration")} ${formKind === 'mcp' ? 'MCP' : 'API'}` }}</h3>
             <p v-if="formKind === 'mcp'"></p>
-            <p v-else>配置完成后，可供 API 文档导入页和后续 API 测试模式复用。</p>
+            <p v-else>{{ t("plugins.api_form_hint") }}</p>
           </div>
           <button class="icon-btn" @click="closeModal"><i class="fa-solid fa-xmark"></i></button>
         </header>
@@ -775,24 +776,24 @@ onBeforeUnmount(() => {
         <div class="modal-body modal-body-scroll">
           <template v-if="formKind === 'mcp'">
             <div v-if="canUseJsonImport" class="mode-switch">
-              <button :class="{ active: mcpCreateMode === 'manual' }" @click="mcpCreateMode = 'manual'">手动创建</button>
-              <button :class="{ active: mcpCreateMode === 'json' }" @click="mcpCreateMode = 'json'">JSON 导入</button>
+              <button :class="{ active: mcpCreateMode === 'manual' }" @click="mcpCreateMode = 'manual'">{{ t("plugins.manual_create") }}</button>
+              <button :class="{ active: mcpCreateMode === 'json' }" @click="mcpCreateMode = 'json'">{{ t("plugins.json_import") }}</button>
             </div>
 
             <template v-if="mcpCreateMode === 'manual'">
               <div class="compact-form mcp-manual-grid">
                 <div class="field-block">
-                  <label>接入名称</label>
-                  <input v-model="formName" placeholder="我的 MCP 服务器" />
+                  <label>{{ t("plugins.form_name") }}</label>
+                  <input v-model="formName" :placeholder="t('plugins.ph_mcp_name')" />
                 </div>
 
                 <div class="field-block">
-                  <label>说明</label>
-                  <input v-model="formDescription" placeholder="例如：连接 Postman，获取工作区和接口文档" />
+                  <label>{{ t("plugins.form_description") }}</label>
+                  <input v-model="formDescription" :placeholder="t('plugins.ph_mcp_desc')" />
                 </div>
 
                 <div class="field-block">
-                  <label>传输方式</label>
+                  <label>{{ t("plugins.form_transport") }}</label>
                   <select v-model="formTransport" class="transport-select transport-select-fluid">
                     <option value="stdio">stdio</option>
                     <option value="http">Streamable HTTP</option>
@@ -801,7 +802,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="field-block" v-if="formTransport === 'stdio'">
-                  <label>命令</label>
+                  <label>{{ t("plugins.form_command") }}</label>
                   <input v-model="formCommand" placeholder="npx -y @modelcontextprotocol/server-filesystem ." />
                 </div>
 
@@ -811,7 +812,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="field-block mcp-field-span">
-                  <label>请求头</label>
+                  <label>{{ t("plugins.form_headers") }}</label>
                   <textarea
                     v-model="formHeadersLines"
                     rows="4"
@@ -819,35 +820,35 @@ onBeforeUnmount(() => {
                     class="headers-textarea"
                     placeholder="Authorization: Bearer xxx&#10;Accept: application/json, text/event-stream"
                   ></textarea>
-                  <p class="field-hint">每行一个，格式：Header: value</p>
+                  <p class="field-hint">{{ t("plugins.hint_header_format") }}</p>
                 </div>
 
                 <details class="advanced-panel mcp-field-span">
-                  <summary>高级配置（可选）</summary>
+                  <summary>{{ t("plugins.advanced_config") }}</summary>
                   <div class="advanced-grid">
                     <div class="field-block">
-                      <label>所属项目</label>
-                      <input v-model="formProjectName" placeholder="例如：mall-order-service" />
+                      <label>{{ t("plugins.form_project") }}</label>
+                      <input v-model="formProjectName" placeholder="e.g. mall-order-service" />
                     </div>
 
                     <div class="field-block">
-                      <label>默认文档地址</label>
-                      <input v-model="formDocumentUrl" placeholder="如果这个 MCP 自带可直接导入的文档地址，可填这里" />
+                      <label>{{ t("plugins.form_document_url") }}</label>
+                      <input v-model="formDocumentUrl" :placeholder="t('plugins.ph_document_url')" />
                     </div>
 
                     <div class="field-block">
-                      <label>环境变量（JSON）</label>
+                      <label>{{ t("plugins.form_env") }}</label>
                       <textarea v-model="formEnvJson" rows="5" spellcheck="false"></textarea>
                     </div>
 
                     <div class="field-block">
-                      <label>能力列表</label>
+                      <label>{{ t("plugins.form_capabilities") }}</label>
                       <input v-model="formCapabilities" placeholder="workspace-browse, api-import" />
                     </div>
 
                     <label class="check-row">
                       <input v-model="formEnabled" type="checkbox">
-                      <span>创建后立即启用</span>
+                      <span>{{ t("plugins.enable_after_create") }}</span>
                     </label>
                   </div>
                 </details>
@@ -856,7 +857,7 @@ onBeforeUnmount(() => {
 
             <template v-else>
               <div class="json-import-panel mcp-json-import">
-                <label>JSON 导入</label>
+                <label>{{ t("plugins.json_import") }}</label>
                 <textarea
                   v-model="mcpJsonText"
                   rows="6"
@@ -865,7 +866,7 @@ onBeforeUnmount(() => {
                   :placeholder="mcpJsonPlaceholder"
                 ></textarea>
                 <p class="json-hint">
-                  支持粘贴 OpenCowork 风格的 <code>{ "mcpServers": { ... } }</code>，也支持直接粘贴单个服务器对象。
+                  {{ t("plugins.json_import_hint") }}
                 </p>
               </div>
             </template>
@@ -873,42 +874,42 @@ onBeforeUnmount(() => {
 
           <template v-else>
             <div class="settings-group">
-              <h4 class="group-title">基础设置</h4>
+              <h4 class="group-title">{{ t("plugins.basic_settings") }}</h4>
               <div class="settings-list">
                 <div class="setting-item">
                   <div class="setting-info">
-                    <label>接入名称 <span class="required">*</span></label>
-                    <p>用于在系统内标识这个接入。</p>
+                    <label>{{ t("plugins.form_name") }} <span class="required">*</span></label>
+                    <p>{{ t("plugins.hint_name") }}</p>
                   </div>
                   <div class="setting-control">
-                    <input v-model="formName" placeholder="例如：Orders API" />
+                    <input v-model="formName" placeholder="e.g. Orders API" />
                   </div>
                 </div>
 
                 <div class="setting-item">
                   <div class="setting-info">
-                    <label>所属项目</label>
-                    <p>建议填写，后续 API 文档导入和接口测试模式都会复用。</p>
+                    <label>{{ t("plugins.form_project") }}</label>
+                    <p>{{ t("plugins.hint_project") }}</p>
                   </div>
                   <div class="setting-control">
-                    <input v-model="formProjectName" placeholder="例如：mall-order-service" />
+                    <input v-model="formProjectName" placeholder="e.g. mall-order-service" />
                   </div>
                 </div>
 
                 <div class="setting-item">
                   <div class="setting-info">
-                    <label>说明</label>
-                    <p>描述这个接入负责的服务或平台。</p>
+                    <label>{{ t("plugins.form_description") }}</label>
+                    <p>{{ t("plugins.hint_description") }}</p>
                   </div>
                   <div class="setting-control">
-                    <input v-model="formDescription" placeholder="说明信息..." />
+                    <input v-model="formDescription" :placeholder="t('plugins.ph_description')" />
                   </div>
                 </div>
 
                 <div class="setting-item">
                   <div class="setting-info">
                     <label>Base URL</label>
-                    <p>第三方 API 的基础地址。</p>
+                    <p>{{ t("plugins.hint_base_url") }}</p>
                   </div>
                   <div class="setting-control">
                     <input v-model="formBaseUrl" placeholder="https://api.example.com" />
@@ -917,8 +918,8 @@ onBeforeUnmount(() => {
 
                 <div class="setting-item">
                   <div class="setting-info">
-                    <label>文档地址</label>
-                    <p>OpenAPI / Swagger / Markdown 文档地址。</p>
+                    <label>{{ t("plugins.form_document_url") }}</label>
+                    <p>{{ t("plugins.hint_doc_url") }}</p>
                   </div>
                   <div class="setting-control">
                     <input v-model="formDocumentUrl" placeholder="https://api.example.com/openapi.json" />
@@ -927,8 +928,8 @@ onBeforeUnmount(() => {
 
                 <div class="setting-item">
                   <div class="setting-info">
-                    <label>鉴权方式</label>
-                    <p>接口测试和文档拉取时复用。</p>
+                    <label>{{ t("plugins.form_auth_type") }}</label>
+                    <p>{{ t("plugins.hint_auth_type") }}</p>
                   </div>
                   <div class="setting-control">
                     <select v-model="formAuthType">
@@ -943,17 +944,17 @@ onBeforeUnmount(() => {
                 <div class="setting-item" v-if="formAuthType === 'bearer' || formAuthType === 'api_key'">
                   <div class="setting-info">
                     <label>{{ formAuthType === "api_key" ? "API Key" : "Bearer Token" }}</label>
-                    <p>会安全保存，不会直接展示到管理卡片中。</p>
+                    <p>{{ t("plugins.hint_token_safe") }}</p>
                   </div>
                   <div class="setting-control">
-                    <input v-model="formAuthToken" type="password" placeholder="请输入令牌" />
+                    <input v-model="formAuthToken" type="password" :placeholder="t('plugins.ph_token')" />
                   </div>
                 </div>
 
                 <div class="setting-item" v-if="formAuthType === 'api_key'">
                   <div class="setting-info">
-                    <label>Header 名称</label>
-                    <p>默认使用 X-API-Key。</p>
+                    <label>{{ t("plugins.form_header_name") }}</label>
+                    <p>{{ t("plugins.hint_header_name") }}</p>
                   </div>
                   <div class="setting-control">
                     <input v-model="formApiKeyHeader" placeholder="X-API-Key" />
@@ -962,7 +963,7 @@ onBeforeUnmount(() => {
 
                 <div class="setting-item" v-if="formAuthType === 'basic'">
                   <div class="setting-info">
-                    <label>用户名</label>
+                    <label>{{ t("plugins.form_username") }}</label>
                   </div>
                   <div class="setting-control">
                     <input v-model="formUsername" placeholder="username" />
@@ -971,7 +972,7 @@ onBeforeUnmount(() => {
 
                 <div class="setting-item" v-if="formAuthType === 'basic'">
                   <div class="setting-info">
-                    <label>密码</label>
+                    <label>{{ t("plugins.form_password") }}</label>
                   </div>
                   <div class="setting-control">
                     <input v-model="formPassword" type="password" placeholder="password" />
@@ -980,16 +981,16 @@ onBeforeUnmount(() => {
               </div>
 
               <details class="advanced-panel">
-                <summary>高级配置（可选）</summary>
+                <summary>{{ t("plugins.advanced_config") }}</summary>
                 <div class="advanced-grid">
                   <div class="field-block">
-                    <label>请求头（JSON）</label>
+                    <label>{{ t("plugins.form_headers_json") }}</label>
                     <textarea v-model="formHeadersJson" rows="5" spellcheck="false"></textarea>
                   </div>
 
                   <label class="check-row">
                     <input v-model="formEnabled" type="checkbox">
-                    <span>创建后立即启用</span>
+                    <span>{{ t("plugins.enable_after_create") }}</span>
                   </label>
                 </div>
               </details>
@@ -998,14 +999,14 @@ onBeforeUnmount(() => {
         </div>
 
         <footer class="tools-modal-foot">
-          <button class="ghost-btn" @click="closeModal">取消</button>
+          <button class="ghost-btn" @click="closeModal">{{ t("common.cancel") }}</button>
           <button
             v-if="formKind === 'mcp' && canUseJsonImport && mcpCreateMode === 'json'"
             class="primary-btn"
             :disabled="saving"
             @click="importMcpFromJson"
           >
-            {{ saving ? "导入中..." : "导入 MCP 配置" }}
+            {{ saving ? t("plugins.importing") : t("plugins.import_mcp_config") }}
           </button>
           <button
             v-else
@@ -1013,7 +1014,7 @@ onBeforeUnmount(() => {
             :disabled="saving"
             @click="saveIntegration"
           >
-            {{ saving ? "保存中..." : (editingId ? "保存修改" : "添加服务器") }}
+            {{ saving ? t("plugins.saving") : (editingId ? t("plugins.save_changes") : t("plugins.add_server")) }}
           </button>
         </footer>
       </section>
@@ -1028,7 +1029,7 @@ onBeforeUnmount(() => {
         <header class="tools-modal-head">
           <div>
             <h3>{{ managedToolsModalTitle }}</h3>
-            <p>当前 MCP 暴露的工具一览</p>
+            <p>{{ t("plugins.managed_tools_desc") }}</p>
           </div>
           <button type="button" class="icon-btn" @click="closeManagedToolsModal">
             <i class="fa-solid fa-xmark"></i>
@@ -1036,10 +1037,10 @@ onBeforeUnmount(() => {
         </header>
         <div class="modal-body modal-body-scroll">
           <template v-if="toolsLoadingKey === managedToolsModalKey">
-            <p class="tools-empty">正在加载工具...</p>
+            <p class="tools-empty">{{ t("plugins.loading_tools") }}</p>
           </template>
           <template v-else-if="!managedToolsModalTools.length">
-            <p class="tools-empty">当前 MCP 暂未暴露可用工具。</p>
+            <p class="tools-empty">{{ t("plugins.no_tools_exposed") }}</p>
           </template>
           <div v-else class="tool-list">
             <div v-for="tool in managedToolsModalTools" :key="tool.key" class="tool-item">
@@ -1047,12 +1048,12 @@ onBeforeUnmount(() => {
                 <strong>{{ tool.name }}</strong>
                 <span class="tool-kind">{{ tool.source_kind }}</span>
               </div>
-              <p>{{ tool.description || "无描述" }}</p>
+              <p>{{ tool.description || t("plugins.no_description") }}</p>
             </div>
           </div>
         </div>
         <footer class="tools-modal-foot">
-          <button type="button" class="ghost-btn" @click="closeManagedToolsModal">关闭</button>
+          <button type="button" class="ghost-btn" @click="closeManagedToolsModal">{{ t("common.close") }}</button>
         </footer>
       </section>
     </div>

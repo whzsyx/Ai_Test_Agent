@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
+import { t } from "../../services/i18n";
 import type { ExecutionEvent, PendingInputQueueEntry } from "../../types";
 import { useSessionStore } from "../../stores/session";
 import { formatServerTime } from "../../utils/datetime";
@@ -20,11 +21,11 @@ const queueEntries = computed(() => sessionStore.pendingInputQueue.slice(0, 6));
 const transcriptStats = computed(() => {
   const summary = sessionStore.transcriptSummary;
   return [
-    { key: "conversation", label: "会话消息", value: summary.conversation_count, tone: "neutral" },
-    { key: "tool", label: "工具消息", value: summary.tool_count, tone: "tool" },
-    { key: "error", label: "错误消息", value: summary.error_count, tone: "error" },
-    { key: "eligible", label: "可回填上下文", value: summary.context_eligible_count, tone: "success" },
-    { key: "queue", label: "排队轮次", value: sessionStore.queuedTurnCount, tone: "queue" },
+    { key: "conversation", label: t("eventConsole.conversation_messages"), value: summary.conversation_count, tone: "neutral" },
+    { key: "tool", label: t("eventConsole.tool_messages"), value: summary.tool_count, tone: "tool" },
+    { key: "error", label: t("eventConsole.error_messages"), value: summary.error_count, tone: "error" },
+    { key: "eligible", label: t("eventConsole.context_eligible"), value: summary.context_eligible_count, tone: "success" },
+    { key: "queue", label: t("eventConsole.queued_turns"), value: sessionStore.queuedTurnCount, tone: "queue" },
   ];
 });
 
@@ -42,25 +43,25 @@ function previewText(value: string, limit = 96) {
 }
 
 function queueBehaviorLabel(value: string) {
-  if (value === "interrupt_then_retry") return "中断后重试";
-  if (value === "enqueue_if_busy") return "忙时排队";
-  if (value === "reject_when_busy") return "忙时拒绝";
-  return value || "忙时排队";
+  if (value === "interrupt_then_retry") return t("eventConsole.behavior_interrupt_retry");
+  if (value === "enqueue_if_busy") return t("eventConsole.behavior_enqueue");
+  if (value === "reject_when_busy") return t("eventConsole.behavior_reject");
+  return value || t("eventConsole.behavior_enqueue");
 }
 
 function statusLabel(value: string) {
-  if (!value) return "待处理";
+  if (!value) return t("eventConsole.status_pending");
   const normalized = value.replace(/_/g, " ");
   const mapping: Record<string, string> = {
-    running: "运行中",
-    "waiting approval": "等待审批",
-    interrupted: "已中断",
-    completed: "已完成",
-    failed: "失败",
-    idle: "空闲",
-    busy: "忙碌中",
-    "interrupt active turn": "中断当前轮次",
-    "wait for active turn": "等待当前轮次结束",
+    running: t("eventConsole.status_running"),
+    "waiting approval": t("eventConsole.status_waiting_approval"),
+    interrupted: t("eventConsole.status_interrupted"),
+    completed: t("eventConsole.status_completed"),
+    failed: t("eventConsole.status_failed"),
+    idle: t("eventConsole.status_idle"),
+    busy: t("eventConsole.status_busy"),
+    "interrupt active turn": t("eventConsole.status_interrupt_turn"),
+    "wait for active turn": t("eventConsole.status_wait_turn"),
   };
   return mapping[normalized] || normalized;
 }
@@ -73,19 +74,19 @@ function eventMessage(event: ExecutionEvent) {
     const busyStatus = statusLabel(String(payload.busy_status || "busy").trim());
     const queueDepth = String(payload.queue_depth || "0").trim();
     const queueBehavior = queueBehaviorLabel(String(payload.queue_behavior || "enqueue_if_busy").trim());
-    return `轮次 ${queuedTurnId || "（待分配）"} 已进入队列，当前会话状态为 ${busyStatus}，队列深度 ${queueDepth}，模式 ${queueBehavior}。`;
+    return t("eventConsole.msg_queued", { turnId: queuedTurnId || t("eventConsole.unassigned"), status: busyStatus, depth: queueDepth, behavior: queueBehavior });
   }
 
   if (event.type === "input.dequeued") {
     const queueEntryId = String(payload.queue_entry_id || "").trim();
     const remaining = String(payload.remaining_queue_depth || "0").trim();
-    return `排队输入 ${queueEntryId || "（未知）"} 已出队，剩余 ${remaining} 项。`;
+    return t("eventConsole.msg_dequeued", { entryId: queueEntryId || t("eventConsole.unknown"), remaining });
   }
 
   if (event.type === "queue.interrupted_turn_superseded") {
     const supersededTurnId = String(payload.superseded_turn_id || "").trim();
     const nextTurnId = String(payload.next_turn_id || "").trim();
-    return `已中断轮次 ${supersededTurnId || "（未知）"} 被排队轮次 ${nextTurnId || "（未知）"} 顶替。`;
+    return t("eventConsole.msg_superseded", { superseded: supersededTurnId || t("eventConsole.unknown"), next: nextTurnId || t("eventConsole.unknown") });
   }
 
   if (
@@ -93,7 +94,7 @@ function eventMessage(event: ExecutionEvent) {
     String(payload.source || "").trim() === "queued_input"
   ) {
     const queueEntryId = String(payload.queue_entry_id || "").trim();
-    return `已请求中断当前执行，以便排队输入 ${queueEntryId || "（未知）"} 下一步运行。`;
+    return t("eventConsole.msg_interrupt", { entryId: queueEntryId || t("eventConsole.unknown") });
   }
 
   const message = payload.message;
@@ -112,9 +113,9 @@ function eventMessage(event: ExecutionEvent) {
 }
 
 function bucketLabel(bucket: string) {
-  if (bucket === "tool") return "工具";
-  if (bucket === "error") return "错误";
-  return "会话";
+  if (bucket === "tool") return t("eventConsole.bucket_tool");
+  if (bucket === "error") return t("eventConsole.bucket_error");
+  return t("eventConsole.bucket_conversation");
 }
 
 function bucketClass(bucket: string) {
@@ -124,10 +125,10 @@ function bucketClass(bucket: string) {
 }
 
 function roleLabel(role: string) {
-  if (role === "user") return "用户";
-  if (role === "assistant") return "助手";
-  if (role === "system") return "系统";
-  if (role === "tool") return "工具";
+  if (role === "user") return t("eventConsole.role_user");
+  if (role === "assistant") return t("eventConsole.role_assistant");
+  if (role === "system") return t("eventConsole.role_system");
+  if (role === "tool") return t("eventConsole.role_tool");
   return role;
 }
 
@@ -140,7 +141,7 @@ function queueEntryTitle(entry: PendingInputQueueEntry) {
   if (commandName) {
     return `/${commandName}`;
   }
-  return "排队轮次";
+  return t("eventConsole.queued_turn");
 }
 
 function eventToneClass(event: ExecutionEvent) {
@@ -164,10 +165,10 @@ function eventToneClass(event: ExecutionEvent) {
 
 function eventToneLabel(event: ExecutionEvent) {
   const tone = eventToneClass(event);
-  if (tone === "queue") return "队列";
-  if (tone === "error") return "错误";
-  if (tone === "tool") return "工具";
-  return "事件";
+  if (tone === "queue") return t("eventConsole.tone_queue");
+  if (tone === "error") return t("eventConsole.tone_error");
+  if (tone === "tool") return t("eventConsole.tone_tool");
+  return t("eventConsole.tone_event");
 }
 </script>
 
@@ -175,14 +176,14 @@ function eventToneLabel(event: ExecutionEvent) {
   <section v-if="sessionStore.session" class="event-console-panel">
     <div class="event-console-head">
       <div>
-        <strong>事件控制台</strong>
+        <strong>{{ t("eventConsole.title") }}</strong>
         <p>
-          快照 {{ sessionStore.session.last_snapshot?.stage ?? "暂无" }}
+          {{ t("eventConsole.snapshot_label") }} {{ sessionStore.session.last_snapshot?.stage ?? t("eventConsole.none") }}
           · v{{ sessionStore.session.last_snapshot?.version ?? 0 }}
         </p>
       </div>
       <span class="registry-tag light">
-        {{ sessionStore.replayTimeline.length > 0 ? "回放视图" : "实时视图" }}
+        {{ sessionStore.replayTimeline.length > 0 ? t("eventConsole.replay_view") : t("eventConsole.live_view") }}
       </span>
     </div>
 
@@ -200,8 +201,8 @@ function eventToneLabel(event: ExecutionEvent) {
 
     <div class="event-console-queue">
       <div class="event-console-section-head">
-        <strong>排队轮次</strong>
-        <span>{{ sessionStore.queuedTurnCount }} 项待处理</span>
+        <strong>{{ t("eventConsole.queued_turns") }}</strong>
+        <span>{{ sessionStore.queuedTurnCount }} {{ t("eventConsole.items_pending") }}</span>
       </div>
       <div v-if="queueEntries.length > 0" class="event-console-queue-list">
         <article
@@ -218,16 +219,16 @@ function eventToneLabel(event: ExecutionEvent) {
             <span class="registry-tag light">{{ statusLabel(item.busy_status) }}</span>
             <span class="registry-tag light">{{ statusLabel(item.interrupt_policy) }}</span>
           </div>
-          <p>{{ item.reason || "排队输入正在等待当前轮次结束后继续执行。" }}</p>
+          <p>{{ item.reason || t("eventConsole.queue_default_reason") }}</p>
         </article>
       </div>
-      <div v-else class="settings-empty">当前会话没有排队轮次。</div>
+      <div v-else class="settings-empty">{{ t("eventConsole.no_queued_turns") }}</div>
     </div>
 
     <div class="event-console-transcript">
       <div class="event-console-section-head">
-        <strong>最近转录</strong>
-        <span>可回填上下文的消息会在这里持续可见</span>
+        <strong>{{ t("eventConsole.recent_transcript") }}</strong>
+        <span>{{ t("eventConsole.transcript_hint") }}</span>
       </div>
       <div class="event-console-transcript-list">
         <article
@@ -242,21 +243,21 @@ function eventToneLabel(event: ExecutionEvent) {
               </span>
               <span class="event-console-transcript-role">{{ roleLabel(item.role) }}</span>
               <span class="registry-tag light" :class="{ success: item.context_eligible }">
-                {{ item.context_eligible ? "可回填" : "仅展示" }}
+                {{ item.context_eligible ? t("eventConsole.eligible") : t("eventConsole.display_only") }}
               </span>
             </div>
             <span>{{ formatServerTime(item.created_at) }}</span>
           </div>
           <p>{{ item.content }}</p>
         </article>
-        <div v-if="transcriptEntries.length === 0" class="settings-empty">当前还没有可展示的转录记录。</div>
+        <div v-if="transcriptEntries.length === 0" class="settings-empty">{{ t("eventConsole.no_transcript") }}</div>
       </div>
     </div>
 
     <button type="button" class="event-console-collapse" @click="eventsExpanded = !eventsExpanded">
       <div class="event-console-section-head">
-        <strong>运行事件</strong>
-        <span>{{ timeline.length }} 条</span>
+        <strong>{{ t("eventConsole.runtime_events") }}</strong>
+        <span>{{ timeline.length }} {{ t("eventConsole.entries_unit") }}</span>
       </div>
       <i :class="['fa-solid', eventsExpanded ? 'fa-chevron-up' : 'fa-chevron-down']"></i>
     </button>
@@ -276,7 +277,7 @@ function eventToneLabel(event: ExecutionEvent) {
         </div>
         <p>{{ eventMessage(event) }}</p>
       </article>
-      <div v-if="timeline.length === 0" class="settings-empty">当前还没有运行事件。</div>
+      <div v-if="timeline.length === 0" class="settings-empty">{{ t("eventConsole.no_events") }}</div>
     </div>
   </section>
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
+import { t } from "../../../services/i18n";
 import { useSessionStore } from "../../../stores/session";
 import type { AgentDescriptor, ToolDescriptor } from "../../../types";
 
@@ -30,35 +31,21 @@ const guardedTools = computed(() =>
 function toolCategoryLabel(value: string) {
   const text = String(value || "").trim();
   if (!text) {
-    return "未分类";
+    return t("registry.category_unclassified");
   }
 
-  const labels: Record<string, string> = {
-    orchestration: "编排",
-    context: "上下文",
-    planning: "规划",
-    analysis: "分析",
-    automation: "自动化",
-    browser: "浏览器",
-    api: "接口",
-    filesystem: "文件系统",
-    communication: "通信",
-    reporting: "报告",
-    knowledge: "知识",
-    qa: "测试",
-    code_review: "代码审批",
-  };
-  return labels[text] || text;
+  const translated = t(`registry.category_${text}`);
+  return translated === `registry.category_${text}` ? text : translated;
 }
 
 function permissionLabel(value?: ToolDescriptor["permission_level"]) {
   if (value === "ask") {
-    return "需审批";
+    return t("registry.permission_ask");
   }
   if (value === "restricted") {
-    return "受限";
+    return t("registry.permission_restricted");
   }
-  return "安全";
+  return t("registry.permission_safe");
 }
 
 function buildAgentGroups(items: AgentDescriptor[]): RegistryGroup<AgentDescriptor>[] {
@@ -117,6 +104,11 @@ const agentGroups = computed(() => buildAgentGroups(agents.value));
 const safeToolGroups = computed(() => buildToolGroups(safeTools.value));
 const guardedToolGroups = computed(() => buildToolGroups(guardedTools.value));
 
+function groupLabel(key: string, fallback: string) {
+  const translated = t(`registry.group_${key}`);
+  return translated === `registry.group_${key}` ? fallback : translated;
+}
+
 function openAgentDetail(agent: AgentDescriptor) {
   detailRecord.value = { kind: "agent", data: agent };
 }
@@ -140,20 +132,20 @@ const linkedAgents = computed(() => {
 <template>
   <div class="registry-pane">
     <div class="pane-header">
-      <h3 class="section-title">当前后端注册 Agent / Tool</h3>
-      <p class="head-desc">列出通过 WebSocket 或 REST 接口注册到本系统的远端代理与工具服务。</p>
+      <h3 class="section-title">{{ t("registry.title") }}</h3>
+      <p class="head-desc">{{ t("registry.desc") }}</p>
     </div>
 
     <div v-if="agents.length || tools.length" class="registry-groups">
       <section class="registry-group">
         <div class="registry-group-head">
-          <strong>Agent</strong>
+          <strong>{{ t("registry.group_agents") }}</strong>
           <span>{{ agents.length }}</span>
         </div>
         <div class="registry-subgroups">
           <div v-for="group in agentGroups" :key="group.key" class="registry-subgroup">
             <div class="registry-subgroup-head">
-              <em>{{ group.label }}</em>
+              <em>{{ groupLabel(group.key, group.label) }}</em>
               <span>{{ group.items.length }}</span>
             </div>
             <div class="registry-tags">
@@ -173,7 +165,7 @@ const linkedAgents = computed(() => {
 
       <section class="registry-group">
         <div class="registry-group-head">
-          <strong>安全 Tool</strong>
+          <strong>{{ t("registry.group_safe_tools") }}</strong>
           <span>{{ safeTools.length }}</span>
         </div>
         <div class="registry-subgroups">
@@ -199,7 +191,7 @@ const linkedAgents = computed(() => {
 
       <section v-if="guardedTools.length" class="registry-group">
         <div class="registry-group-head">
-          <strong>需审批 / 受限 Tool</strong>
+          <strong>{{ t("registry.group_guarded_tools") }}</strong>
           <span>{{ guardedTools.length }}</span>
         </div>
         <div class="registry-subgroups">
@@ -226,7 +218,7 @@ const linkedAgents = computed(() => {
 
     <div v-else class="registry-empty">
       <i class="fa-solid fa-ghost"></i>
-      <p>当前暂无已注册的 Agent 或外部工具服务，请检查后端引擎状态。</p>
+      <p>{{ t("registry.empty") }}</p>
     </div>
 
     <div v-if="detailRecord" class="registry-modal-backdrop" @click.self="closeDetail">
@@ -243,19 +235,19 @@ const linkedAgents = computed(() => {
 
         <div v-if="detailRecord.kind === 'agent'" class="registry-modal-body">
           <div class="detail-item">
-            <span class="detail-label">角色</span>
+            <span class="detail-label">{{ t("registry.agent_role") }}</span>
             <strong>{{ detailRecord.data.role }}</strong>
           </div>
           <div class="detail-item">
-            <span class="detail-label">简介</span>
+            <span class="detail-label">{{ t("registry.summary") }}</span>
             <p>{{ detailRecord.data.summary || detailRecord.data.description }}</p>
           </div>
           <div class="detail-item">
-            <span class="detail-label">默认模型</span>
-            <strong>{{ detailRecord.data.default_model || "未指定" }}</strong>
+            <span class="detail-label">{{ t("registry.default_model") }}</span>
+            <strong>{{ detailRecord.data.default_model || t("registry.unspecified") }}</strong>
           </div>
           <div class="detail-item">
-            <span class="detail-label">支持工具</span>
+            <span class="detail-label">{{ t("registry.supported_tools") }}</span>
             <div class="detail-tags">
               <span
                 v-for="toolKey in detailRecord.data.supported_tools"
@@ -267,7 +259,7 @@ const linkedAgents = computed(() => {
             </div>
           </div>
           <div class="detail-item">
-            <span class="detail-label">支持技能</span>
+            <span class="detail-label">{{ t("registry.supported_skills") }}</span>
             <div class="detail-tags">
               <span
                 v-for="skillKey in detailRecord.data.supported_skills"
@@ -276,39 +268,39 @@ const linkedAgents = computed(() => {
               >
                 {{ skillKey }}
               </span>
-              <span v-if="!detailRecord.data.supported_skills.length" class="detail-empty">暂无</span>
+              <span v-if="!detailRecord.data.supported_skills.length" class="detail-empty">{{ t("registry.none") }}</span>
             </div>
           </div>
         </div>
 
         <div v-else class="registry-modal-body">
           <div class="detail-item">
-            <span class="detail-label">分类</span>
+            <span class="detail-label">{{ t("registry.tool_category") }}</span>
             <strong>{{ toolCategoryLabel(detailRecord.data.category) }}</strong>
           </div>
           <div class="detail-item">
-            <span class="detail-label">权限</span>
+            <span class="detail-label">{{ t("registry.permission") }}</span>
             <strong>{{ permissionLabel(detailRecord.data.permission_level) }}</strong>
           </div>
           <div class="detail-item">
-            <span class="detail-label">简介</span>
+            <span class="detail-label">{{ t("registry.summary") }}</span>
             <p>{{ detailRecord.data.description }}</p>
           </div>
           <div class="detail-item">
-            <span class="detail-label">流式输出</span>
-            <strong>{{ detailRecord.data.supports_streaming ? "支持" : "不支持" }}</strong>
+            <span class="detail-label">{{ t("registry.streaming") }}</span>
+            <strong>{{ detailRecord.data.supports_streaming ? t("registry.streaming_supported") : t("registry.streaming_unsupported") }}</strong>
           </div>
           <div class="detail-item">
-            <span class="detail-label">默认启用</span>
-            <strong>{{ detailRecord.data.enabled_by_default ? "是" : "否" }}</strong>
+            <span class="detail-label">{{ t("registry.enabled_by_default") }}</span>
+            <strong>{{ detailRecord.data.enabled_by_default ? t("registry.yes") : t("registry.no") }}</strong>
           </div>
           <div class="detail-item">
-            <span class="detail-label">接入 Agent</span>
+            <span class="detail-label">{{ t("registry.linked_agents") }}</span>
             <div class="detail-tags">
               <span v-for="agent in linkedAgents" :key="agent.key" class="detail-chip">
                 {{ agent.name }}
               </span>
-              <span v-if="!linkedAgents.length" class="detail-empty">暂无</span>
+              <span v-if="!linkedAgents.length" class="detail-empty">{{ t("registry.none") }}</span>
             </div>
           </div>
         </div>

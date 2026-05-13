@@ -11,6 +11,7 @@ import ToolJobPanel from "./components/chat/ToolJobPanel.vue";
 import VerificationPanel from "./components/chat/VerificationPanel.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopBar from "./components/layout/AppTopBar.vue";
+import { getLocale, t } from "./services/i18n";
 import { useAppStore } from "./stores/app";
 import { useSessionStore } from "./stores/session";
 
@@ -33,15 +34,15 @@ const pageLabel = computed(() => String(route.meta.label ?? "Session Workspace")
 const runtimeBadge = computed(() => sessionStore.session?.status ?? "idle");
 const isHomeRoute = computed(() => route.name === "home");
 const showRuntimeConsole = computed(() => route.name !== "settings");
-const runtimeConsoleTabs = [
-  { key: "logs", label: "运行日志" },
-  { key: "events", label: "事件控制台" },
-  { key: "tools", label: "工具活动" },
-  { key: "snapshot", label: "快照追踪" },
-  { key: "jobs", label: "工具任务" },
-  { key: "verification", label: "验证结果" },
-  { key: "review_progress", label: "审批进程" },
-] as const;
+const runtimeConsoleTabs = computed(() => [
+  { key: "logs", label: t("console.title") },
+  { key: "events", label: t("console.events") },
+  { key: "tools", label: t("console.tools") },
+  { key: "snapshot", label: t("console.snapshots") },
+  { key: "jobs", label: t("console.jobs") },
+  { key: "verification", label: t("console.verification") },
+  { key: "review_progress", label: t("console.review_progress") },
+] as const);
 
 const runtimeLines = computed(() => {
   const workerDispatches = sessionStore.workerDispatches;
@@ -71,7 +72,7 @@ const runtimeLines = computed(() => {
           .map(([key, value]) => `${key}=${String(value)}`)
           .join(" ");
 
-        return `[${new Date(event.timestamp).toLocaleTimeString("zh-CN", {
+        return `[${new Date(event.timestamp).toLocaleTimeString(getLocale(), {
           hour12: false,
         })}] ${event.type}${details ? ` ${details}` : ""}`;
       }),
@@ -90,7 +91,7 @@ const runtimeLines = computed(() => {
     ];
   }
 
-  return ["Waiting for runtime events..."];
+  return [t("console.waiting")];
 });
 
 watch(
@@ -134,7 +135,7 @@ onBeforeUnmount(() => {
           <section v-if="showRuntimeConsole" :class="['log-panel', { expanded: logExpanded }]">
             <header class="log-panel-head" @click="logExpanded = !logExpanded">
               <div class="log-panel-title">
-                &gt;_ Runtime Event Console
+                &gt;_ {{ t("console.panel_title") }}
                 <span class="log-badge">{{ runtimeBadge }}</span>
               </div>
               <div
@@ -164,8 +165,8 @@ onBeforeUnmount(() => {
                       {{ line }}
                     </div>
                     <div class="log-cursor-line">
-                      <span class="system-chip">system</span>
-                      runtime-console-ready
+                      <span class="system-chip">{{ t("console.system_chip") }}</span>
+                      {{ t("console.ready_line") }}
                       <span class="cursor-blink"></span>
                     </div>
                   </div>
@@ -184,8 +185,8 @@ onBeforeUnmount(() => {
                     {{ line }}
                   </div>
                   <div class="log-cursor-line">
-                    <span class="system-chip">system</span>
-                    runtime-console-ready
+                    <span class="system-chip">{{ t("console.system_chip") }}</span>
+                    {{ t("console.ready_line") }}
                     <span class="cursor-blink"></span>
                   </div>
                 </div>

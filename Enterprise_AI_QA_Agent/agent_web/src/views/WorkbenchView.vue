@@ -6,12 +6,13 @@ import ChatComposer from "../components/chat/ChatComposer.vue";
 import ChatTimeline from "../components/chat/ChatTimeline.vue";
 import RuntimeStatusPanel from "../components/chat/RuntimeStatusPanel.vue";
 import { useSessionStore } from "../stores/session";
+import { t } from "../services/i18n";
 
 const sessionStore = useSessionStore();
 const hasConversation = computed(() => sessionStore.messages.length > 0);
 const hasPendingApprovals = computed(() => sessionStore.pendingApprovals.length > 0);
-const heroTitle = "御策天检";
-const heroSubtitle = "输入自然语言指令，AI 将全权进行意图分析、页面探索与用例生成";
+const heroTitle = computed(() => t("home.title"));
+const heroSubtitle = computed(() => t("home.subtitle"));
 const composerAnchorRef = ref<HTMLElement | null>(null);
 const composerAnchorHeight = ref(196);
 const runtimePanelSize = ref(112);

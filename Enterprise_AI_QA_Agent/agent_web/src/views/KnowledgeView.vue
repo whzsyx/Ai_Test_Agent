@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { NButton, NModal } from "naive-ui";
 
 import { api } from "../services/api";
+import { t } from "../services/i18n";
 import { formatServerDateTime } from "../utils/datetime";
 import type {
   KnowledgeGraphEdge,
@@ -126,7 +127,7 @@ const canvasNodes = computed(() => {
     const items = [
       {
         id: '__GLOBAL_PAGES__',
-        label: selectedProjectScope.value || '项目全局',
+        label: selectedProjectScope.value || t('knowledge.project_global'),
         kind: 'project',
         x: 420,
         y: 250,
@@ -289,7 +290,7 @@ const canvasEdges = computed(() => {
       id: `root_to_${p.id}`,
       source: '__GLOBAL_PAGES__',
       target: p.id,
-      label: '包含页面',
+      label: t('knowledge.contains_page'),
       metadata: {}
     } as KnowledgeGraphEdge));
     baseEdges = [...baseEdges, ...virtualEdges];
@@ -426,10 +427,10 @@ async function deleteSelectedProject() {
     return;
   }
   dialog.warning({
-    title: "确认删除项目图谱",
-    content: `确认删除项目图谱“${scope}”吗？这个操作会删除该项目下的页面、元素、实体和关系。`,
-    positiveText: "确定",
-    negativeText: "取消",
+    title: t("knowledge.confirm_delete_title"),
+    content: `确认删除项目图谱“${scope}”吗？{{ t("knowledge.confirm_delete_warning") }}`,
+    positiveText: t("common.confirm"),
+    negativeText: t("common.cancel"),
     maskClosable: false,
     onPositiveClick: async () => {
       deletingProject.value = true;
@@ -455,7 +456,7 @@ async function deleteSelectedProject() {
     },
   });
   return;
-  const confirmed = window.confirm(`确认删除项目图谱 "${scope}" 吗？这个操作会删除该项目下的页面、元素、实体和关系。`);
+  const confirmed = window.confirm(t("knowledge.confirm_delete_content", { scope }));
   if (!confirmed) {
     return;
   }
@@ -596,8 +597,8 @@ function syncFullscreenState() {
   <section class="view-page knowledge-page">
     <div class="page-head knowledge-head">
       <div>
-        <h2>知识图谱</h2>
-        <p class="head-desc">查看 Memgraph 中的项目级页面、实体、元素与关系网络，按项目切换浏览。</p>
+        <h2>{{ t("knowledge.page_title") }}</h2>
+        <p class="head-desc">{{ t("knowledge.page_desc") }}</p>
       </div>
     </div>
 
@@ -605,12 +606,12 @@ function syncFullscreenState() {
       <aside class="knowledge-sidebar">
         <div class="sidebar-card">
           <div class="sidebar-head">
-            <h3>项目筛选</h3>
-            <span class="sidebar-meta">{{ projects.length }} 个项目</span>
+            <h3>{{ t("knowledge.project_filter") }}</h3>
+            <span class="sidebar-meta">{{ projects.length }} {{ t("knowledge.projects_count_unit") }}</span>
           </div>
           <div class="project-actions">
           <select v-model="selectedProjectScope" class="knowledge-select" :disabled="loadingProjects || !projects.length">
-            <option value="" disabled>选择项目</option>
+            <option value="" disabled>{{ t("knowledge.select_project") }}</option>
             <option v-for="project in projects" :key="project.project_scope" :value="project.project_scope">
               {{ project.project_scope }}
             </option>
@@ -618,7 +619,7 @@ function syncFullscreenState() {
             <button
               class="icon-btn danger-btn"
               type="button"
-              title="删除当前项目"
+              :title="t('knowledge.delete_project')"
               :disabled="!selectedProjectScope || deletingProject"
               @click="openDeleteProjectDialog"
             >
@@ -626,17 +627,17 @@ function syncFullscreenState() {
             </button>
           </div>
           <div v-if="selectedProject" class="project-meta">
-            <div><span>页面</span><strong>{{ selectedProject.page_count }}</strong></div>
-            <div><span>元素</span><strong>{{ selectedProject.element_count }}</strong></div>
-            <div><span>实体</span><strong>{{ selectedProject.entity_count }}</strong></div>
-            <div><span>关系</span><strong>{{ selectedProject.edge_count }}</strong></div>
+            <div><span>{{ t("knowledge.pages") }}</span><strong>{{ selectedProject.page_count }}</strong></div>
+            <div><span>{{ t("knowledge.elements") }}</span><strong>{{ selectedProject.element_count }}</strong></div>
+            <div><span>{{ t("knowledge.entities") }}</span><strong>{{ selectedProject.entity_count }}</strong></div>
+            <div><span>{{ t("knowledge.relations") }}</span><strong>{{ selectedProject.edge_count }}</strong></div>
           </div>
         </div>
 
         <div class="sidebar-card">
           <div class="sidebar-head">
-            <h3>节点过滤</h3>
-            <span class="sidebar-meta">{{ filteredNodes.length }} 个节点</span>
+            <h3>{{ t("knowledge.node_filter") }}</h3>
+            <span class="sidebar-meta">{{ filteredNodes.length }} {{ t("knowledge.nodes_count_unit") }}</span>
           </div>
           <div class="knowledge-kind-tabs">
             <button
@@ -647,10 +648,10 @@ function syncFullscreenState() {
               type="button"
               @click="activeKind = kind as NodeKindFilter"
             >
-              {{ kind === "all" ? "全部" : kindLabel(kind) }}
+              {{ kind === "all" ? t("knowledge.filter_all") : kindLabel(kind) }}
             </button>
           </div>
-          <input v-model="searchTerm" class="knowledge-search" type="text" placeholder="搜索节点、字段、摘要" />
+          <input v-model="searchTerm" class="knowledge-search" type="text" :placeholder="t('knowledge.search_nodes_placeholder')" />
           <div class="node-list">
             <button
               class="node-row global-row"
@@ -660,8 +661,8 @@ function syncFullscreenState() {
             >
               <span class="node-kind" data-kind="project">Global</span>
               <span class="node-main">
-                <strong>全局页面图谱</strong>
-                <small>查看项目下所有页面及导航关系</small>
+                <strong>{{ t("knowledge.global_pages_graph") }}</strong>
+                <small>{{ t("knowledge.global_pages_desc") }}</small>
               </span>
             </button>
             <button
@@ -678,7 +679,7 @@ function syncFullscreenState() {
                 <small :title="node.summary || node.id">{{ truncateText(node.summary || node.id, 56) }}</small>
               </span>
             </button>
-            <div v-if="!filteredNodes.length" class="empty-state small">当前筛选下没有节点。</div>
+            <div v-if="!filteredNodes.length" class="empty-state small">{{ t("knowledge.no_nodes_filtered") }}</div>
           </div>
         </div>
       </aside>
@@ -687,32 +688,32 @@ function syncFullscreenState() {
         <section ref="canvasCardRef" class="canvas-card" :class="{ fullscreen: isFullscreenCanvas }">
           <div class="canvas-head">
             <div>
-              <h3>项目图谱</h3>
+              <h3>{{ t("knowledge.project_graph") }}</h3>
             </div>
             <div class="canvas-head-right">
               <div class="canvas-toolbar">
-                <button class="icon-btn" type="button" title="缩小" @click="zoomCanvas(-0.12)">
+                <button class="icon-btn" type="button" :title="t('knowledge.zoom_out')" @click="zoomCanvas(-0.12)">
                   <i class="fa-solid fa-minus"></i>
                 </button>
-                <button class="icon-btn" type="button" title="重置" @click="resetCanvasView">
+                <button class="icon-btn" type="button" :title="t('knowledge.zoom_reset')" @click="resetCanvasView">
                   <i class="fa-solid fa-arrows-rotate"></i>
                 </button>
-                <button class="icon-btn" type="button" title="放大" @click="zoomCanvas(0.12)">
+                <button class="icon-btn" type="button" :title="t('knowledge.zoom_in')" @click="zoomCanvas(0.12)">
                   <i class="fa-solid fa-plus"></i>
                 </button>
-                <button class="icon-btn" type="button" :title="isFullscreenCanvas ? '退出全屏' : '全屏显示'" @click="toggleCanvasFullscreen">
+                <button class="icon-btn" type="button" :title="isFullscreenCanvas ? t('knowledge.exit_fullscreen') : t('knowledge.enter_fullscreen')" @click="toggleCanvasFullscreen">
                   <i class="fa-solid" :class="isFullscreenCanvas ? 'fa-compress' : 'fa-expand'"></i>
                 </button>
               </div>
               <div class="canvas-meta">
-                <span>更新时间：{{ formatTime(graph?.summary.latest_updated_at) }}</span>
+                <span>{{ t("knowledge.updated_at") }}{{ formatTime(graph?.summary.latest_updated_at) }}</span>
               </div>
             </div>
           </div>
 
-          <div v-if="loadingGraph" class="empty-state">正在加载图谱数据...</div>
+          <div v-if="loadingGraph" class="empty-state">{{ t("knowledge.loading_graph") }}</div>
           <div v-else-if="errorMessage" class="empty-state danger">{{ errorMessage }}</div>
-          <div v-else-if="!graph" class="empty-state">请选择一个项目来查看知识图谱。</div>
+          <div v-else-if="!graph" class="empty-state">{{ t("knowledge.select_project_hint") }}</div>
           <div v-else class="canvas-wrap">
             <svg
               ref="canvasViewportRef"
@@ -769,10 +770,10 @@ function syncFullscreenState() {
       <aside v-if="detailDrawerOpen" class="detail-drawer">
         <div class="detail-drawer-head">
           <div>
-            <h3>节点详情</h3>
-            <span class="sidebar-meta">{{ selectedNode ? kindLabel(selectedNode.kind) : "未选择" }}</span>
+            <h3>{{ t("knowledge.node_detail") }}</h3>
+            <span class="sidebar-meta">{{ selectedNode ? kindLabel(selectedNode.kind) : t("knowledge.not_selected") }}</span>
           </div>
-          <button class="icon-btn" type="button" @click="closeDetailDrawer" aria-label="关闭详情抽屉">
+          <button class="icon-btn" type="button" @click="closeDetailDrawer" :aria-label="t('knowledge.close_detail_drawer')">
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
@@ -786,7 +787,7 @@ function syncFullscreenState() {
           </div>
 
           <div class="detail-section">
-            <h4>相邻关系</h4>
+            <h4>{{ t("knowledge.adjacent_relations") }}</h4>
             <div class="detail-list">
               <div v-for="edge in selectedNodeEdges" :key="edge.id" class="detail-list-item">
                 <span class="relation-tag">{{ edge.label }}</span>
@@ -812,7 +813,7 @@ function syncFullscreenState() {
           </div>
 
           <div class="detail-section">
-            <h4>属性</h4>
+            <h4>{{ t("knowledge.properties") }}</h4>
             <div class="detail-list">
               <div
                 v-for="entry in Object.entries(selectedNode.metadata)"
@@ -828,12 +829,12 @@ function syncFullscreenState() {
                 </span>
               </div>
               <div v-if="!Object.keys(selectedNode.metadata).length" class="empty-state small">
-                当前节点没有额外属性。
+                {{ t("knowledge.no_properties") }}
               </div>
             </div>
           </div>
         </div>
-        <div v-else class="empty-state">从左侧选择一个节点，我们就能查看它的关系和属性。</div>
+        <div v-else class="empty-state">{{ t("knowledge.select_node_hint") }}</div>
       </aside>
     </transition>
 
@@ -847,17 +848,17 @@ function syncFullscreenState() {
       @update:show="(value) => { if (!value) cancelDeleteProjectDialog(); }"
     >
       <div class="delete-modal-head">
-        <div class="delete-modal-title">确认删除项目图谱</div>
+        <div class="delete-modal-title">{{ t("knowledge.confirm_delete_title") }}</div>
       </div>
       <div class="delete-modal-body">
         <p>
-          确认删除项目图谱“<strong>{{ selectedProjectScope }}</strong>”吗？
+          {{ t("knowledge.confirm_delete_ask", { scope: selectedProjectScope }) }}
         </p>
-        <p>这个操作会删除该项目下的页面、元素、实体和关系。</p>
+        <p>{{ t("knowledge.confirm_delete_warning") }}</p>
       </div>
       <div class="delete-modal-actions">
-        <NButton class="delete-modal-cancel" quaternary :disabled="deletingProject" @click="cancelDeleteProjectDialog">取消</NButton>
-        <NButton class="delete-modal-confirm" :loading="deletingProject" @click="confirmDeleteProjectDialog">确定</NButton>
+        <NButton class="delete-modal-cancel" quaternary :disabled="deletingProject" @click="cancelDeleteProjectDialog">{{ t("common.cancel") }}</NButton>
+        <NButton class="delete-modal-confirm" :loading="deletingProject" @click="confirmDeleteProjectDialog">{{ t("common.confirm") }}</NButton>
       </div>
     </NModal>
   </section>

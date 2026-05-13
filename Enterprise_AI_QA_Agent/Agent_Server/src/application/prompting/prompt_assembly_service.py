@@ -1,11 +1,46 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from src.modes.api_testing_mode.prompt_contract import API_TESTING_PROMPT_CONTRACT
 from src.modes.ui_automation_mode.prompt_contract import UI_AUTOMATION_PROMPT_CONTRACT
 from src.schemas.prompting import PromptAssemblyResult, PromptSection
+
+
+# Path to the general settings file (shared with settings route).
+_GENERAL_SETTINGS_FILE = Path(__file__).resolve().parents[2] / "data" / "general_settings.json"
+
+# Language display names for the output language instruction.
+_LANGUAGE_NAMES: dict[str, str] = {
+    "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
+    "en-US": "English",
+    "ja-JP": "日本語",
+    "ko-KR": "한국어",
+    "fr-FR": "Français",
+    "de-DE": "Deutsch",
+    "es-ES": "Español",
+    "pt-BR": "Português",
+    "ru-RU": "Русский",
+    "ar-SA": "العربية",
+    "hi-IN": "हिन्दी",
+    "id-ID": "Bahasa Indonesia",
+    "vi-VN": "Tiếng Việt",
+    "th-TH": "ไทย",
+}
+
+
+def _read_general_settings() -> dict[str, Any]:
+    """Read the persisted general settings (non-blocking, best-effort)."""
+    try:
+        if _GENERAL_SETTINGS_FILE.exists():
+            return json.loads(_GENERAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
 
 
 class PromptAssemblyService:
@@ -250,6 +285,11 @@ class PromptAssemblyService:
                 )
             )
 
+        # Inject model output language preference from general settings.
+        language_section = self._build_language_section()
+        if language_section:
+            sections.append(language_section)
+
         return sorted(sections, key=lambda item: item.priority)
 
     def _build_runtime_sections(self, state: Mapping[str, Any]) -> list[PromptSection]:
@@ -419,3 +459,35 @@ class PromptAssemblyService:
     def _format_csv(self, values: Sequence[Any]) -> str:
         normalized = [str(item).strip() for item in values if str(item).strip()]
         return ", ".join(normalized) if normalized else "none"
+
+    def _build_language_section(self) -> PromptSection | None:
+        """Build a prompt section that instructs the model to respond in the configured language.
+
+        Always injects a language instruction regardless of the resolved language,
+        so the model explicitly knows which language to use (including zh-CN).
+        """
+        settings = _read_general_settings()
+        model_output_language = str(settings.get("modelOutputLanguage") or "follow-system").strip()
+
+        if model_output_language == "follow-system":
+            # Use the system language setting.
+            model_output_language = str(settings.get("language") or "zh-CN").strip()
+
+        # If empty, default to zh-CN.
+        if not model_output_language:
+            model_output_language = "zh-CN"
+
+        language_name = _LANGUAGE_NAMES.get(model_output_language, model_output_language)
+
+        return PromptSection(
+            key="output_language",
+            title="Output Language Preference",
+            source="prompt_assembly.general_settings",
+            cache_scope="dynamic",
+            priority=15,  # High priority, right after identity.
+            content=(
+                f"IMPORTANT: The user has configured their preferred output language as {language_name} ({model_output_language}).\n"
+                f"You MUST respond in {language_name} for all your outputs, including explanations, summaries, reports, and clarification questions.\n"
+                f"Tool calls and structured data fields should remain in their original format, but all natural language output must be in {language_name}."
+            ),
+        )

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SettingsPluginDefinition } from "../plugins";
+import { t } from "../../../services/i18n";
 
 defineProps<{
   plugin?: SettingsPluginDefinition;
@@ -10,14 +11,14 @@ defineProps<{
   <section class="settings-pane">
     <div class="settings-pane-head">
       <div>
-        <h3>管理平台接入</h3>
-        <p>此设置页面正在开发中，暂无实际功能，仅用作占位展示。</p>
+        <h3>{{ t("platform.title") }}</h3>
+        <p>{{ t("platform.desc") }}</p>
       </div>
     </div>
 
     <div class="settings-empty" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--muted);">
       <i class="fa-solid fa-person-digging" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
-      <p style="font-size: 16px; font-weight: 500;">模块开发中...</p>
+      <p style="font-size: 16px; font-weight: 500;">{{ t("platform.developing") }}</p>
     </div>
   </section>
 </template>

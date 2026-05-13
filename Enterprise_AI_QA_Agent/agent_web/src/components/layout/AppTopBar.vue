@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import type { ServiceCheckItem, SystemStatusSummary } from "../../types";
+import { t } from "../../services/i18n";
 
 const props = defineProps<{
   label: string;
@@ -27,7 +28,7 @@ function statusIcon(check: ServiceCheckItem) {
   <header class="top-status-bar">
     <div class="top-status-path">
       <i class="fa-solid fa-spider"></i>
-      <span>御策天检 / {{ props.label }}</span>
+      <span>{{ t("home.title") }} / {{ props.label }}</span>
     </div>
     <div class="top-status-actions">
       <div class="service-indicator-wrap">
@@ -40,9 +41,9 @@ function statusIcon(check: ServiceCheckItem) {
         </span>
         <div class="service-tooltip">
           <div class="service-tooltip-head">
-            <strong>系统连接状态</strong>
-            <span v-if="failingChecks.length === 0">全部已连接</span>
-            <span v-else>未就绪 {{ failingChecks.length }} 项</span>
+            <strong>{{ t("status.title") }}</strong>
+            <span v-if="failingChecks.length === 0">{{ t("status.all_connected") }}</span>
+            <span v-else>{{ t("status.not_ready_count", { count: failingChecks.length }) }}</span>
           </div>
           <div class="service-tooltip-list">
             <div

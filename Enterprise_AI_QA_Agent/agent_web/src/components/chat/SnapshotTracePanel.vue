@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { t } from "../../services/i18n";
 import { useSessionStore } from "../../stores/session";
 import { formatServerTime } from "../../utils/datetime";
 
@@ -24,15 +25,15 @@ const rows = computed(() => {
       : "--";
 
   return [
-    { label: "追踪 ID", value: sessionStore.latestTraceId || "--" },
-    { label: "轮次 ID", value: sessionStore.latestTurnId || "--" },
-    { label: "阶段", value: snapshot.value?.stage ?? "--" },
-    { label: "版本", value: snapshot.value ? `v${snapshot.value.version}` : "--" },
-    { label: "控制态", value: controlState },
-    { label: "循环", value: `${loopIteration}/${maxIterations}` },
-    { label: "工具数", value: String(toolCount) },
-    { label: "审批数", value: String(pendingApprovals) },
-    { label: "结束态", value: terminationReason },
+    { label: t("snapshot.trace_id"), value: sessionStore.latestTraceId || "--" },
+    { label: t("snapshot.turn_id"), value: sessionStore.latestTurnId || "--" },
+    { label: t("snapshot.stage"), value: snapshot.value?.stage ?? "--" },
+    { label: t("snapshot.version"), value: snapshot.value ? `v${snapshot.value.version}` : "--" },
+    { label: t("snapshot.control_state"), value: controlState },
+    { label: t("snapshot.loop"), value: `${loopIteration}/${maxIterations}` },
+    { label: t("snapshot.tool_count"), value: String(toolCount) },
+    { label: t("snapshot.approval_count"), value: String(pendingApprovals) },
+    { label: t("snapshot.termination"), value: terminationReason },
   ];
 });
 </script>
@@ -41,14 +42,14 @@ const rows = computed(() => {
   <section v-if="sessionStore.session" class="observability-panel snapshot-trace-panel">
     <div class="observability-head">
       <div>
-        <strong>快照追踪</strong>
-        <p>展示当前运行态对应的快照、追踪和循环元信息。</p>
+        <strong>{{ t("snapshot.title") }}</strong>
+        <p>{{ t("snapshot.desc") }}</p>
       </div>
       <span class="registry-tag light">
         {{
           snapshot?.created_at
-            ? formatServerTime(snapshot.created_at, "鏆傛棤蹇収")
-            : "暂无快照"
+            ? formatServerTime(snapshot.created_at, t("snapshot.no_snapshot"))
+            : t("snapshot.no_snapshot")
         }}
       </span>
     </div>

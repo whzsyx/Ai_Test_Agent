@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import { t } from "../../services/i18n";
 import type { ToolApprovalRequest } from "../../types";
 import { useSessionStore } from "../../stores/session";
 import { formatServerTime } from "../../utils/datetime";
@@ -35,20 +36,20 @@ function formatAgentLabel(value: unknown) {
 function approvalKindLabel(approval: ToolApprovalRequest) {
   switch (approval.tool_key) {
     case "cli-executor":
-      return "终端命令";
+      return t("approvalPanel.kind_cli");
     case "browser-automation":
     case "browser-control":
     case "dom-inspector":
-      return "浏览器操作";
+      return t("approvalPanel.kind_browser");
     case "api-caller":
     case "api-tester":
-      return "接口请求";
+      return t("approvalPanel.kind_api");
     case "send-email":
     case "message-dispatch":
-      return "消息发送";
+      return t("approvalPanel.kind_message");
     case "filesystem":
     case "file-artifact-manager":
-      return "文件访问";
+      return t("approvalPanel.kind_file");
     default:
       return approval.tool_name || approval.tool_key;
   }
@@ -85,27 +86,27 @@ function approvalPreviewSource(approval: ToolApprovalRequest) {
   }
 
   if (lines.length === 0 && typeof args.subject === "string") {
-    lines.push(`主题：${args.subject}`);
+    lines.push(`${t("approvalPanel.subject")}${args.subject}`);
   }
 
   if (lines.length === 0 && typeof args.url === "string") {
-    lines.push(`访问 ${args.url}`);
+    lines.push(`${t("approvalPanel.visit")} ${args.url}`);
   }
 
   if (lines.length === 0 && typeof args.target_url === "string") {
-    lines.push(`访问 ${args.target_url}`);
+    lines.push(`${t("approvalPanel.visit")} ${args.target_url}`);
   }
 
   if (lines.length === 0 && typeof args.path === "string") {
-    lines.push(`路径：${args.path}`);
+    lines.push(`${t("approvalPanel.path")}${args.path}`);
   }
 
   if (lines.length === 0 && typeof args.query === "string") {
-    lines.push(`查询：${args.query}`);
+    lines.push(`${t("approvalPanel.query")}${args.query}`);
   }
 
   if (lines.length === 0 && Array.isArray(args.to) && args.to.length > 0) {
-    lines.push(`收件人：${args.to.join(", ")}`);
+    lines.push(`${t("approvalPanel.recipients")}${args.to.join(", ")}`);
   }
 
   if (lines.length === 0) {
@@ -126,30 +127,30 @@ function approvalPreviewOverflowCount(approval: ToolApprovalRequest) {
 function approvalHint(approval: ToolApprovalRequest) {
   switch (approval.tool_key) {
     case "cli-executor":
-      return "需要调用本地终端，请确认命令来源和执行范围。";
+      return t("approvalPanel.hint_cli");
     case "browser-automation":
     case "browser-control":
     case "dom-inspector":
-      return "需要驱动浏览器执行动作，请确认目标页面和操作内容。";
+      return t("approvalPanel.hint_browser");
     case "api-caller":
     case "api-tester":
-      return "需要向外部接口发起请求，请确认地址、方法和参数。";
+      return t("approvalPanel.hint_api");
     case "send-email":
     case "message-dispatch":
-      return "需要发送外部消息，请确认收件人和内容。";
+      return t("approvalPanel.hint_message");
     case "filesystem":
     case "file-artifact-manager":
-      return "需要访问文件系统，请确认路径和预期输出。";
+      return t("approvalPanel.hint_file");
     default:
-      return "当前操作需要额外授权，建议确认参数后再继续。";
+      return t("approvalPanel.hint_default");
   }
 }
 
 async function handleDecision(approvalId: string, decision: "approved" | "denied") {
   const reason =
     decision === "approved"
-      ? "用户在工作台右侧审批卡片中批准了本次执行。"
-      : "用户在工作台右侧审批卡片中拒绝了本次执行。";
+      ? t("approvalPanel.reason_approved")
+      : t("approvalPanel.reason_denied");
   await sessionStore.resolveApproval(approvalId, decision, reason);
 }
 </script>
@@ -164,15 +165,15 @@ async function handleDecision(approvalId: string, decision: "approved" | "denied
 
       <div class="approval-sidecard-body">
         <div class="approval-sidecard-heading">
-          <strong>权限审批</strong>
-          <span class="approval-sidecard-badge">待处理</span>
+          <strong>{{ t("approvalPanel.title") }}</strong>
+          <span class="approval-sidecard-badge">{{ t("approvalPanel.pending") }}</span>
         </div>
         <p class="approval-sidecard-meta">{{ approvalMetaLine(primaryApproval) }}</p>
 
         <div class="approval-sidecard-summary">
-          <span class="approval-sidecard-label">当前操作</span>
+          <span class="approval-sidecard-label">{{ t("approvalPanel.current_action") }}</span>
           <strong>{{ approvalKindLabel(primaryApproval) }}</strong>
-          <p>{{ primaryApproval.reason || "保护型工具需要手动确认后才能继续执行。" }}</p>
+          <p>{{ primaryApproval.reason || t("approvalPanel.default_reason") }}</p>
         </div>
 
         <div class="approval-sidecard-preview">
@@ -187,14 +188,14 @@ async function handleDecision(approvalId: string, decision: "approved" | "denied
             v-if="approvalPreviewOverflowCount(primaryApproval) > 0"
             class="approval-sidecard-more"
           >
-            +{{ approvalPreviewOverflowCount(primaryApproval) }} 项更多参数
+            +{{ approvalPreviewOverflowCount(primaryApproval) }} {{ t("approvalPanel.more_params") }}
           </span>
         </div>
 
         <p class="approval-sidecard-hint">{{ approvalHint(primaryApproval) }}</p>
 
         <p v-if="pendingCount > 1" class="approval-sidecard-tail">
-          另有 {{ pendingCount - 1 }} 项审批正在排队。
+          {{ t("approvalPanel.queue_hint", { count: String(pendingCount - 1) }) }}
         </p>
       </div>
 
@@ -205,7 +206,7 @@ async function handleDecision(approvalId: string, decision: "approved" | "denied
           :disabled="sessionStore.isResolvingApproval(primaryApproval.id)"
           @click="handleDecision(primaryApproval.id, 'denied')"
         >
-          拒绝
+          {{ t("approvalPanel.deny") }}
         </button>
         <button
           class="primary-btn"
@@ -217,7 +218,7 @@ async function handleDecision(approvalId: string, decision: "approved" | "denied
             v-if="sessionStore.isResolvingApproval(primaryApproval.id)"
             class="fa-solid fa-spinner fa-spin"
           ></i>
-          批准
+          {{ t("approvalPanel.approve") }}
         </button>
       </div>
     </article>
