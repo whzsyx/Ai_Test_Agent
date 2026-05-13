@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { NPopover, NSelect, type SelectOption } from "naive-ui";
 
@@ -95,25 +95,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "阿里云邮件推送",
       summary: "支持 DirectMail API 和 SMTP 两种接入方式，国内业务常用。",
-      strengths: [
-        "DirectMail API 适合系统事务邮件。",
-        "SMTP 适合兼容历史系统或第三方网关。",
-      ],
-      requirements: [
-        "先完成发信域名和发信地址验证。",
-        "API 模式需要 AccessKey ID / Secret。",
-        "SMTP 模式需要发信地址和 SMTP 密码。",
-      ],
-      docs: [
-        {
-          label: "DirectMail API",
-          href: "https://next.api.aliyun.com/document/Dm/2015-11-23/SingleSendMail",
-        },
-        {
-          label: "SMTP 发送邮件",
-          href: "https://help.aliyun.com/zh/direct-mail/user-guide/send-emails-using-smtp",
-        },
-      ],
+      strengths: ["DirectMail API 适合系统事务邮件。", "SMTP 适合兼容历史系统或第三方网关。"],
+      requirements: ["先完成发信域名和发信地址验证。", "API 模式需要 AccessKey ID / Secret。", "SMTP 模式需要发信地址和 SMTP 密码。"],
+      docs: [{ label: "DirectMail API", href: "https://next.api.aliyun.com/document/Dm/2015-11-23/SingleSendMail" }, { label: "SMTP 发送邮件", href: "https://help.aliyun.com/zh/direct-mail/user-guide/send-emails-using-smtp" }],
     },
   },
   {
@@ -132,21 +116,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "腾讯云 SES",
       summary: "支持 API 与 SMTP，适合金融、电商等国内高送达业务。",
-      strengths: [
-        "域名认证流程完善，适合大体量事务邮件。",
-        "可选 SMTP 密码，兼容旧系统迁移。",
-      ],
-      requirements: [
-        "完成发信域名、SPF / DKIM / DMARC 配置。",
-        "API 模式需要 SecretId / SecretKey。",
-        "SMTP 模式需要发信地址、SMTP 用户名与密码。",
-      ],
-      docs: [
-        {
-          label: "腾讯云 SES",
-          href: "https://www.tencentcloud.com/zh/document/product/1084",
-        },
-      ],
+      strengths: ["域名认证流程完善，适合大体量事务邮件。", "可选 SMTP 密码，兼容旧系统迁移。"],
+      requirements: ["完成发信域名、SPF / DKIM / DMARC 配置。", "API 模式需要 SecretId / SecretKey。", "SMTP 模式需要发信地址、SMTP 用户名与密码。"],
+      docs: [{ label: "腾讯云 SES", href: "https://www.tencentcloud.com/zh/document/product/1084" }],
     },
   },
   {
@@ -165,20 +137,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "CyberMail SMTP",
       summary: "使用固定 SMTP 主机与端口，适合企业事务邮件接入。",
-      strengths: [
-        "SMTP 迁移成本低。",
-        "适合已有邮件管理员体系的企业。",
-      ],
-      requirements: [
-        "填写 SMTP 用户名和密码。",
-        "发信邮箱需要与管理员分配身份一致。",
-      ],
-      docs: [
-        {
-          label: "CyberMail SMTP 说明",
-          href: "https://cloud-sup.cybersolutions.co.jp/hc/ja/articles/360039314431-%E4%BB%96%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0%E3%81%8B%E3%82%89SMTP%E9%80%81%E4%BF%A1%E3%81%99%E3%82%8B%E8%A8%AD%E5%AE%9A",
-        },
-      ],
+      strengths: ["SMTP 迁移成本低。", "适合已有邮件管理员体系的企业。"],
+      requirements: ["填写 SMTP 用户名和密码。", "发信邮箱需要与管理员分配身份一致。"],
+      docs: [{ label: "CyberMail SMTP 说明", href: "https://cloud-sup.cybersolutions.co.jp/hc/ja/articles/360039314431" }],
     },
   },
   {
@@ -197,24 +158,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "SendGrid",
       summary: "支持 Web API 和 SMTP Relay，适合国际业务。",
-      strengths: [
-        "文档完善，生态成熟。",
-        "高并发事务邮件支持好。",
-      ],
-      requirements: [
-        "API 模式需要 API Key。",
-        "SMTP 模式通常使用用户名 apikey 和 API Key 作为密码。",
-      ],
-      docs: [
-        {
-          label: "API Keys",
-          href: "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys",
-        },
-        {
-          label: "SMTP Relay",
-          href: "https://www.twilio.com/docs/sendgrid/for-developers/sending-email/integrating-with-the-smtp-api",
-        },
-      ],
+      strengths: ["文档完善，生态成熟。", "高并发事务邮件支持好。"],
+      requirements: ["API 模式需要 API Key。", "SMTP 模式通常使用用户名 apikey 和 API Key 作为密码。"],
+      docs: [{ label: "API Keys", href: "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys" }, { label: "SMTP Relay", href: "https://www.twilio.com/docs/sendgrid/for-developers/sending-email/integrating-with-the-smtp-api" }],
     },
   },
   {
@@ -231,20 +177,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "Mailgun",
       summary: "常见于事务性通知和事件触发邮件场景。",
-      strengths: [
-        "API 简洁，域名管理清晰。",
-        "Webhook 与事件追踪能力较强。",
-      ],
-      requirements: [
-        "需要 API Key。",
-        "通常还需要发信域名。",
-      ],
-      docs: [
-        {
-          label: "Mailgun API",
-          href: "https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/messages/post-v3--domain-name--messages",
-        },
-      ],
+      strengths: ["API 简洁，域名管理清晰。", "Webhook 与事件追踪能力较强。"],
+      requirements: ["需要 API Key。", "通常还需要发信域名。"],
+      docs: [{ label: "Mailgun API", href: "https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/messages/post-v3--domain-name--messages" }],
     },
   },
   {
@@ -261,19 +196,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "Postmark",
       summary: "偏事务邮件，强调送达速度和开发者体验。",
-      strengths: [
-        "Server Token 模式清晰。",
-        "模板和 webhook 体验稳定。",
-      ],
-      requirements: [
-        "需要 Server API Token。",
-      ],
-      docs: [
-        {
-          label: "Postmark API",
-          href: "https://postmarkapp.com/developer/user-guide/send-email-with-api",
-        },
-      ],
+      strengths: ["Server Token 模式清晰。", "模板和 webhook 体验稳定。"],
+      requirements: ["需要 Server API Token。"],
+      docs: [{ label: "Postmark API", href: "https://postmarkapp.com/developer/user-guide/send-email-with-api" }],
     },
   },
   {
@@ -290,24 +215,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "Resend",
       summary: "新兴热门邮件服务，API 体验很好。",
-      strengths: [
-        "上手快，前后端一体化体验好。",
-        "事务邮件与 React 邮件生态友好。",
-      ],
-      requirements: [
-        "需要 API Key。",
-        "建议先完成发信域名验证。",
-      ],
-      docs: [
-        {
-          label: "Resend API Keys",
-          href: "https://resend.com/docs/dashboard/api-keys/introduction",
-        },
-        {
-          label: "Resend Domains",
-          href: "https://resend.com/docs/dashboard/domains/introduction",
-        },
-      ],
+      strengths: ["上手快，前后端一体化体验好。", "事务邮件与 React 邮件生态友好。"],
+      requirements: ["需要 API Key。", "建议先完成发信域名验证。"],
+      docs: [{ label: "Resend API Keys", href: "https://resend.com/docs/dashboard/api-keys/introduction" }, { label: "Resend Domains", href: "https://resend.com/docs/dashboard/domains/introduction" }],
     },
   },
   {
@@ -326,24 +236,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "Brevo",
       summary: "原 Sendinblue，营销与事务邮件都可用。",
-      strengths: [
-        "支持 API 和 SMTP。",
-        "CRM 和自动化能力一体化。",
-      ],
-      requirements: [
-        "API 模式需要 API Key。",
-        "SMTP 模式需要 SMTP 用户名与密码。",
-      ],
-      docs: [
-        {
-          label: "Brevo API Key",
-          href: "https://developers.brevo.com/docs/getting-started",
-        },
-        {
-          label: "Brevo SMTP",
-          href: "https://help.brevo.com/hc/en-us/articles/209467485-What-are-the-Brevo-SMTP-server-parameters",
-        },
-      ],
+      strengths: ["支持 API 和 SMTP。", "CRM 和自动化能力一体化。"],
+      requirements: ["API 模式需要 API Key。", "SMTP 模式需要 SMTP 用户名与密码。"],
+      docs: [{ label: "Brevo API Key", href: "https://developers.brevo.com/docs/getting-started" }, { label: "Brevo SMTP", href: "https://help.brevo.com/hc/en-us/articles/209467485-What-are-the-Brevo-SMTP-server-parameters" }],
     },
   },
   {
@@ -360,19 +255,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "Mailchimp",
       summary: "适合营销邮件和中小企业运营场景。",
-      strengths: [
-        "营销自动化和模板能力强。",
-        "适合内容运营团队。",
-      ],
-      requirements: [
-        "需要 API Key。",
-      ],
-      docs: [
-        {
-          label: "Mailchimp API Keys",
-          href: "https://mailchimp.com/developer/marketing/docs/fundamentals/?form=MG0AV3",
-        },
-      ],
+      strengths: ["营销自动化和模板能力强。", "适合内容运营团队。"],
+      requirements: ["需要 API Key。"],
+      docs: [{ label: "Mailchimp API Keys", href: "https://mailchimp.com/developer/marketing/docs/fundamentals/?form=MG0AV3" }],
     },
   },
   {
@@ -381,7 +266,7 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     channelLabel: "Zoho Campaigns",
     strengths: "多语言支持和合规能力较好",
     deliverability: "95%+",
-    freeTier: "付费版 ¥28 起/用户",
+    freeTier: "付费版 $28 起/用户",
     supportsApi: true,
     supportsSmtp: true,
     defaultMode: "api",
@@ -391,20 +276,9 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     guide: {
       title: "Zoho Campaigns",
       summary: "适合跨国企业营销和事务邮件混合场景。",
-      strengths: [
-        "支持多语言和 GDPR 合规。",
-        "可根据场景切 API 或 SMTP。",
-      ],
-      requirements: [
-        "API 模式需要 API Key 或 OAuth 凭据。",
-        "SMTP 模式需要 SMTP 主机、端口、用户名与密码。",
-      ],
-      docs: [
-        {
-          label: "Zoho Campaigns API",
-          href: "https://www.zoho.com/campaigns/help/developers/get-started-api.html",
-        },
-      ],
+      strengths: ["支持多语言和 GDPR 合规。", "可根据场景切 API 或 SMTP。"],
+      requirements: ["API 模式需要 API Key 或 OAuth 凭证。", "SMTP 模式需要 SMTP 主机、端口、用户名与密码。"],
+      docs: [{ label: "Zoho Campaigns API", href: "https://www.zoho.com/campaigns/help/developers/get-started-api.html" }],
     },
   },
 ];
@@ -419,8 +293,8 @@ const PROVIDER_OPTIONS: SelectOption[] = PROVIDER_PROFILES.map((profile) => ({
 }));
 
 const API_SMTP_MODE_OPTIONS: SelectOption[] = [
-  { label: "API 接入", value: "api" },
-  { label: "SMTP 接入", value: "smtp" },
+  { label: "API", value: "api" },
+  { label: "SMTP", value: "smtp" },
 ];
 
 const loading = ref(false);
@@ -531,7 +405,7 @@ function getDeliveryMode(item: EmailConfigPublic): DeliveryMode {
 function describeChannel(item: EmailConfigPublic) {
   const mode = getDeliveryMode(item);
   if (mode === "smtp") {
-    const host = item.smtp_host || "未配置 SMTP Host";
+    const host = item.smtp_host || "N/A";
     const port = item.smtp_port ? `:${item.smtp_port}` : "";
     return `${host}${port}`;
   }
@@ -542,7 +416,7 @@ function describeChannel(item: EmailConfigPublic) {
   if (provider === "tencent_ses") {
     return "SES API";
   }
-  return "API 接入";
+  return "API";
 }
 
 function describeAuth(item: EmailConfigPublic) {
@@ -741,10 +615,10 @@ async function saveEmail() {
   try {
     if (isCreateMode.value) {
       const created = await api.createEmailConfig(buildCreatePayload());
-      showMessage("success", `已新增邮件通道：${created.config_name}`);
+      showMessage("success", `${t("emailSettings.channel_created")}: ${created.config_name}`);
     } else if (editingConfigId.value !== null) {
       const updated = await api.updateEmailConfig(editingConfigId.value, buildUpdatePayload());
-      showMessage("success", `已更新邮件通道：${updated.config_name}`);
+      showMessage("success", `${t("emailSettings.channel_updated")}: ${updated.config_name}`);
     }
     closeEditorModal();
     await loadSettings();
@@ -782,7 +656,7 @@ async function activateChannel(item: EmailConfigPublic) {
 }
 
 async function deleteChannel(item: EmailConfigPublic) {
-  const confirmed = window.confirm(`确定删除邮件通道“${item.config_name}”吗？`);
+  const confirmed = window.confirm(`${t("emailSettings.confirm_delete")} "${item.config_name}"?`);
   if (!confirmed) {
     return;
   }
@@ -882,7 +756,7 @@ function secretKeyLabel(provider: EmailProvider) {
           <div class="settings-model-card__actions settings-email-card__actions">
             <NPopover trigger="hover" placement="top" :show-arrow="false">
               <template #trigger>
-                <button class="settings-model-card__action" type="button" aria-label="查看说明">
+                <button class="settings-model-card__action" type="button" :aria-label="t('emailSettings.config_guide')">
                   <i class="fa-solid fa-circle-info"></i>
                 </button>
               </template>
@@ -996,12 +870,12 @@ function secretKeyLabel(provider: EmailProvider) {
 
         <div class="form-grid two">
           <label class="full">
-            <span>通道名称</span>
-            <input v-model="draft.config_name" type="text" placeholder="例如：阿里云通知通道 / SendGrid 营销邮件" />
+            <span>{{ t("emailSettings.channel_name") }}</span>
+            <input v-model="draft.config_name" type="text" :placeholder="t('emailSettings.channel_name_ph')" />
           </label>
 
           <label class="settings-provider-field">
-            <span>提供商</span>
+            <span>{{ t("emailSettings.provider") }}</span>
             <NSelect
               :value="draft.provider"
               class="settings-provider-select"
@@ -1009,29 +883,29 @@ function secretKeyLabel(provider: EmailProvider) {
               :options="PROVIDER_OPTIONS"
               filterable
               consistent-menu-width
-              placeholder="请选择提供商"
+              :placeholder="t('emailSettings.provider_ph')"
               @update:value="(value) => handleProviderChange(String(value))"
             />
           </label>
 
           <label v-if="providerSupportsModeSwitch" class="settings-provider-field">
-            <span>接入方式</span>
+            <span>{{ t("emailSettings.delivery_mode") }}</span>
             <NSelect
               :value="draft.delivery_mode"
               class="settings-provider-select"
               menu-class="settings-provider-select-menu"
               :options="API_SMTP_MODE_OPTIONS"
-              placeholder="请选择接入方式"
+              :placeholder="t('emailSettings.delivery_mode_ph')"
               @update:value="(value) => handleModeChange(String(value))"
             />
           </label>
 
           <label :class="providerSupportsModeSwitch ? '' : 'full'" v-if="requiresSendingDomain(draft.provider)">
-            <span>发信域名</span>
+            <span>{{ t("emailSettings.sending_domain") }}</span>
             <input
               v-model="draft.extra_config.sending_domain"
               type="text"
-              placeholder="例如：mail.example.com"
+              :placeholder="t('emailSettings.sending_domain_ph')"
             />
           </label>
 
@@ -1041,7 +915,7 @@ function secretKeyLabel(provider: EmailProvider) {
               <input
                 v-model="draft.api_key"
                 type="password"
-                :placeholder="isCreateMode ? apiKeyLabel(draft.provider) : `留空则保留当前${apiKeyLabel(draft.provider)}`"
+                :placeholder="isCreateMode ? apiKeyLabel(draft.provider) : t('emailSettings.keep_current_hint')"
               />
             </label>
 
@@ -1050,7 +924,7 @@ function secretKeyLabel(provider: EmailProvider) {
               <input
                 v-model="draft.secret_key"
                 type="password"
-                :placeholder="isCreateMode ? secretKeyLabel(draft.provider) : `留空则保留当前${secretKeyLabel(draft.provider)}`"
+                :placeholder="isCreateMode ? secretKeyLabel(draft.provider) : t('emailSettings.keep_current_hint')"
               />
             </label>
           </template>
@@ -1062,65 +936,65 @@ function secretKeyLabel(provider: EmailProvider) {
             </label>
 
             <label>
-              <span>SMTP 端口</span>
+              <span>SMTP Port</span>
               <input v-model.number="draft.smtp_port" type="number" min="1" max="65535" placeholder="587" />
             </label>
 
             <label>
-              <span>SMTP 用户名</span>
-              <input v-model="draft.smtp_username" type="text" placeholder="SMTP 登录用户名" />
+              <span>SMTP Username</span>
+              <input v-model="draft.smtp_username" type="text" placeholder="SMTP Username" />
             </label>
 
             <label>
-              <span>SMTP 密码</span>
+              <span>SMTP Password</span>
               <input
                 v-model="draft.api_key"
                 type="password"
-                :placeholder="isCreateMode ? 'SMTP 密码' : '留空则保留当前 SMTP 密码'"
+                :placeholder="isCreateMode ? 'SMTP Password' : 'Leave empty to keep current SMTP password'"
               />
             </label>
           </template>
 
           <label>
-            <span>发信邮箱</span>
+            <span>{{ t("emailSettings.sender_email") }}</span>
             <input v-model="draft.sender_email" type="email" placeholder="notice@example.com" />
           </label>
 
           <label>
-            <span>测试邮箱</span>
+            <span>{{ t("emailSettings.test_email") }}</span>
             <input v-model="draft.test_email" type="email" placeholder="test@example.com" />
           </label>
 
           <label>
-            <span>发件人名称</span>
-            <input v-model="draft.extra_config.sender_name" type="text" placeholder="系统通知 / 品牌名称" />
+            <span>{{ t("emailSettings.sender_name") }}</span>
+            <input v-model="draft.extra_config.sender_name" type="text" :placeholder="t('emailSettings.sender_name_ph')" />
           </label>
 
           <label class="full">
-            <span>说明</span>
-            <textarea v-model="draft.description" placeholder="备注当前邮件通道的用途"></textarea>
+            <span>{{ t("emailSettings.description") }}</span>
+            <textarea v-model="draft.description" :placeholder="t('emailSettings.description_ph')"></textarea>
           </label>
 
           <label class="checkbox-row">
             <input v-model="draft.test_mode" type="checkbox" />
-            <span>开启测试模式</span>
+            <span>{{ t("emailSettings.test_mode") }}</span>
           </label>
 
           <label class="checkbox-row">
             <input v-model="draft.enabled" type="checkbox" />
-            <span>启用该邮件通道</span>
+            <span>{{ t("emailSettings.enabled") }}</span>
           </label>
 
           <label class="checkbox-row">
             <input v-model="draft.is_default" type="checkbox" />
-            <span>设为默认邮件通道</span>
+            <span>{{ t("emailSettings.default_channel") }}</span>
           </label>
         </div>
 
         <div class="settings-modal-actions">
-          <button class="secondary-btn narrow" type="button" @click="closeEditorModal">取消</button>
+          <button class="secondary-btn narrow" type="button" @click="closeEditorModal">{{ t("emailSettings.cancel") }}</button>
           <button class="primary-btn narrow" type="button" :disabled="saving" @click="saveEmail">
-            {{ saving ? "保存中..." : isCreateMode ? "创建邮件配置" : "保存邮件配置" }}
+            {{ saving ? t("emailSettings.saving") : isCreateMode ? t("emailSettings.create_channel_config") : t("emailSettings.save_channel_config") }}
           </button>
         </div>
       </div>

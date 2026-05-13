@@ -1,3 +1,5 @@
+import { getLocale } from "../services/i18n";
+
 const ISO_WITHOUT_TZ_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 
 function normalizeServerDate(value?: string | null): string {
@@ -22,7 +24,7 @@ export function formatServerDateTime(value?: string | null, fallback = "--"): st
   if (!parsed) {
     return String(value || fallback);
   }
-  return parsed.toLocaleString("zh-CN", { hour12: false });
+  return parsed.toLocaleString(getLocale(), { hour12: false });
 }
 
 export function formatServerTime(value?: string | null, fallback = "--"): string {
@@ -30,7 +32,7 @@ export function formatServerTime(value?: string | null, fallback = "--"): string
   if (!parsed) {
     return String(value || fallback);
   }
-  return parsed.toLocaleTimeString("zh-CN", { hour12: false });
+  return parsed.toLocaleTimeString(getLocale(), { hour12: false });
 }
 
 export function serverDateTimestamp(value?: string | null): number {

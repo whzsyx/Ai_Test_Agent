@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { t } from "../../services/i18n";
 import type { ChatMessage, InputAttachment } from "../../types";
 import { formatServerDateTime } from "../../utils/datetime";
 
@@ -209,14 +210,14 @@ function messageKind(message: ChatMessage) {
 
 function labelForMessage(message: ChatMessage) {
   const kind = messageKind(message);
-  if (kind === "task_notification") return "Worker Notification";
-  if (kind === "coordinator_assignment") return "Worker Assignment";
+  if (kind === "task_notification") return t("chat.worker_notification");
+  if (kind === "coordinator_assignment") return t("chat.worker_assignment");
   const role = message.role;
-  if (role === "user") return "User Prompt";
-  if (role === "assistant") return "Agent Response";
-  if (role === "tool") return "Tool Output";
-  if (role === "system") return "System";
-  return "Event";
+  if (role === "user") return t("chat.user_prompt");
+  if (role === "assistant") return t("chat.agent_response");
+  if (role === "tool") return t("chat.tool_output");
+  if (role === "system") return t("chat.system");
+  return t("chat.event");
 }
 
 function attachmentsForMessage(message: ChatMessage): InputAttachment[] {
@@ -244,6 +245,20 @@ function formatAttachmentSize(value: unknown) {
     return `${Math.round(size / 1024)} KB`;
   }
   return `${size} B`;
+}
+
+function localizedAttachmentSecondaryText(attachment: InputAttachment) {
+  const formatLabel = String(attachment.metadata?.format_label || t("chat.session_attachment"));
+  const sizeLabel = formatAttachmentSize(attachment.metadata?.size_bytes);
+  return sizeLabel ? `${formatLabel} 路 ${sizeLabel}` : formatLabel;
+}
+
+function localizedDeliveryLabel(message: ChatMessage) {
+  const deliveryStatus = String(message.metadata?.delivery_status || "").trim();
+  if (deliveryStatus === "pending") return t("chat.sending_status");
+  if (deliveryStatus === "streaming") return t("chat.streaming_status");
+  if (deliveryStatus === "failed") return t("chat.failed_status");
+  return "";
 }
 
 function attachmentSecondaryText(attachment: InputAttachment) {
@@ -276,6 +291,11 @@ function toolSummary(content: string) {
     return content.split("\n")[0]?.trim() || "Expand to view tool output";
   }
   return "Expand to view tool output";
+}
+
+function localizedToolSummary(content: string) {
+  const summary = toolSummary(content);
+  return summary === "Expand to view tool output" ? t("chat.expand_tool_output") : summary;
 }
 
 function decodeUnicodeEscapes(content: string) {
@@ -613,8 +633,8 @@ function escapeHtml(content: string) {
         <span>{{ labelForMessage(message) }}</span>
         <span>
           {{ formatServerDateTime(message.created_at) }}
-          <template v-if="deliveryLabel(message)">
-            - {{ deliveryLabel(message) }}
+          <template v-if="localizedDeliveryLabel(message)">
+            - {{ localizedDeliveryLabel(message) }}
           </template>
         </span>
       </div>
@@ -643,7 +663,7 @@ function escapeHtml(content: string) {
       </div>
       <details v-else-if="message.role === 'tool'" class="tool-output-details">
         <summary class="tool-output-summary">
-          <span>{{ toolSummary(message.content) }}</span>
+          <span>{{ localizedToolSummary(message.content) }}</span>
           <span class="tool-output-hint">
             <span class="tool-output-hint-collapsed">展开</span>
             <span class="tool-output-hint-expanded">收起</span>
@@ -672,7 +692,7 @@ function escapeHtml(content: string) {
             </div>
             <div class="conversation-entry-attachment-copy">
               <strong>{{ attachment.name }}</strong>
-              <span>{{ attachmentSecondaryText(attachment) }}</span>
+              <span>{{ localizedAttachmentSecondaryText(attachment) }}</span>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { NSelect, type SelectOption } from "naive-ui";
 
@@ -126,7 +126,7 @@ const providerOptions = computed<SelectOption[]>(() => {
 
 const oauthProviderOptions = computed<SelectOption[]>(() =>
   oauthProviders.value.map((p) => ({
-    label: p.is_enabled ? p.display_name : `${p.display_name}（即将支持）`,
+    label: p.is_enabled ? p.display_name : `${p.display_name}（${t("modelSettings.coming_soon")}）`,
     value: p.key,
     disabled: !p.is_enabled,
   })),
@@ -148,7 +148,7 @@ const oauthSupportsManualModelName = computed(
   () => selectedOAuthProfile.value?.supports_manual_model_name ?? true,
 );
 
-/** 支持拉取模型列表时，有列表后配置名由所选模型决定，不再单独展示输入框 */
+/* ── */
 const showOAuthConfigNameField = computed(
   () =>
     oauthSupportsManualModelName.value &&
@@ -435,7 +435,7 @@ async function activateModel(item: ModelConfigPublic) {
   });
 }
 
-// ── OAuth provider selection ──────────────────────────────────────────────────
+// ── OAuth provider selection ──
 
 function onOAuthProviderChange(key: string | null) {
   if (!key) {
@@ -458,7 +458,7 @@ function onOAuthProviderChange(key: string | null) {
   resetOAuthFlow();
 }
 
-// ── OAuth Authorization Code flow ─────────────────────────────────────────────
+// ── OAuth Authorization Code flow ──
 
 function resetOAuthFlow() {
   stopOAuthPoll();
@@ -524,7 +524,7 @@ async function launchOAuth() {
           showMessage("error", `${t("modelSettings.oauth_failed")}: ${status.error || t("modelSettings.unknown_error")}`);
         }
       } catch {
-        // network hiccup — keep polling
+        // network hiccup 鈥?keep polling
       }
     }, 2000);
   } catch (err) {
@@ -532,7 +532,7 @@ async function launchOAuth() {
   }
 }
 
-// ── OAuth model discovery ─────────────────────────────────────────────────────
+// ── OAuth model discovery ──
 
 async function fetchOAuthModels() {
   if (!modelDraft.oauth_provider) {
@@ -632,14 +632,16 @@ async function deleteModel(item: ModelConfigPublic) {
                 <i class="fa-solid fa-shield-halved"></i>
                 OAuth{{ item.oauth_provider ? ` · ${item.oauth_provider}` : " 2.0" }}
               </span>
-              <span v-else>API Key</span>
+              <span v-else>
+                <i class="fa-solid fa-key"></i> API Key
+              </span>
               <strong v-if="item.auth_type === 'oauth2'">
-                {{ item.has_oauth_refresh_token ? "令牌已获取 ✓" : "未配置" }}
+                {{ item.has_oauth_refresh_token ? t("modelSettings.token_obtained") : t("modelSettings.not_configured") }}
               </strong>
-              <strong v-else>{{ item.has_secret ? "已配置" : "未配置" }}</strong>
+              <strong v-else>{{ item.has_secret ? t("modelSettings.configured") : t("modelSettings.not_configured") }}</strong>
             </div>
             <div class="settings-model-card__stat settings-model-card__stat-full">
-              <span>接口地址</span>
+              <span>{{ t("modelSettings.endpoint_address") }}</span>
               <strong>{{ item.api_base_url }}</strong>
             </div>
           </div>
@@ -651,7 +653,7 @@ async function deleteModel(item: ModelConfigPublic) {
               type="button"
               class="settings-model-card__action settings-model-card__action-test"
               :disabled="busyActionKey === actionKey(item.name, 'test')"
-              title="测试连接"
+              :title="t('modelSettings.test_connection')"
               @click="testConnection(item)"
             >
               <i
@@ -663,7 +665,7 @@ async function deleteModel(item: ModelConfigPublic) {
               type="button"
               class="settings-model-card__action settings-model-card__action-activate"
               :disabled="item.is_active || busyActionKey === actionKey(item.name, 'activate')"
-              title="激活模型"
+              :title="t('modelSettings.activate_model')"
               @click="activateModel(item)"
             >
               <i
@@ -674,7 +676,7 @@ async function deleteModel(item: ModelConfigPublic) {
             <button
               type="button"
               class="settings-model-card__action settings-model-card__action-edit"
-              title="编辑模型"
+              :title="t('modelSettings.edit_model_btn')"
               @click="openEditModal(item)"
             >
               <i class="fa-solid fa-pen-to-square"></i>
@@ -683,7 +685,7 @@ async function deleteModel(item: ModelConfigPublic) {
               type="button"
               class="settings-model-card__action settings-model-card__action-danger"
               :disabled="busyActionKey === actionKey(item.name, 'delete')"
-              title="删除模型"
+              :title="t('modelSettings.delete_model_btn')"
               @click="deleteModel(item)"
             >
               <i
@@ -698,7 +700,6 @@ async function deleteModel(item: ModelConfigPublic) {
           <div class="settings-model-card-add__icon">+</div>
           <div class="settings-model-card-add__body">
             <strong>{{ t("modelSettings.add_model") }}</strong>
-            <p>{{ t("modelSettings.add_model_desc") }}</p>
           </div>
         </button>
       </div>
@@ -715,7 +716,7 @@ async function deleteModel(item: ModelConfigPublic) {
           <button type="button" class="settings-modal-close" @click="closeEditorModal">×</button>
         </div>
 
-        <!-- ── 认证方式切换 ──────────────────────────────────────────── -->
+        <!-- ── Auth type switch ── -->
         <div class="form-grid two">
           <div class="full settings-auth-type-row">
             <span class="settings-auth-type-label">{{ t("modelSettings.auth_type") }}</span>
@@ -739,15 +740,15 @@ async function deleteModel(item: ModelConfigPublic) {
             </div>
           </div>
 
-          <!-- ── API Key 模式 ──────────────────────────────────────────── -->
+          <!-- ── API Key mode ── -->
           <template v-if="!isOAuth">
             <label>
-              <span>模型名称</span>
+              <span>{{ t("modelSettings.model_name") }}</span>
               <input v-model="modelDraft.model_name" type="text" placeholder="claude-opus-4-7 / gpt-5.4" />
             </label>
 
             <label class="settings-provider-field">
-              <span>供应商</span>
+              <span>{{ t("modelSettings.provider") }}</span>
               <NSelect
                 v-model:value="modelDraft.provider"
                 class="settings-provider-select"
@@ -756,44 +757,44 @@ async function deleteModel(item: ModelConfigPublic) {
                 tag
                 clearable
                 :options="providerOptions"
-                placeholder="请选择或输入供应商"
+                :placeholder="t('modelSettings.provider_ph')"
               />
             </label>
 
             <label class="settings-provider-field">
-              <span>协议</span>
+              <span>{{ t("modelSettings.transport") }}</span>
               <NSelect
                 v-model:value="modelDraft.transport"
                 class="settings-provider-select"
                 menu-class="settings-provider-select-menu"
                 :options="TRANSPORT_OPTIONS"
-                placeholder="请选择协议类型"
+                :placeholder="t('modelSettings.transport_ph')"
               />
             </label>
 
             <label>
-              <span>接口地址</span>
+              <span>{{ t("modelSettings.base_url") }}</span>
               <input v-model="modelDraft.base_url" type="text" placeholder="https://api.deepseek.com/v1" />
             </label>
 
             <label class="full">
-              <span>API Key</span>
-              <input v-model="modelDraft.api_key" type="password" placeholder="留空则保留当前密钥" />
-              <small>系统不会回显已保存的密钥内容。</small>
+              <span>{{ t("modelSettings.api_key") }}</span>
+              <input v-model="modelDraft.api_key" type="password" :placeholder="t('modelSettings.api_key_keep')" />
+              <small>{{ t("modelSettings.api_key_hidden_hint") }}</small>
             </label>
           </template>
 
-          <!-- ── OAuth 2.0 模式 ──────────────────────────────────────────── -->
+          <!-- ── OAuth 2.0 mode ── -->
           <template v-else>
             <!-- Step 1: Provider -->
             <label class="full settings-provider-field">
-              <span>OAuth 提供商</span>
+              <span>{{ t("modelSettings.oauth_provider") }}</span>
               <NSelect
                 v-model:value="modelDraft.oauth_provider"
                 class="settings-provider-select"
                 menu-class="settings-provider-select-menu"
                 :options="oauthProviderOptions"
-                placeholder="选择 OAuth 提供商"
+                :placeholder="t('modelSettings.oauth_provider_ph')"
                 clearable
                 @update:value="onOAuthProviderChange"
               />
@@ -801,54 +802,57 @@ async function deleteModel(item: ModelConfigPublic) {
                 {{ selectedOAuthProfile.notes }}
               </small>
               <small v-if="selectedOAuthProfile && !selectedOAuthProfile.is_enabled" class="oauth-provider-note">
-                该平台接入能力还在开发中，当前仅保留扩展位，暂不可用于授权登录。
+                {{ t("modelSettings.oauth_provider_disabled_hint") }}
               </small>
             </label>
 
-            <!-- Azure / custom resource Base URL -->
             <label v-if="oauthNeedsBaseUrl" class="full">
-              <span>资源端点（接口地址）</span>
+              <span>{{ t("modelSettings.oauth_base_url") }}</span>
               <input
                 v-model="oauthCustomBaseUrl"
                 type="text"
                 placeholder="https://your-resource.openai.azure.com"
               />
-              <small>该提供商的 API 端点因资源而异，请填写您的具体地址。</small>
+              <small>{{ t("modelSettings.oauth_base_url_hint") }}</small>
             </label>
 
-            <!-- Step 2: OAuth Authorization -->
             <div v-if="modelDraft.oauth_provider" class="full oauth-launch-section">
               <div class="oauth-step-label">
                 <span class="oauth-step-num">1</span>
-                <span>浏览器授权</span>
+                <span>{{ t("modelSettings.oauth_browser_auth") }}</span>
                 <i v-if="oauthAuthSuccess" class="fa-solid fa-check oauth-step-done"></i>
               </div>
 
-              <!-- Success: refresh token obtained -->
               <div v-if="modelDraft.oauth_refresh_token" class="oauth-token-status oauth-token-ok">
                 <i class="fa-solid fa-circle-check"></i>
-                已获取 Refresh Token，授权完成
+                {{ t("modelSettings.oauth_refresh_token_ready") }}
                 <button type="button" class="oauth-token-clear" @click="modelDraft.oauth_refresh_token = null; resetOAuthFlow()">
-                  清除
+                  {{ t("modelSettings.clear") }}
                 </button>
               </div>
 
-              <!-- Polling / pending / failed -->
-              <div v-else-if="oauthFlowStatus" class="oauth-token-status" :class="{
-                'oauth-token-pending': oauthFlowStatus.status === 'pending',
-                'oauth-token-ok': oauthFlowStatus.status === 'completed',
-                'oauth-token-error': oauthFlowStatus.status === 'failed',
-              }">
-                <i class="fa-solid" :class="{
-                  'fa-spinner fa-spin': oauthFlowStatus.status === 'pending',
-                  'fa-circle-check': oauthFlowStatus.status === 'completed',
-                  'fa-circle-xmark': oauthFlowStatus.status === 'failed',
-                }"></i>
-                <span v-if="oauthFlowStatus.status === 'pending'">等待用户在浏览器中完成授权…</span>
-                <span v-else-if="oauthFlowStatus.status === 'completed'">授权成功</span>
-                <span v-else>授权失败：{{ oauthFlowStatus.error }}</span>
+              <div
+                v-else-if="oauthFlowStatus"
+                class="oauth-token-status"
+                :class="{
+                  'oauth-token-pending': oauthFlowStatus.status === 'pending',
+                  'oauth-token-ok': oauthFlowStatus.status === 'completed',
+                  'oauth-token-error': oauthFlowStatus.status === 'failed',
+                }"
+              >
+                <i
+                  class="fa-solid"
+                  :class="{
+                    'fa-spinner fa-spin': oauthFlowStatus.status === 'pending',
+                    'fa-circle-check': oauthFlowStatus.status === 'completed',
+                    'fa-circle-xmark': oauthFlowStatus.status === 'failed',
+                  }"
+                ></i>
+                <span v-if="oauthFlowStatus.status === 'pending'">{{ t("modelSettings.oauth_waiting") }}</span>
+                <span v-else-if="oauthFlowStatus.status === 'completed'">{{ t("modelSettings.oauth_auth_success") }}</span>
+                <span v-else>{{ t("modelSettings.oauth_auth_failed") }}: {{ oauthFlowStatus.error }}</span>
                 <button v-if="oauthFlowStatus.status !== 'pending'" type="button" class="oauth-token-clear" @click="resetOAuthFlow()">
-                  重置
+                  {{ t("modelSettings.reset") }}
                 </button>
               </div>
 
@@ -859,20 +863,19 @@ async function deleteModel(item: ModelConfigPublic) {
                 @click="launchOAuth"
               >
                 <i class="fa-solid" :class="oauthPolling ? 'fa-spinner fa-spin' : 'fa-arrow-up-right-from-square'"></i>
-                {{ oauthPolling ? "等待授权中…" : (oauthAuthSuccess ? "重新授权" : "启动 OAuth 授权") }}
+                {{ oauthPolling ? t("modelSettings.oauth_launch_waiting") : (oauthAuthSuccess ? t("modelSettings.oauth_launch_again") : t("modelSettings.oauth_launch")) }}
               </button>
 
               <p class="oauth-env-hint">
                 <i class="fa-solid fa-circle-info"></i>
-                Client ID / Client Secret 等凭据已在后端 <code>.env</code> 中配置，无需在此填写。
+                {{ t("modelSettings.oauth_env_hint") }} <code>.env</code>.
               </p>
             </div>
 
-            <!-- Step 3: Model Discovery (shown once provider is selected) -->
             <div v-if="modelDraft.oauth_provider" class="full oauth-models-section">
               <div class="oauth-step-label">
                 <span class="oauth-step-num">2</span>
-                <span>选择模型</span>
+                <span>{{ t("modelSettings.oauth_select_model") }}</span>
                 <i v-if="oauthSelectedModelId" class="fa-solid fa-check oauth-step-done"></i>
               </div>
 
@@ -884,7 +887,7 @@ async function deleteModel(item: ModelConfigPublic) {
                   @click="fetchOAuthModels"
                 >
                   <i class="fa-solid" :class="oauthModelsFetching ? 'fa-spinner fa-spin' : 'fa-magnifying-glass'"></i>
-                  {{ oauthModelsFetching ? "查询中…" : "获取可用模型" }}
+                  {{ oauthModelsFetching ? t("modelSettings.oauth_fetching") : t("modelSettings.oauth_fetch_models") }}
                 </button>
 
                 <NSelect
@@ -893,7 +896,7 @@ async function deleteModel(item: ModelConfigPublic) {
                   class="settings-provider-select oauth-model-select"
                   menu-class="settings-provider-select-menu"
                   :options="oauthModelOptions"
-                  placeholder="选择模型"
+                  :placeholder="t('modelSettings.oauth_fetch_available_models')"
                   filterable
                   clearable
                   @update:value="onOAuthModelSelect"
@@ -901,25 +904,24 @@ async function deleteModel(item: ModelConfigPublic) {
               </div>
 
               <p v-if="!oauthHasModelListing && !oauthAvailableModels.length" class="oauth-no-listing-hint">
-                该提供商暂不支持自动模型列表，请在下方直接填写配置名称。
+                {{ t("modelSettings.oauth_provider_no_listing") }}
               </p>
             </div>
 
-            <!-- 无模型列表或尚未拉取到列表时，需手动填写配置名称 -->
             <label v-if="showOAuthConfigNameField" class="full">
-              <span>配置名称</span>
+              <span>{{ t("modelSettings.config_name") }}</span>
               <input
                 v-model="modelDraft.model_name"
                 type="text"
                 placeholder="gpt-4o / gemini-2.0-flash"
               />
-              <small>该提供商未提供模型列表或列表为空时，请在此填写在系统中使用的配置名称。</small>
+              <small>{{ t("modelSettings.config_name_hint") }}</small>
             </label>
           </template>
 
           <label class="checkbox-row full">
             <input v-model="modelDraft.is_active" type="checkbox" />
-            <span>保存后设为当前主模型</span>
+            <span>{{ t("modelSettings.set_as_default") }}</span>
           </label>
         </div>
 
@@ -937,13 +939,13 @@ async function deleteModel(item: ModelConfigPublic) {
                 style="margin-top: 4px;"
               ></i>
               <div>
-                <strong>能力覆盖</strong>
-                <p>默认根据供应商和协议推断能力；如果需要，可在当前模型上单独覆盖。</p>
+            <strong>{{ t("modelSettings.add_model") }}</strong>
+                <p>{{ t("modelSettings.capability_override_desc") }}</p>
               </div>
             </div>
             <label class="checkbox-row" @click.stop>
               <input v-model="modelDraft.use_provider_defaults" type="checkbox" />
-              <span>跟随默认能力</span>
+              <span>{{ t("modelSettings.follow_default_capabilities") }}</span>
             </label>
           </div>
 
@@ -968,9 +970,9 @@ async function deleteModel(item: ModelConfigPublic) {
         </section>
 
         <div class="settings-modal-actions">
-          <button type="button" class="secondary-btn narrow" :disabled="saving" @click="closeEditorModal">取消</button>
+          <button type="button" class="secondary-btn narrow" :disabled="saving" @click="closeEditorModal">{{ t("modelSettings.cancel") }}</button>
           <button type="button" class="primary-btn narrow" :disabled="loading || saving" @click="saveModel">
-            {{ isEditing ? "保存修改" : "保存模型配置" }}
+            {{ isEditing ? t("modelSettings.save_changes") : t("modelSettings.save_model") }}
           </button>
         </div>
       </section>
@@ -979,14 +981,11 @@ async function deleteModel(item: ModelConfigPublic) {
 </template>
 
 <style scoped>
-/* ── 认证方式切换按钮 ─────────────────────────────────────────── */
+/* ── Auth type switch buttons ── */
 .settings-auth-type-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.settings-auth-type-label {
   font-size: 13px;
   color: var(--muted);
   font-weight: 500;
@@ -1023,7 +1022,7 @@ async function deleteModel(item: ModelConfigPublic) {
   font-weight: 600;
 }
 
-/* ── OAuth 提供商备注 ─────────────────────────────────────────── */
+/* ── OAuth provider styles ── */
 .oauth-provider-note {
   color: var(--muted);
   font-size: 12px;
@@ -1031,7 +1030,7 @@ async function deleteModel(item: ModelConfigPublic) {
   line-height: 1.5;
 }
 
-/* ── 步骤标签 ─────────────────────────────────────────────────── */
+/* ── ── */
 .oauth-step-label {
   display: flex;
   align-items: center;
@@ -1061,7 +1060,7 @@ async function deleteModel(item: ModelConfigPublic) {
   font-size: 14px;
 }
 
-/* ── 浏览器授权区域 ───────────────────────────────────────────── */
+/* ── ── */
 .oauth-launch-section {
   display: flex;
   flex-direction: column;
@@ -1072,7 +1071,7 @@ async function deleteModel(item: ModelConfigPublic) {
   border-radius: 8px;
 }
 
-/* ── 模型选择区域 ─────────────────────────────────────────────── */
+/* ── ── */
 .oauth-models-section {
   display: flex;
   flex-direction: column;
@@ -1101,7 +1100,7 @@ async function deleteModel(item: ModelConfigPublic) {
   margin: 0;
 }
 
-/* ── 操作按钮 ─────────────────────────────────────────────────── */
+/* ── ── */
 .oauth-launch-btn,
 .oauth-fetch-btn {
   display: inline-flex;
@@ -1120,19 +1119,17 @@ async function deleteModel(item: ModelConfigPublic) {
   align-self: flex-start;
 }
 
-.oauth-launch-btn:hover:not(:disabled),
-.oauth-fetch-btn:hover:not(:disabled) {
+.oauth-launch-btn:hover {
   border-color: var(--text);
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
-.oauth-launch-btn:disabled,
-.oauth-fetch-btn:disabled {
+.oauth-launch-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-/* ── 授权状态横幅 ─────────────────────────────────────────────── */
+/* ── ── */
 .oauth-token-status {
   display: flex;
   align-items: center;
@@ -1142,21 +1139,21 @@ async function deleteModel(item: ModelConfigPublic) {
   font-size: 13px;
 }
 
-/* 等待中：静默灰 */
+/* ── */
 .oauth-token-pending {
   background: color-mix(in srgb, var(--muted) 8%, transparent);
   color: var(--muted);
   border: 1px solid var(--border);
 }
 
-/* 成功：深色强调 */
+/* Success: dark emphasis */
 .oauth-token-ok {
   background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
   border: 1px solid var(--border-strong);
 }
 
-/* 失败：红色保留语义 */
+/* Error: red with note */
 .oauth-token-error {
   background: color-mix(in srgb, var(--red) 10%, transparent);
   color: var(--red);
@@ -1179,7 +1176,7 @@ async function deleteModel(item: ModelConfigPublic) {
   opacity: 1;
 }
 
-/* ── 环境变量提示 ─────────────────────────────────────────────── */
+/* ── ── */
 .oauth-env-hint {
   font-size: 12px;
   color: var(--muted);
@@ -1197,3 +1194,4 @@ async function deleteModel(item: ModelConfigPublic) {
   color: var(--text);
 }
 </style>
+

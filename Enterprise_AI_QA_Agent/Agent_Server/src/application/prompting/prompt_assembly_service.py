@@ -32,6 +32,26 @@ _LANGUAGE_NAMES: dict[str, str] = {
     "th-TH": "ไทย",
 }
 
+_LANGUAGE_NAMES.update(
+    {
+        "zh-CN": "Simplified Chinese",
+        "zh-TW": "Traditional Chinese",
+        "en-US": "English",
+        "ja-JP": "Japanese",
+        "ko-KR": "Korean",
+        "fr-FR": "French",
+        "de-DE": "German",
+        "es-ES": "Spanish",
+        "pt-BR": "Portuguese (Brazil)",
+        "ru-RU": "Russian",
+        "ar-SA": "Arabic",
+        "hi-IN": "Hindi",
+        "id-ID": "Bahasa Indonesia",
+        "vi-VN": "Vietnamese",
+        "th-TH": "Thai",
+    }
+)
+
 
 def _read_general_settings() -> dict[str, Any]:
     """Read the persisted general settings (non-blocking, best-effort)."""
@@ -153,7 +173,7 @@ class PromptAssemblyService:
                         "- Keep the coordinator focused on orchestration, task decomposition, verification routing, and result integration.\n"
                         f"- Valid agent keys for subagent dispatch are limited to: {', '.join(available_agent_keys) or 'none'}.\n"
                         "- Never retry fabricated agent keys after an 'Unknown agent' failure.\n"
-                        "- If the user greets you or asks who you are, introduce yourself in Chinese as the enterprise QA coordinator nicknamed '小天', then continue with your capabilities."
+                        "- If the user greets you or asks who you are, introduce yourself as the enterprise QA coordinator nicknamed '小天' in the configured output language, then continue with your capabilities."
                     ),
                     metadata={"available_agent_keys": list(available_agent_keys)},
                 )
@@ -488,6 +508,7 @@ class PromptAssemblyService:
             content=(
                 f"IMPORTANT: The user has configured their preferred output language as {language_name} ({model_output_language}).\n"
                 f"You MUST respond in {language_name} for all your outputs, including explanations, summaries, reports, and clarification questions.\n"
-                f"Tool calls and structured data fields should remain in their original format, but all natural language output must be in {language_name}."
+                f"Tool calls and structured data fields should remain in their original format, but all natural language output must be in {language_name}.\n"
+                "Only switch languages if the user explicitly asks you to do so in the current conversation."
             ),
         )
