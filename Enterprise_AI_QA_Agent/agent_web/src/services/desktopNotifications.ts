@@ -1,5 +1,8 @@
 /**
- * Desktop Notification Service.
+ * Desktop Notification Service (Service Worker based).
+ *
+ * Uses Service Worker's showNotification() for reliable notifications
+ * that work even when the tab is in background or minimized.
  *
  * Monitors session events and triggers browser notifications when:
  * - A session completes while the user is away.
@@ -8,47 +11,92 @@
  * Respects the user's general settings for notification preferences.
  */
 import { useGeneralSettingsStore } from "../stores/generalSettings";
-import { useSessionStore } from "../stores/session";
 
 const notifiedIds = new Set<string>();
+let swRegistration: ServiceWorkerRegistration | null = null;
 
 /**
- * Determine if the user is "away" from the current interface.
+ * Register the Service Worker. Call once at app startup.
  */
-function isUserAway(sessionId?: string): boolean {
-  // Tab not visible.
+export async function registerServiceWorker(): Promise<void> {
+  if (!("serviceWorker" in navigator)) {
+    console.warn("[Notifications] Service Worker not supported in this browser");
+    return;
+  }
+  try {
+    swRegistration = await navigator.serviceWorker.register("/sw.js");
+    console.log("[Notifications] Service Worker registered successfully", swRegistration);
+  } catch (err) {
+    console.warn("[Notifications] SW registration failed:", err);
+  }
+}
+
+/**
+ * Get the active SW registration (lazy).
+ */
+async function getRegistration(): Promise<ServiceWorkerRegistration | null> {
+  if (swRegistration) return swRegistration;
+  if (!("serviceWorker" in navigator)) return null;
+  try {
+    swRegistration = await navigator.serviceWorker.ready;
+    return swRegistration;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Determine if the user is "away" from the current session.
+ * Away means: tab not visible, OR user is not on the Home page.
+ */
+function isUserAway(_sessionId?: string): boolean {
+  // Tab not visible (user switched to another app/tab).
   if (document.visibilityState !== "visible") {
     return true;
   }
-  // If a specific session is provided, check if user is on that session.
-  if (sessionId) {
-    const sessionStore = useSessionStore();
-    if (sessionStore.session && sessionStore.session.id !== sessionId) {
-      return true;
-    }
+  // User navigated away from the home/chat page within the app.
+  const path = window.location.pathname || "";
+  if (!path.endsWith("/") && path !== "/" && !path.includes("/home")) {
+    return true;
   }
   return false;
 }
 
 /**
- * Send a desktop notification if conditions are met.
+ * Send a desktop notification via Service Worker.
+ * Falls back to basic Notification API if SW is not available.
  */
-function sendNotification(title: string, options?: NotificationOptions): void {
+async function sendNotification(title: string, options?: NotificationOptions): Promise<void> {
   if (!("Notification" in window) || Notification.permission !== "granted") {
     return;
   }
+
+  const reg = await getRegistration();
+  if (reg) {
+    // Use Service Worker showNotification (works in background).
+    try {
+      await reg.showNotification(title, {
+        icon: "/logo.png",
+        badge: "/logo.png",
+        tag: options?.tag || "default",
+        ...options,
+      } as NotificationOptions);
+      return;
+    } catch {
+      // Fall through to basic API.
+    }
+  }
+
+  // Fallback: basic Notification API.
   try {
     const notification = new Notification(title, {
-      icon: "/favicon.ico",
-      badge: "/favicon.ico",
+      icon: "/logo.png",
       ...options,
     });
-    // Click to focus the window.
     notification.onclick = () => {
       window.focus();
       notification.close();
     };
-    // Auto-close after 8 seconds.
     setTimeout(() => notification.close(), 8000);
   } catch {
     // Notification API may fail in some contexts.
@@ -60,6 +108,15 @@ function sendNotification(title: string, options?: NotificationOptions): void {
  */
 export function notifySessionComplete(sessionId: string, title?: string): void {
   const settings = useGeneralSettingsStore();
+  console.log("[Notifications] notifySessionComplete called", {
+    sessionId,
+    notifyEnabled: settings.notifySessionCompleteWhenAway,
+    canSend: settings.canSendDesktopNotifications,
+    awayOnly: settings.notificationsAwayOnly,
+    isAway: isUserAway(sessionId),
+    permission: typeof Notification !== "undefined" ? Notification.permission : "N/A",
+  });
+
   if (!settings.notifySessionCompleteWhenAway) return;
   if (!settings.canSendDesktopNotifications) return;
   if (settings.notificationsAwayOnly && !isUserAway(sessionId)) return;
@@ -68,7 +125,8 @@ export function notifySessionComplete(sessionId: string, title?: string): void {
   if (notifiedIds.has(notifyKey)) return;
   notifiedIds.add(notifyKey);
 
-  sendNotification("会话执行完成", {
+  console.log("[Notifications] Sending notification:", title);
+  void sendNotification("会话执行完成", {
     body: title || `会话 ${sessionId.slice(0, 8)} 已完成执行。`,
     tag: notifyKey,
   });
@@ -91,7 +149,7 @@ export function notifyApprovalRequired(
   if (notifiedIds.has(notifyKey)) return;
   notifiedIds.add(notifyKey);
 
-  sendNotification("工具审批待处理", {
+  void sendNotification("工具审批待处理", {
     body: toolName
       ? `工具 "${toolName}" 需要审批才能继续执行。`
       : "有工具操作需要您的审批。",

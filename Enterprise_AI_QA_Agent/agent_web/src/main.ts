@@ -60,3 +60,8 @@ generalSettingsStore.$subscribe((_mutation, state) => {
 });
 
 app.mount("#app");
+
+// Register Service Worker for desktop notifications.
+import("./services/desktopNotifications").then(({ registerServiceWorker }) => {
+  registerServiceWorker();
+});

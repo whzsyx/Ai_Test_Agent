@@ -591,6 +591,10 @@ export const useSessionStore = defineStore("session", {
       this.eventSource = api.connectEvents(this.session.id, (event) => {
         this.activity = [event, ...this.activity].slice(0, 50);
         this.applyStreamingEvent(event);
+        // Debug: log all SSE events for notification troubleshooting
+        if (event.type?.startsWith("turn.") || event.type?.startsWith("approval.")) {
+          console.log("[SSE Event]", event.type, event.session_id);
+        }
         if (
           event.type === "approval.created" ||
           event.type === "approval.resolved" ||
