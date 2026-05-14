@@ -176,6 +176,9 @@ class ApiTestTask(BaseModel):
     response_body: Any = None
     check_results: list[dict[str, Any]] = Field(default_factory=list)
     duration_ms: float = 0.0
+    worker_session_id: str = ""
+    worker_status: str = ""
+    worker_summary: str = ""
 
 
 # ---------------------------------------------------------------------------

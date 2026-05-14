@@ -13,6 +13,7 @@ from uuid import uuid4
 from src.application.documents.api_docs_service import ApiDocsService
 from src.modes.api_testing_mode.campaign_state import (
     ApiTestCampaign,
+    ApiTestTask,
     ApiTestingRequestState,
     ApiTestingState,
     CredentialSession,
@@ -35,6 +36,7 @@ from src.modes.api_testing_mode.contracts import (
     PHASE_PROJECT_CANDIDATES_FOUND,
     PHASE_REPORT_READY,
     PHASE_REQUEST_RESOLVED,
+    PHASE_TASK_DISPATCHING,
     PHASE_TASK_RUNNING,
     SCOPE_ALL_RELATED,
     SCOPE_CORE_ONLY,
@@ -57,6 +59,7 @@ from src.modes.api_testing_mode.precondition_resolver import PreconditionResolve
 from src.modes.api_testing_mode.project_locator import ApiProjectLocator
 from src.modes.api_testing_mode.report_builder import ReportBuilder
 from src.modes.api_testing_mode.selection_resolver import SelectionResolver
+from src.modes.api_testing_mode.subagent_coordinator import ApiSubagentCoordinator
 from src.modes.api_testing_mode.task_pool import ApiTaskPool
 from src.modes.api_testing_mode.verification import ApiTestingVerificationPolicy
 from src.modes.api_testing_mode.evaluation import ApiTestingEvaluationPolicy
@@ -70,9 +73,13 @@ class ApiTestingModeRuntime:
         *,
         api_docs_service: ApiDocsService,
         settings: Any = None,
+        coordinator_runtime_service: Any = None,
+        session_store: Any = None,
     ) -> None:
         self._api_docs_service = api_docs_service
         self._settings = settings
+        self._coordinator_runtime_service = coordinator_runtime_service
+        self._session_store = session_store
         self._project_locator = ApiProjectLocator(api_docs_service=api_docs_service)
         self._doc_parser = ApiDocParser(api_docs_service=api_docs_service)
         self._capability_mapper = CapabilityMapper()
@@ -94,6 +101,10 @@ class ApiTestingModeRuntime:
 
     async def handle(self, arguments: dict[str, Any], context: Any) -> dict[str, Any]:
         """Main entry: restore state, drive phase machine, return result."""
+        worker_action = str(arguments.get("worker_action") or "").strip().lower()
+        if worker_action == "execute_task":
+            return await self._execute_dispatched_task(arguments)
+
         state = self._restore_state(context)
         request = self._build_request(arguments, context)
 
@@ -117,7 +128,7 @@ class ApiTestingModeRuntime:
                 return self._build_output(state, note="请从候选列表中选择，或输入序号/关键词。")
 
         # Drive the phase machine forward.
-        state = await self._advance(state)
+        state = await self._advance(state, context)
 
         # Persist state for next turn.
         self._persist_state(state, context)
@@ -127,7 +138,7 @@ class ApiTestingModeRuntime:
     # Phase machine
     # ==================================================================
 
-    async def _advance(self, state: ApiTestingState) -> ApiTestingState:
+    async def _advance(self, state: ApiTestingState, context: Any) -> ApiTestingState:
         """Advance the state machine as far as possible without user input."""
         # Guard: if already terminal, return.
         if state.phase in TERMINAL_PHASES:
@@ -167,7 +178,7 @@ class ApiTestingModeRuntime:
 
         # Phase: campaign_ready -> execute.
         if state.phase == PHASE_CAMPAIGN_READY:
-            state = await self._execute_campaign(state)
+            state = await self._execute_campaign(state, context)
 
         return state
 
@@ -395,30 +406,44 @@ class ApiTestingModeRuntime:
         state.record_phase_transition(PHASE_CAMPAIGN_READY, f"Campaign built with {len(graph.tasks)} tasks.")
         return state
 
-    async def _execute_campaign(self, state: ApiTestingState) -> ApiTestingState:
+    async def _execute_campaign(self, state: ApiTestingState, context: Any) -> ApiTestingState:
         if state.campaign is None:
             state.record_phase_transition(PHASE_FAILED, "No campaign to execute.")
             return state
 
-        state.record_phase_transition(PHASE_TASK_RUNNING, "Executing campaign tasks.")
+        state.record_phase_transition(PHASE_TASK_DISPATCHING, "Dispatching campaign tasks to worker agents.")
 
         pool = ApiTaskPool(tasks=state.campaign.tasks)
         # Resolve auth token field from parsed doc hints.
         auth_token_field = "access_token"
         if hasattr(self, "_last_auth_hint") and isinstance(self._last_auth_hint, dict):
             auth_token_field = str(self._last_auth_hint.get("token_field") or "access_token")
-        executor = ApiTaskExecutor(
-            credential_manager=self._credential_manager,
-            timeout_seconds=state.campaign.execution_policy.request_timeout_seconds,
-            auth_token_field=auth_token_field,
-        )
-        coordinator = ApiTestCoordinator(
-            pool=pool,
-            policy=state.campaign.execution_policy,
-            executor_fn=executor.execute,
-        )
+        state.record_phase_transition(PHASE_TASK_RUNNING, "Executing campaign tasks.")
 
-        completed_tasks = await coordinator.run_all()
+        if self._can_use_subagent_execution(context):
+            coordinator = ApiSubagentCoordinator(
+                pool=pool,
+                policy=state.campaign.execution_policy,
+                coordinator_runtime_service=self._coordinator_runtime_service,
+                session_store=self._session_store,
+                parent_context=self._build_dispatch_context(context),
+                credential_manager=self._credential_manager,
+                auth_token_field=auth_token_field,
+                worker_model_key=getattr(context, "selected_model_key", "") or None,
+            )
+            completed_tasks = await coordinator.run_all()
+        else:
+            executor = ApiTaskExecutor(
+                credential_manager=self._credential_manager,
+                timeout_seconds=state.campaign.execution_policy.request_timeout_seconds,
+                auth_token_field=auth_token_field,
+            )
+            coordinator = ApiTestCoordinator(
+                pool=pool,
+                policy=state.campaign.execution_policy,
+                executor_fn=executor.execute,
+            )
+            completed_tasks = await coordinator.run_all()
         state.campaign.tasks = completed_tasks
         state.campaign.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -685,6 +710,68 @@ class ApiTestingModeRuntime:
             return int(option_id)
         except ValueError:
             return None
+
+    async def _execute_dispatched_task(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        raw_task = arguments.get("task")
+        if not isinstance(raw_task, dict):
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": "Worker task execution requires a serialized `task` payload.",
+                "error": "missing_task_payload",
+            }
+
+        task = ApiTestTask.model_validate(raw_task)
+        credential_manager = CredentialManager()
+
+        raw_credential = arguments.get("credential_session")
+        if isinstance(raw_credential, dict):
+            try:
+                credential_manager.restore_session(CredentialSession.model_validate(raw_credential))
+            except Exception:
+                pass
+
+        auth_token_field = str(arguments.get("auth_token_field") or "access_token")
+        executor = ApiTaskExecutor(
+            credential_manager=credential_manager,
+            timeout_seconds=task.timeout_seconds or 30.0,
+            auth_token_field=auth_token_field,
+        )
+        result = await executor.execute(task)
+        latest_credential = credential_manager.get_latest()
+        summary = (
+            f"Executed API task {result.task_id} with final status {result.status}."
+            if result.response_status is None
+            else f"Executed API task {result.task_id} with final status {result.status} and HTTP {result.response_status}."
+        )
+        return {
+            "status": "completed",
+            "ok": result.status == "completed",
+            "summary": summary,
+            "worker_kind": "api_test_task_execution",
+            "task_result": result.model_dump(mode="json"),
+            "credential_session": latest_credential.model_dump(mode="json") if latest_credential else None,
+        }
+
+    def _can_use_subagent_execution(self, context: Any) -> bool:
+        if self._coordinator_runtime_service is None or self._session_store is None:
+            return False
+        return bool(getattr(context, "session_id", "") and getattr(context, "turn_id", ""))
+
+    def _build_dispatch_context(self, context: Any) -> dict[str, Any]:
+        return {
+            "session_id": str(getattr(context, "session_id", "") or ""),
+            "turn_id": str(getattr(context, "turn_id", "") or ""),
+            "trace_id": str(getattr(context, "trace_id", "") or ""),
+            "selected_agent_key": str(getattr(context, "selected_agent_key", "") or ""),
+            "selected_model_key": str(getattr(context, "selected_model_key", "") or ""),
+        }
+
+    def set_coordinator_runtime_service(self, coordinator_runtime_service: Any) -> None:
+        self._coordinator_runtime_service = coordinator_runtime_service
+
+    def set_session_store(self, session_store: Any) -> None:
+        self._session_store = session_store
 
 
 __all__ = ["ApiTestingModeRuntime"]

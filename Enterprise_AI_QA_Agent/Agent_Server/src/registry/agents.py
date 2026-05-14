@@ -355,7 +355,7 @@ class AgentRegistry:
                     role="worker",
                     summary="Execute ready API test tasks from the task pool with HTTP calls and assertion evaluation.",
                     description="Parallel execution worker for API testing campaigns. Receives dispatched tasks, sends HTTP requests, evaluates assertions, and returns structured results.",
-                    supported_tools=["api-tester", "api-docs-library", "knowledge-rag", "session-history", "observation-search", "report-writer"],
+                    supported_tools=["api-test-runner", "api-tester", "api-docs-library", "knowledge-rag", "session-history", "observation-search", "report-writer"],
                     supported_skills=["api-validation", "assertion-design"],
                     supported_models=["gpt-5.4", "deepseek-reasoner", "claude-sonnet-4"],
                     default_model="gpt-5.4",

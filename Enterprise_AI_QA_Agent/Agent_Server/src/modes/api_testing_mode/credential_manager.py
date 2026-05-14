@@ -100,6 +100,13 @@ class CredentialManager:
     def get(self, credential_session_id: str) -> CredentialSession | None:
         return self._sessions.get(credential_session_id)
 
+    def restore_session(self, session: CredentialSession) -> CredentialSession:
+        restored = session.model_copy(deep=True)
+        if not restored.credential_session_id:
+            restored.credential_session_id = str(uuid4())
+        self._sessions[restored.credential_session_id] = restored
+        return restored
+
     def has_valid_session(self) -> bool:
         for session in self._sessions.values():
             if session.token or session.headers or session.cookie_jar:

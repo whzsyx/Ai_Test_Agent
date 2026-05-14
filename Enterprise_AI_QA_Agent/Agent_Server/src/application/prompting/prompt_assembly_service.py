@@ -5,7 +5,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from src.modes.api_testing_mode.prompt_contract import API_TESTING_PROMPT_CONTRACT
+from src.modes.api_testing_mode.prompt_contract import (
+    API_EXECUTOR_WORKER_PROMPT_CONTRACT,
+    API_TESTING_PROMPT_CONTRACT,
+)
 from src.modes.ui_automation_mode.prompt_contract import UI_AUTOMATION_PROMPT_CONTRACT
 from src.schemas.prompting import PromptAssemblyResult, PromptSection
 
@@ -218,6 +221,17 @@ class PromptAssemblyService:
                     cache_scope="dynamic",
                     priority=50,
                     content=API_TESTING_PROMPT_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "api-executor-worker":
+            sections.append(
+                PromptSection(
+                    key="api_executor_worker_contract",
+                    title="API Executor Worker Contract",
+                    source="prompt_assembly.api_executor_worker",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=API_EXECUTOR_WORKER_PROMPT_CONTRACT,
                 )
             )
 

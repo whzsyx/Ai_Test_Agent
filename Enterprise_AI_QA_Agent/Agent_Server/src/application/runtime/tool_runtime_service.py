@@ -116,6 +116,8 @@ class ToolRuntimeService:
         self._api_testing_mode_runtime = ApiTestingModeRuntime(
             api_docs_service=api_docs_service,
             settings=settings,
+            coordinator_runtime_service=coordinator_runtime_service,
+            session_store=session_store,
         )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
@@ -151,6 +153,7 @@ class ToolRuntimeService:
 
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
         self._coordinator_runtime_service = coordinator_runtime_service
+        self._api_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
 
     def set_model_registry(self, model_registry) -> None:
         self._model_registry = model_registry
@@ -166,6 +169,7 @@ class ToolRuntimeService:
 
     def set_session_store(self, session_store: SessionStore) -> None:
         self._session_store = session_store
+        self._api_testing_mode_runtime.set_session_store(session_store)
 
     def has_handler(self, tool_key: str) -> bool:
         return tool_key in self._handlers
