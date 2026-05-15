@@ -293,10 +293,10 @@ class ApiTaskExecutor:
         return {
             "name": f"unknown_assertion:{kind}",
             "kind": kind,
-            "passed": True,
+            "passed": False,
             "expected": expected,
             "actual": None,
-            "description": description or "Unknown assertion kind (captured only).",
+            "description": description or f"Unknown assertion kind '{kind}' is not executable.",
         }
 
     def _lookup_path(self, obj: Any, path: str) -> tuple[Any, bool]:

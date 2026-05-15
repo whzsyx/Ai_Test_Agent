@@ -5,7 +5,7 @@ All state is Pydantic-serializable so it can be persisted in
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -231,7 +231,30 @@ class CampaignReport(BaseModel):
     duration_ms: float = 0.0
     tasks: list[dict[str, Any]] = Field(default_factory=list)
     findings: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    verification_result: dict[str, Any] = Field(default_factory=dict)
+    evaluation_result: dict[str, Any] = Field(default_factory=dict)
     generated_at: str = ""
+
+
+class ApiTaskEventRecord(BaseModel):
+    """A checkpoint event emitted while an API campaign is executing."""
+
+    event_id: str = ""
+    event_type: str = ""  # task_running / task_completed / task_failed / task_skipped
+    task_id: str = ""
+    task_name: str = ""
+    method: str = ""
+    path: str = ""
+    status: str = ""
+    phase: str = ""
+    attempts: int = 0
+    response_status: int | None = None
+    duration_ms: float = 0.0
+    worker_session_id: str = ""
+    summary: str = ""
+    error: str = ""
+    at: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +266,12 @@ class ApiTestingState(BaseModel):
     """Top-level state captured per session for the API testing mode."""
 
     session_id: str = ""
+    trace_id: str = ""
     phase: str = "request_resolved"
     previous_phase: str = ""
+    selected_agent: str = ""
+    selected_tools: list[str] = Field(default_factory=list)
+    context_refs: list[dict[str, Any]] = Field(default_factory=list)
     request: ApiTestingRequestState = Field(default_factory=ApiTestingRequestState)
     pending_selection: PendingSelection | None = None
     project_candidates: list[ProjectCandidate] = Field(default_factory=list)
@@ -254,9 +281,16 @@ class ApiTestingState(BaseModel):
     endpoint_candidates: list[EndpointCandidate] = Field(default_factory=list)
     selected_scope: str = ""
     selected_endpoints: list[EndpointCandidate] = Field(default_factory=list)
+    auth_hint: dict[str, Any] = Field(default_factory=dict)
     credential_session: CredentialSession | None = None
     campaign: ApiTestCampaign | None = None
     report: CampaignReport | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    verification_result: dict[str, Any] = Field(default_factory=dict)
+    evaluation_result: dict[str, Any] = Field(default_factory=dict)
+    execution_checkpoint: dict[str, Any] = Field(default_factory=dict)
+    task_events: list[ApiTaskEventRecord] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
     last_updated_at: str = ""
     history: list[dict[str, Any]] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
@@ -266,7 +300,7 @@ class ApiTestingState(BaseModel):
         if self.phase != new_phase:
             self.previous_phase = self.phase
         self.phase = new_phase
-        self.last_updated_at = datetime.utcnow().isoformat()
+        self.last_updated_at = datetime.now(timezone.utc).isoformat()
         if reason:
             self.history.append(
                 {
@@ -290,5 +324,6 @@ __all__ = [
     "ExecutionPolicy",
     "ApiTestCampaign",
     "CampaignReport",
+    "ApiTaskEventRecord",
     "ApiTestingState",
 ]

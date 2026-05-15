@@ -55,6 +55,9 @@ export interface ApiTestingReport {
   duration_ms: number;
   tasks: ApiTestingTaskSummary[];
   findings: string[];
+  artifacts: ApiTestingArtifact[];
+  verification_result: ApiTestingVerificationResult | Record<string, unknown>;
+  evaluation_result: ApiTestingEvaluationResult | Record<string, unknown>;
   generated_at: string;
 }
 
@@ -93,6 +96,10 @@ export interface ApiTestRunnerOutput {
   status: "completed" | "partial" | "failed";
   phase: string;
   summary: string;
+  trace_id?: string;
+  selected_agent?: string;
+  selected_tools?: string[];
+  context_refs?: Array<Record<string, unknown>>;
   pending_selection?: ApiTestingPendingSelection;
   selected_project?: {
     project_name: string;
@@ -113,7 +120,12 @@ export interface ApiTestRunnerOutput {
   task_count?: number;
   report?: ApiTestingReport;
   report_markdown?: string;
+  verification_result?: ApiTestingVerificationResult | Record<string, unknown>;
+  evaluation_result?: ApiTestingEvaluationResult | Record<string, unknown>;
   artifacts?: ApiTestingArtifact[];
+  errors?: ApiTestingErrorRecord[];
+  execution_checkpoint?: ApiTestingExecutionCheckpoint;
+  task_events?: ApiTestingTaskEvent[];
   notes?: string[];
 }
 
@@ -122,6 +134,68 @@ export interface ApiTestingArtifact {
   filename: string;
   content_type: string;
   label: string;
+  task_id?: string;
+}
+
+export interface ApiTestingVerificationResult {
+  passed: boolean;
+  verdict: string;
+  summary: string;
+  pass_rate: number;
+  critical_passed: boolean;
+  sla_passed: boolean;
+  total_rules: number;
+  failed_rules: number;
+  rules: Array<Record<string, unknown>>;
+}
+
+export interface ApiTestingEvaluationResult {
+  campaign_id: string;
+  quality_score: Record<string, unknown>;
+  coverage: Record<string, unknown>;
+  failure_classifications: Array<Record<string, unknown>>;
+  verification_verdict?: ApiTestingVerificationResult | null;
+  recommendations: string[];
+  summary: string;
+}
+
+export interface ApiTestingErrorRecord {
+  task_id?: string;
+  category?: string;
+  severity?: string;
+  message?: string;
+  response_status?: number | null;
+  is_transient?: boolean;
+}
+
+export interface ApiTestingExecutionCheckpoint {
+  phase: string;
+  campaign_id: string;
+  last_event_type: string;
+  active_task_id: string;
+  active_task_status: string;
+  task_summary: Record<string, number>;
+  event_count: number;
+  updated_at: string;
+  trace_id: string;
+}
+
+export interface ApiTestingTaskEvent {
+  event_id: string;
+  event_type: string;
+  task_id: string;
+  task_name: string;
+  method: string;
+  path: string;
+  status: string;
+  phase: string;
+  attempts: number;
+  response_status: number | null;
+  duration_ms: number;
+  worker_session_id: string;
+  summary: string;
+  error: string;
+  at: string;
 }
 
 // ---------------------------------------------------------------------------

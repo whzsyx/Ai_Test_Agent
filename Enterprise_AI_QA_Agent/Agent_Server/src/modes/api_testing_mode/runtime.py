@@ -13,6 +13,7 @@ from uuid import uuid4
 from src.application.documents.api_docs_service import ApiDocsService
 from src.modes.api_testing_mode.campaign_state import (
     ApiTestCampaign,
+    ApiTaskEventRecord,
     ApiTestTask,
     ApiTestingRequestState,
     ApiTestingState,
@@ -61,6 +62,7 @@ from src.modes.api_testing_mode.report_builder import ReportBuilder
 from src.modes.api_testing_mode.selection_resolver import SelectionResolver
 from src.modes.api_testing_mode.subagent_coordinator import ApiSubagentCoordinator
 from src.modes.api_testing_mode.task_pool import ApiTaskPool
+from src.modes.api_testing_mode.tools import API_TESTING_TOOL_KEYS
 from src.modes.api_testing_mode.verification import ApiTestingVerificationPolicy
 from src.modes.api_testing_mode.evaluation import ApiTestingEvaluationPolicy
 
@@ -113,6 +115,7 @@ class ApiTestingModeRuntime:
             state = ApiTestingState()
 
         state.request = request
+        self._attach_runtime_context(state, context)
 
         # If we are in an awaiting phase, try to resolve the user's reply.
         if state.phase in AWAITING_PHASES and state.pending_selection:
@@ -262,6 +265,7 @@ class ApiTestingModeRuntime:
                 )
                 for doc_id in project.doc_ids
             ]
+        state.context_refs = self._build_document_context_refs(state.selected_documents)
         state.record_phase_transition(PHASE_DOCUMENT_SELECTED, f"Project '{project.project_name}' selected.")
         return state
 
@@ -276,6 +280,7 @@ class ApiTestingModeRuntime:
 
         # Store auth_hint for later use by executor.
         self._last_auth_hint = auth_hint
+        state.auth_hint = dict(auth_hint)
 
         if not all_endpoints:
             state.record_phase_transition(PHASE_FAILED, "No endpoints found in selected documents.")
@@ -331,7 +336,7 @@ class ApiTestingModeRuntime:
         mapped: list[MappedEndpoint] | None = None,
     ) -> ApiTestingState:
         # Get auth hint from parsed docs.
-        auth_hint: dict[str, Any] = {}
+        auth_hint = state.auth_hint if isinstance(state.auth_hint, dict) else {}
         # Analyze preconditions.
         analysis = self._precondition_resolver.analyze(
             endpoints=state.selected_endpoints,
@@ -412,13 +417,29 @@ class ApiTestingModeRuntime:
             return state
 
         state.record_phase_transition(PHASE_TASK_DISPATCHING, "Dispatching campaign tasks to worker agents.")
+        self._checkpoint_execution_state(
+            state=state,
+            context=context,
+            event_type="campaign_dispatching",
+            tasks=state.campaign.tasks,
+            summary="Dispatching campaign tasks to worker agents.",
+        )
 
         pool = ApiTaskPool(tasks=state.campaign.tasks)
         # Resolve auth token field from parsed doc hints.
         auth_token_field = "access_token"
         if hasattr(self, "_last_auth_hint") and isinstance(self._last_auth_hint, dict):
             auth_token_field = str(self._last_auth_hint.get("token_field") or "access_token")
+        if state.auth_hint:
+            auth_token_field = str(state.auth_hint.get("token_field") or auth_token_field)
         state.record_phase_transition(PHASE_TASK_RUNNING, "Executing campaign tasks.")
+        self._checkpoint_execution_state(
+            state=state,
+            context=context,
+            event_type="campaign_running",
+            tasks=state.campaign.tasks,
+            summary="Executing campaign tasks.",
+        )
 
         if self._can_use_subagent_execution(context):
             coordinator = ApiSubagentCoordinator(
@@ -430,6 +451,7 @@ class ApiTestingModeRuntime:
                 credential_manager=self._credential_manager,
                 auth_token_field=auth_token_field,
                 worker_model_key=getattr(context, "selected_model_key", "") or None,
+                checkpoint_callback=self._build_checkpoint_callback(state, context),
             )
             completed_tasks = await coordinator.run_all()
         else:
@@ -442,10 +464,18 @@ class ApiTestingModeRuntime:
                 pool=pool,
                 policy=state.campaign.execution_policy,
                 executor_fn=executor.execute,
+                checkpoint_callback=self._build_checkpoint_callback(state, context),
             )
             completed_tasks = await coordinator.run_all()
         state.campaign.tasks = completed_tasks
         state.campaign.updated_at = datetime.now(timezone.utc).isoformat()
+        self._checkpoint_execution_state(
+            state=state,
+            context=context,
+            event_type="campaign_tasks_settled",
+            tasks=completed_tasks,
+            summary="All campaign tasks have settled.",
+        )
 
         # Build report.
         report = self._report_builder.build(campaign=state.campaign)
@@ -462,6 +492,7 @@ class ApiTestingModeRuntime:
             markdown_report=markdown_report,
         )
         self._last_artifacts = artifacts
+        state.artifacts = self._artifact_metadata(artifacts)
 
         # Run verification policy.
         verification_verdict = self._verification_policy.verify(campaign=state.campaign, report=report)
@@ -473,6 +504,13 @@ class ApiTestingModeRuntime:
             total_available_endpoints=total_available,
             verification_verdict=verification_verdict,
         )
+        state.verification_result = verification_verdict.to_dict()
+        state.evaluation_result = evaluation_result.to_dict()
+        state.errors = self._build_error_records(evaluation_result.to_dict(), completed_tasks)
+        report.artifacts = list(state.artifacts)
+        report.verification_result = dict(state.verification_result)
+        report.evaluation_result = dict(state.evaluation_result)
+        state.report = report
 
         # Attach to report notes.
         state.notes.append(f"验证结论: {verification_verdict.summary}")
@@ -571,6 +609,8 @@ class ApiTestingModeRuntime:
                         },
                         source="state_restore",
                     )
+                if state.auth_hint:
+                    self._last_auth_hint = dict(state.auth_hint)
                 return state
             except Exception:
                 pass
@@ -594,6 +634,14 @@ class ApiTestingModeRuntime:
             "phase": state.phase,
             "summary": self._build_summary(state, note),
         }
+        if state.trace_id:
+            output["trace_id"] = state.trace_id
+        if state.selected_agent:
+            output["selected_agent"] = state.selected_agent
+        if state.selected_tools:
+            output["selected_tools"] = list(state.selected_tools)
+        if state.context_refs:
+            output["context_refs"] = list(state.context_refs)
 
         if state.pending_selection:
             output["pending_selection"] = state.pending_selection.model_dump(mode="json")
@@ -625,15 +673,20 @@ class ApiTestingModeRuntime:
                 output["report_markdown"] = self._last_markdown_report
             # Include artifact metadata if available.
             if hasattr(self, "_last_artifacts") and self._last_artifacts:
-                output["artifacts"] = [
-                    {
-                        "type": a.get("type"),
-                        "filename": a.get("filename"),
-                        "content_type": a.get("content_type"),
-                        "label": a.get("label"),
-                    }
-                    for a in self._last_artifacts
-                ]
+                output["artifacts"] = self._artifact_metadata(self._last_artifacts)
+            elif state.artifacts:
+                output["artifacts"] = list(state.artifacts)
+
+        if state.verification_result:
+            output["verification_result"] = dict(state.verification_result)
+        if state.evaluation_result:
+            output["evaluation_result"] = dict(state.evaluation_result)
+        if state.errors:
+            output["errors"] = list(state.errors)
+        if state.execution_checkpoint:
+            output["execution_checkpoint"] = dict(state.execution_checkpoint)
+        if state.task_events:
+            output["task_events"] = [event.model_dump(mode="json") for event in state.task_events]
 
         if state.notes:
             output["notes"] = list(state.notes)
@@ -695,6 +748,155 @@ class ApiTestingModeRuntime:
             auth_hint=str(arguments.get("auth_hint") or mode_request.get("auth_hint") or "").strip(),
             raw_message=user_message,
         )
+
+    def _attach_runtime_context(self, state: ApiTestingState, context: Any) -> None:
+        state.session_id = str(getattr(context, "session_id", "") or state.session_id)
+        state.trace_id = str(getattr(context, "trace_id", "") or state.trace_id)
+        state.selected_agent = str(
+            getattr(context, "selected_agent_key", "") or state.selected_agent or "api-testing-agent"
+        )
+        state.selected_tools = list(API_TESTING_TOOL_KEYS)
+
+    def _build_checkpoint_callback(self, state: ApiTestingState, context: Any):
+        def checkpoint(event_type: str, task: ApiTestTask, tasks: list[ApiTestTask]) -> None:
+            self._checkpoint_execution_state(
+                state=state,
+                context=context,
+                event_type=event_type,
+                task=task,
+                tasks=tasks,
+            )
+
+        return checkpoint
+
+    def _checkpoint_execution_state(
+        self,
+        *,
+        state: ApiTestingState,
+        context: Any,
+        event_type: str,
+        task: ApiTestTask | None = None,
+        tasks: list[ApiTestTask] | None = None,
+        summary: str = "",
+    ) -> None:
+        if state.campaign and tasks is not None:
+            state.campaign.tasks = list(tasks)
+        task_list = list(tasks or (state.campaign.tasks if state.campaign else []))
+        now = datetime.now(timezone.utc).isoformat()
+        if task is not None:
+            event = ApiTaskEventRecord(
+                event_id=f"{event_type}_{task.task_id}_{task.attempts}_{len(state.task_events) + 1}",
+                event_type=event_type,
+                task_id=task.task_id,
+                task_name=task.name,
+                method=task.method,
+                path=task.path or task.full_url,
+                status=task.status,
+                phase=state.phase,
+                attempts=task.attempts,
+                response_status=task.response_status,
+                duration_ms=task.duration_ms,
+                worker_session_id=task.worker_session_id,
+                summary=summary or task.worker_summary,
+                error=task.last_error,
+                at=now,
+            )
+            state.task_events.append(event)
+            if len(state.task_events) > 200:
+                state.task_events = state.task_events[-200:]
+
+        state.execution_checkpoint = {
+            "phase": state.phase,
+            "campaign_id": state.campaign.campaign_id if state.campaign else "",
+            "last_event_type": event_type,
+            "active_task_id": task.task_id if task is not None else "",
+            "active_task_status": task.status if task is not None else "",
+            "task_summary": self._task_status_summary(task_list),
+            "event_count": len(state.task_events),
+            "updated_at": now,
+            "trace_id": state.trace_id,
+        }
+        self._persist_state(state, context)
+
+    def _task_status_summary(self, tasks: list[ApiTestTask]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for task in tasks:
+            counts[task.status] = counts.get(task.status, 0) + 1
+        counts["total"] = len(tasks)
+        return counts
+
+    def _build_document_context_refs(self, documents: list[Any]) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = []
+        for document in documents:
+            doc_id = str(getattr(document, "doc_id", "") or "")
+            if not doc_id:
+                continue
+            refs.append(
+                {
+                    "type": "api_document",
+                    "source": "api_docs_service",
+                    "doc_id": doc_id,
+                    "title": str(getattr(document, "title", "") or ""),
+                    "project_name": str(getattr(document, "project_name", "") or ""),
+                    "project_url": str(getattr(document, "project_url", "") or ""),
+                    "updated_at": str(getattr(document, "updated_at", "") or ""),
+                }
+            )
+        return refs
+
+    def _artifact_metadata(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        metadata: list[dict[str, Any]] = []
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            artifact = {
+                "type": item.get("type"),
+                "filename": item.get("filename"),
+                "content_type": item.get("content_type"),
+                "label": item.get("label"),
+            }
+            if item.get("task_id"):
+                artifact["task_id"] = item.get("task_id")
+            metadata.append(artifact)
+        return metadata
+
+    def _build_error_records(
+        self,
+        evaluation_result: dict[str, Any],
+        tasks: list[ApiTestTask],
+    ) -> list[dict[str, Any]]:
+        errors: list[dict[str, Any]] = []
+        classifications = evaluation_result.get("failure_classifications")
+        if isinstance(classifications, list):
+            for item in classifications:
+                if not isinstance(item, dict):
+                    continue
+                errors.append(
+                    {
+                        "task_id": item.get("task_id"),
+                        "category": item.get("category"),
+                        "severity": item.get("severity"),
+                        "message": item.get("description"),
+                        "response_status": item.get("response_status"),
+                        "is_transient": item.get("is_transient"),
+                    }
+                )
+        if errors:
+            return errors
+        for task in tasks:
+            if not task.last_error:
+                continue
+            errors.append(
+                {
+                    "task_id": task.task_id,
+                    "category": "execution",
+                    "severity": "medium",
+                    "message": task.last_error,
+                    "response_status": task.response_status,
+                    "is_transient": False,
+                }
+            )
+        return errors
 
     # ==================================================================
     # Utilities
