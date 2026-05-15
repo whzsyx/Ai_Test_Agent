@@ -1,0 +1,330 @@
+"""Security Command Profiles.
+
+Defines structured command profiles for security tools.
+Each profile maps to a specific tool invocation with controlled parameters.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class SecurityCommandProfile:
+    """Defines a structured, controlled security tool invocation."""
+
+    profile_key: str
+    tool_name: str
+    command_template: str          # Python str.format() template
+    description: str = ""
+    tool_family: str = ""          # network_recon / web_scan / service_audit / ...
+    surface_types: list[str] = field(default_factory=list)
+    allowed_arguments: list[str] = field(default_factory=list)
+    timeout_seconds: int = 120
+    risk_level: str = "low"        # info / low / medium / high / critical
+    requires_approval: bool = False
+    parser_key: str = ""           # key for result_parsers registry
+    artifact_policy: str = "always"  # always / on_finding / never
+    notes: str = ""
+
+
+class SecurityCommandProfileRegistry:
+    """Registry of all available security command profiles."""
+
+    def __init__(self) -> None:
+        self._profiles: dict[str, SecurityCommandProfile] = {}
+        self._register_defaults()
+
+    def register(self, profile: SecurityCommandProfile) -> None:
+        self._profiles[profile.profile_key] = profile
+
+    def get(self, profile_key: str) -> SecurityCommandProfile | None:
+        return self._profiles.get(profile_key)
+
+    def list_all(self) -> list[SecurityCommandProfile]:
+        return list(self._profiles.values())
+
+    def list_by_family(self, tool_family: str) -> list[SecurityCommandProfile]:
+        return [p for p in self._profiles.values() if p.tool_family == tool_family]
+
+    def list_by_surface(self, surface_type: str) -> list[SecurityCommandProfile]:
+        return [p for p in self._profiles.values() if surface_type in p.surface_types]
+
+    def build_command(self, profile_key: str, arguments: dict[str, Any]) -> str | None:
+        """Render the command template with provided arguments."""
+        profile = self.get(profile_key)
+        if profile is None:
+            return None
+        try:
+            return profile.command_template.format(**arguments)
+        except KeyError:
+            return profile.command_template
+
+    def _register_defaults(self) -> None:
+        """Register all built-in Phase 1 profiles."""
+
+        # ── Network Recon ──────────────────────────────────────────────
+
+        self.register(SecurityCommandProfile(
+            profile_key="nmap_tcp_basic",
+            tool_name="nmap",
+            command_template="nmap -sS -T4 --open -p 1-1000 {target} -oN -",
+            description="基础 TCP SYN 扫描，扫描常用端口",
+            tool_family="network_recon",
+            surface_types=["network", "host"],
+            allowed_arguments=["target"],
+            timeout_seconds=120,
+            risk_level="low",
+            requires_approval=False,
+            parser_key="nmap",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="nmap_service_detect",
+            tool_name="nmap",
+            command_template="nmap -sV -T4 --open -p {ports} {target} -oN -",
+            description="服务版本探测",
+            tool_family="network_recon",
+            surface_types=["network", "host", "service"],
+            allowed_arguments=["target", "ports"],
+            timeout_seconds=180,
+            risk_level="low",
+            requires_approval=False,
+            parser_key="nmap",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="nmap_full_scan",
+            tool_name="nmap",
+            command_template="nmap -sV -sC -T4 --open -p- {target} -oN -",
+            description="全端口扫描含脚本检测",
+            tool_family="network_recon",
+            surface_types=["network", "host"],
+            allowed_arguments=["target"],
+            timeout_seconds=600,
+            risk_level="medium",
+            requires_approval=False,
+            parser_key="nmap",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="nmap_os_detect",
+            tool_name="nmap",
+            command_template="nmap -O -T4 {target} -oN -",
+            description="操作系统指纹识别",
+            tool_family="network_recon",
+            surface_types=["host"],
+            allowed_arguments=["target"],
+            timeout_seconds=120,
+            risk_level="low",
+            requires_approval=False,
+            parser_key="nmap",
+            artifact_policy="always",
+        ))
+
+        # ── Web Scanning ───────────────────────────────────────────────
+
+        self.register(SecurityCommandProfile(
+            profile_key="httpx_probe",
+            tool_name="httpx",
+            command_template="httpx -u {target} -title -status-code -tech-detect -follow-redirects -silent",
+            description="HTTP 服务探测与技术栈识别",
+            tool_family="web_scan",
+            surface_types=["web", "api"],
+            allowed_arguments=["target"],
+            timeout_seconds=60,
+            risk_level="info",
+            requires_approval=False,
+            parser_key="httpx",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="whatweb_fingerprint",
+            tool_name="whatweb",
+            command_template="whatweb -a 3 {target}",
+            description="Web 应用指纹识别",
+            tool_family="web_scan",
+            surface_types=["web"],
+            allowed_arguments=["target"],
+            timeout_seconds=60,
+            risk_level="info",
+            requires_approval=False,
+            parser_key="whatweb",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="ffuf_common_dirs",
+            tool_name="ffuf",
+            command_template=(
+                "ffuf -u {target}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/common.txt "
+                "-mc 200,301,302,403 -t 50 -timeout 10 -o /work/ffuf_result.json -of json"
+            ),
+            description="常见目录爆破",
+            tool_family="web_scan",
+            surface_types=["web"],
+            allowed_arguments=["target"],
+            timeout_seconds=180,
+            risk_level="low",
+            requires_approval=False,
+            parser_key="ffuf",
+            artifact_policy="on_finding",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="gobuster_dirs",
+            tool_name="gobuster",
+            command_template=(
+                "gobuster dir -u {target} "
+                "-w /usr/share/seclists/Discovery/Web-Content/common.txt "
+                "-t 50 --timeout 10s -q"
+            ),
+            description="目录枚举（gobuster）",
+            tool_family="web_scan",
+            surface_types=["web"],
+            allowed_arguments=["target"],
+            timeout_seconds=180,
+            risk_level="low",
+            requires_approval=False,
+            parser_key="gobuster",
+            artifact_policy="on_finding",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="nikto_web_scan",
+            tool_name="nikto",
+            command_template="nikto -h {target} -nointeractive -Format txt",
+            description="Web 服务器漏洞扫描",
+            tool_family="web_scan",
+            surface_types=["web"],
+            allowed_arguments=["target"],
+            timeout_seconds=300,
+            risk_level="medium",
+            requires_approval=False,
+            parser_key="nikto",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="nuclei_baseline",
+            tool_name="nuclei",
+            command_template="nuclei -u {target} -severity low,medium,high,critical -silent -json",
+            description="Nuclei 基线漏洞扫描",
+            tool_family="web_scan",
+            surface_types=["web", "api"],
+            allowed_arguments=["target"],
+            timeout_seconds=300,
+            risk_level="medium",
+            requires_approval=False,
+            parser_key="nuclei",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="nuclei_cve_scan",
+            tool_name="nuclei",
+            command_template="nuclei -u {target} -tags cve -severity medium,high,critical -silent -json",
+            description="Nuclei CVE 专项扫描",
+            tool_family="web_scan",
+            surface_types=["web", "api"],
+            allowed_arguments=["target"],
+            timeout_seconds=300,
+            risk_level="medium",
+            requires_approval=False,
+            parser_key="nuclei",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="sqlmap_readonly_probe",
+            tool_name="sqlmap",
+            command_template=(
+                "sqlmap -u {target} --batch --level=1 --risk=1 "
+                "--technique=B --no-cast --output-dir=/work/sqlmap_out"
+            ),
+            description="SQL 注入只读探测（不修改数据）",
+            tool_family="web_scan",
+            surface_types=["web", "api"],
+            allowed_arguments=["target"],
+            timeout_seconds=300,
+            risk_level="medium",
+            requires_approval=False,
+            parser_key="sqlmap",
+            artifact_policy="on_finding",
+            notes="只读模式，不执行写操作",
+        ))
+
+        # ── Service Audit ──────────────────────────────────────────────
+
+        self.register(SecurityCommandProfile(
+            profile_key="sslscan_tls_audit",
+            tool_name="sslscan",
+            command_template="sslscan --no-colour {target}",
+            description="TLS/SSL 配置审计",
+            tool_family="service_audit",
+            surface_types=["web", "service"],
+            allowed_arguments=["target"],
+            timeout_seconds=60,
+            risk_level="info",
+            requires_approval=False,
+            parser_key="sslscan",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
+            profile_key="searchsploit_lookup",
+            tool_name="searchsploit",
+            command_template="searchsploit {query} --json",
+            description="ExploitDB 漏洞情报检索",
+            tool_family="service_audit",
+            surface_types=["host", "service", "web"],
+            allowed_arguments=["query"],
+            timeout_seconds=30,
+            risk_level="info",
+            requires_approval=False,
+            parser_key="searchsploit",
+            artifact_policy="on_finding",
+        ))
+
+        # ── Credential Attack (Phase 2) ────────────────────────────────
+
+        self.register(SecurityCommandProfile(
+            profile_key="hydra_basic_login",
+            tool_name="hydra",
+            command_template=(
+                "hydra -L {userlist} -P {passlist} {target} {service} "
+                "-t 4 -f -o /work/hydra_result.txt"
+            ),
+            description="基础凭证爆破（需审批）",
+            tool_family="credential_attack",
+            surface_types=["credential", "service"],
+            allowed_arguments=["target", "service", "userlist", "passlist"],
+            timeout_seconds=300,
+            risk_level="high",
+            requires_approval=True,
+            parser_key="hydra",
+            artifact_policy="on_finding",
+            notes="高风险操作，需要明确授权",
+        ))
+
+
+# Module-level singleton
+_registry: SecurityCommandProfileRegistry | None = None
+
+
+def get_profile_registry() -> SecurityCommandProfileRegistry:
+    global _registry
+    if _registry is None:
+        _registry = SecurityCommandProfileRegistry()
+    return _registry
+
+
+__all__ = [
+    "SecurityCommandProfile",
+    "SecurityCommandProfileRegistry",
+    "get_profile_registry",
+]

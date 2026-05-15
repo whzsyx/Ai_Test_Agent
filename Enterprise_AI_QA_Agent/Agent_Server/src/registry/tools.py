@@ -934,14 +934,232 @@ class ToolRegistry:
                 descriptor=ToolDescriptor(
                     key="security-scan-runner",
                     name="Security Scan Runner",
-                    description="Placeholder mode entry tool for future security testing workflows.",
+                    description=(
+                        "通用安全扫描 runner，执行安全测试 Campaign 的主入口。"
+                        "接受 command_profile 和目标参数，通过结构化 profile 执行安全工具并返回解析后的结果。"
+                    ),
                     category="execution",
                     permission_level="ask",
-                    input_schema={"type": "object", "properties": {"objective": {"type": "string"}}},
-                    output_schema={"summary": "string"},
-                    tags=["security", "testing", "mode", "placeholder"],
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "worker_action": {
+                                "type": "string",
+                                "description": "执行动作，如 execute_security_task 或 run_campaign。",
+                            },
+                            "command_profile": {
+                                "type": "string",
+                                "description": "命令 profile key，如 nmap_tcp_basic、nuclei_baseline。",
+                            },
+                            "target": {
+                                "type": "string",
+                                "description": "扫描目标（IP、URL、域名、网段）。",
+                            },
+                            "arguments": {
+                                "type": "object",
+                                "description": "传递给命令模板的额外参数。",
+                            },
+                            "task": {
+                                "type": "object",
+                                "description": "完整的 SecurityTask 序列化对象（worker 模式）。",
+                            },
+                            "objective": {"type": "string", "description": "测试目标描述。"},
+                        },
+                    },
+                    output_schema={
+                        "success": "boolean",
+                        "summary": "string",
+                        "findings": "array",
+                        "parsed_result": "object",
+                        "raw_output": "string",
+                    },
+                    tags=["security", "testing", "scan", "runner"],
                 ),
                 handler_key="security-scan-runner",
+            ),
+            "network-recon-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="network-recon-runner",
+                    name="Network Recon Runner",
+                    description=(
+                        "网络侦察 runner，执行端口扫描、服务探测、资产发现等网络层侦察任务。"
+                        "支持 nmap_tcp_basic、nmap_service_detect、nmap_full_scan 等 profile。"
+                    ),
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "command_profile": {
+                                "type": "string",
+                                "description": "Profile key: nmap_tcp_basic / nmap_service_detect / nmap_full_scan / nmap_os_detect",
+                                "enum": ["nmap_tcp_basic", "nmap_service_detect", "nmap_full_scan", "nmap_os_detect"],
+                            },
+                            "target": {"type": "string", "description": "目标 IP、域名或网段。"},
+                            "ports": {"type": "string", "description": "端口范围，如 80,443,8080 或 1-1000。"},
+                            "arguments": {"type": "object", "description": "额外参数。"},
+                            "task": {"type": "object", "description": "SecurityTask 对象（worker 模式）。"},
+                        },
+                        "required": ["target"],
+                    },
+                    output_schema={
+                        "success": "boolean",
+                        "summary": "string",
+                        "findings": "array",
+                        "parsed_result": "object",
+                        "raw_output": "string",
+                    },
+                    tags=["security", "network", "recon", "nmap", "runner"],
+                ),
+                handler_key="network-recon-runner",
+            ),
+            "web-scan-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="web-scan-runner",
+                    name="Web Scan Runner",
+                    description=(
+                        "Web 安全扫描 runner，执行目录扫描、漏洞扫描、注入检测等 Web 层安全测试。"
+                        "支持 httpx_probe、whatweb_fingerprint、ffuf_common_dirs、nikto_web_scan、"
+                        "nuclei_baseline、sqlmap_readonly_probe 等 profile。"
+                    ),
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "command_profile": {
+                                "type": "string",
+                                "description": "Profile key: httpx_probe / whatweb_fingerprint / ffuf_common_dirs / nikto_web_scan / nuclei_baseline / nuclei_cve_scan / sqlmap_readonly_probe",
+                            },
+                            "target": {"type": "string", "description": "目标 URL 或域名。"},
+                            "arguments": {"type": "object", "description": "额外参数。"},
+                            "task": {"type": "object", "description": "SecurityTask 对象（worker 模式）。"},
+                        },
+                        "required": ["target"],
+                    },
+                    output_schema={
+                        "success": "boolean",
+                        "summary": "string",
+                        "findings": "array",
+                        "parsed_result": "object",
+                        "raw_output": "string",
+                    },
+                    tags=["security", "web", "scan", "nuclei", "nikto", "runner"],
+                ),
+                handler_key="web-scan-runner",
+            ),
+            "service-audit-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="service-audit-runner",
+                    name="Service Audit Runner",
+                    description=(
+                        "服务审计 runner，执行 TLS/SSL 配置审计、漏洞情报检索等服务层安全检测。"
+                        "支持 sslscan_tls_audit、searchsploit_lookup 等 profile。"
+                    ),
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "command_profile": {
+                                "type": "string",
+                                "description": "Profile key: sslscan_tls_audit / searchsploit_lookup",
+                            },
+                            "target": {"type": "string", "description": "目标地址或查询关键词。"},
+                            "query": {"type": "string", "description": "searchsploit 查询词。"},
+                            "arguments": {"type": "object", "description": "额外参数。"},
+                            "task": {"type": "object", "description": "SecurityTask 对象（worker 模式）。"},
+                        },
+                    },
+                    output_schema={
+                        "success": "boolean",
+                        "summary": "string",
+                        "findings": "array",
+                        "parsed_result": "object",
+                        "raw_output": "string",
+                    },
+                    tags=["security", "service", "audit", "ssl", "runner"],
+                ),
+                handler_key="service-audit-runner",
+            ),
+            "credential-attack-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="credential-attack-runner",
+                    name="Credential Attack Runner",
+                    description=(
+                        "凭证攻击 runner，执行凭证爆破和弱密码检测（高风险，需审批）。"
+                        "支持 hydra_basic_login 等 profile。"
+                    ),
+                    category="execution",
+                    permission_level="deny",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "command_profile": {
+                                "type": "string",
+                                "description": "Profile key: hydra_basic_login",
+                            },
+                            "target": {"type": "string", "description": "目标地址。"},
+                            "service": {"type": "string", "description": "目标服务，如 ssh、ftp、http-post-form。"},
+                            "userlist": {"type": "string", "description": "用户名字典文件路径。"},
+                            "passlist": {"type": "string", "description": "密码字典文件路径。"},
+                            "arguments": {"type": "object", "description": "额外参数。"},
+                            "task": {"type": "object", "description": "SecurityTask 对象（worker 模式）。"},
+                        },
+                        "required": ["target", "service"],
+                    },
+                    output_schema={
+                        "success": "boolean",
+                        "summary": "string",
+                        "findings": "array",
+                        "parsed_result": "object",
+                        "raw_output": "string",
+                    },
+                    tags=["security", "credential", "attack", "hydra", "runner"],
+                ),
+                handler_key="credential-attack-runner",
+            ),
+            "traffic-analysis-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="traffic-analysis-runner",
+                    name="Traffic Analysis Runner",
+                    description="流量分析 runner，执行网络流量捕获和 TLS 分析（Phase 2）。",
+                    category="execution",
+                    permission_level="deny",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "command_profile": {"type": "string"},
+                            "target": {"type": "string"},
+                            "arguments": {"type": "object"},
+                            "task": {"type": "object"},
+                        },
+                    },
+                    output_schema={"success": "boolean", "summary": "string", "findings": "array"},
+                    tags=["security", "traffic", "analysis", "runner"],
+                ),
+                handler_key="traffic-analysis-runner",
+            ),
+            "exploit-workbench-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="exploit-workbench-runner",
+                    name="Exploit Workbench Runner",
+                    description="漏洞利用工作台 runner，执行 PoC 验证和漏洞利用（高风险，Phase 3/4）。",
+                    category="execution",
+                    permission_level="deny",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "command_profile": {"type": "string"},
+                            "target": {"type": "string"},
+                            "arguments": {"type": "object"},
+                            "task": {"type": "object"},
+                        },
+                    },
+                    output_schema={"success": "boolean", "summary": "string", "findings": "array"},
+                    tags=["security", "exploit", "runner"],
+                ),
+                handler_key="exploit-workbench-runner",
             ),
             "performance-test-runner": ToolModule(
                 descriptor=ToolDescriptor(

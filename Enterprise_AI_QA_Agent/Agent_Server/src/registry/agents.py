@@ -437,13 +437,189 @@ class AgentRegistry:
                     key="security-testing-agent",
                     name="Security Testing Agent",
                     role="tester",
-                    summary="Reserved agent for future security testing workflows.",
-                    description="Placeholder agent scaffold for security testing mode.",
-                    supported_tools=["security-scan-runner", "knowledge-rag", "report-writer", "cli-executor"],
-                    supported_skills=[],
-                    supported_models=["gpt-5.4", "claude-sonnet-4"],
-                    default_model="gpt-5.4",
-                    tags=["testing", "security", "placeholder"],
+                    summary="主控安全测试智能体，负责规划 Campaign、调度 worker、汇总结果并生成报告。",
+                    description=(
+                        "安全测试模式主控智能体，复刻 PentAGI 的 Primary Agent 能力。"
+                        "负责解析安全测试请求、建立 Campaign、拆解任务、调度专家 worker、"
+                        "聚合 Finding、计算严重级别、生成结构化报告并按需发送邮件。"
+                    ),
+                    supported_tools=[
+                        "security-scan-runner",
+                        "network-recon-runner",
+                        "web-scan-runner",
+                        "service-audit-runner",
+                        "credential-attack-runner",
+                        "traffic-analysis-runner",
+                        "exploit-workbench-runner",
+                        "subagent-dispatch",
+                        "knowledge-rag",
+                        "report-writer",
+                        "send-email",
+                        "cli-executor",
+                        "observation-search",
+                        "session-history",
+                    ],
+                    supported_skills=["vulnerability-analysis", "network-reconnaissance"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4", "deepseek-reasoner"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "penetration", "orchestration"],
+                )
+            ),
+            "security-doc-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-doc-analyst",
+                    name="Security Doc Analyst",
+                    role="analyst",
+                    summary="分析安全测试文档、API 规范和目标描述，提取测试范围和关键信息。",
+                    description="解析用户提供的安全测试文档、API 规范、架构图等，提取目标、端点、认证方式和测试范围。",
+                    supported_tools=["knowledge-rag", "attachment-reader", "observation-search"],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "analysis"],
+                )
+            ),
+            "attack-surface-planner": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="attack-surface-planner",
+                    name="Attack Surface Planner",
+                    role="planner",
+                    summary="根据资产信息规划攻击面和测试任务树。",
+                    description="分析已发现的资产、端口、服务和 Web 应用，生成结构化的安全测试任务树和依赖关系。",
+                    supported_tools=["knowledge-rag", "observation-search", "session-history"],
+                    supported_skills=["vulnerability-analysis", "network-reconnaissance"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "planning"],
+                )
+            ),
+            "security-recon-worker": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-recon-worker",
+                    name="Security Recon Worker",
+                    role="worker",
+                    summary="执行网络侦察任务：端口扫描、服务探测、资产发现。",
+                    description="专注于网络层侦察，使用 nmap、httpx、whatweb 等工具发现开放端口、服务版本和技术栈。",
+                    supported_tools=[
+                        "network-recon-runner",
+                        "security-scan-runner",
+                        "cli-executor",
+                        "knowledge-rag",
+                        "observation-search",
+                    ],
+                    supported_skills=["network-reconnaissance"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "recon", "worker"],
+                )
+            ),
+            "security-auth-worker": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-auth-worker",
+                    name="Security Auth Worker",
+                    role="worker",
+                    summary="处理认证、会话、凭证相关的安全测试任务。",
+                    description="执行登录测试、会话管理验证、凭证爆破（需审批）等认证相关安全检测。",
+                    supported_tools=[
+                        "credential-attack-runner",
+                        "web-scan-runner",
+                        "cli-executor",
+                        "knowledge-rag",
+                    ],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "auth", "worker"],
+                )
+            ),
+            "security-web-verifier": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-web-verifier",
+                    name="Security Web Verifier",
+                    role="worker",
+                    summary="执行 Web 应用安全验证：目录扫描、漏洞扫描、注入检测。",
+                    description="使用 ffuf、nikto、nuclei、sqlmap 等工具对 Web 应用进行安全验证，发现 XSS、SQL 注入、目录遍历等漏洞。",
+                    supported_tools=[
+                        "web-scan-runner",
+                        "security-scan-runner",
+                        "cli-executor",
+                        "knowledge-rag",
+                        "observation-search",
+                    ],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "web", "worker"],
+                )
+            ),
+            "security-api-verifier": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-api-verifier",
+                    name="Security API Verifier",
+                    role="worker",
+                    summary="执行 API 安全验证：越权、注入、认证绕过检测。",
+                    description="针对 REST/GraphQL API 进行安全验证，检测越权访问、参数注入、认证绕过等 API 安全问题。",
+                    supported_tools=[
+                        "web-scan-runner",
+                        "security-scan-runner",
+                        "cli-executor",
+                        "knowledge-rag",
+                    ],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "api", "worker"],
+                )
+            ),
+            "security-host-verifier": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-host-verifier",
+                    name="Security Host Verifier",
+                    role="worker",
+                    summary="执行主机和服务安全验证：配置审计、服务漏洞检测。",
+                    description="对主机和网络服务进行安全验证，检测配置错误、弱加密、已知漏洞等主机层安全问题。",
+                    supported_tools=[
+                        "service-audit-runner",
+                        "network-recon-runner",
+                        "cli-executor",
+                        "knowledge-rag",
+                    ],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "host", "worker"],
+                )
+            ),
+            "security-exploit-coder": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-exploit-coder",
+                    name="Security Exploit Coder",
+                    role="worker",
+                    summary="编写和定制漏洞利用代码（需审批）。",
+                    description="根据发现的漏洞编写 PoC 代码或定制利用脚本，用于验证漏洞的可利用性。高风险操作需要明确授权。",
+                    supported_tools=[
+                        "exploit-workbench-runner",
+                        "cli-executor",
+                        "knowledge-rag",
+                    ],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "exploit", "worker"],
+                )
+            ),
+            "security-failure-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="security-failure-analyst",
+                    name="Security Failure Analyst",
+                    role="analyst",
+                    summary="分析失败的安全测试任务，提供修复建议和替代方案。",
+                    description="当安全测试任务失败时，分析失败原因、判断是否可重试、建议替代工具或参数修复方案。",
+                    supported_tools=["knowledge-rag", "observation-search", "session-history"],
+                    supported_skills=["vulnerability-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "security", "failure-analysis"],
                 )
             ),
             "performance-testing-agent": AgentModule(

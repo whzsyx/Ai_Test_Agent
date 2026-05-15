@@ -20,6 +20,7 @@ from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.documents.api_docs_service import ApiDocsService
 from src.application.exploration.ui_graph_store import UIGraphStore
+from src.application.security.execution_environment_service import SecurityExecutionEnvironmentService
 from src.modes.code_review_mode import build_code_review_campaign
 from src.modes.code_review_mode.project_source import (
     DEFAULT_IGNORED_NAMES,
@@ -36,6 +37,7 @@ from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.modes.ui_automation_mode.runtime import UIAutomationModeRuntime
 from src.modes.api_testing_mode.runtime import ApiTestingModeRuntime
+from src.modes.security_testing_mode.runtime import SecurityTestingModeRuntime
 from src.runtime.store import SessionStore
 from src.schemas.agent import ToolDescriptor
 from src.schemas.model_config import ModelConfigRecord
@@ -98,6 +100,10 @@ class ToolRuntimeService:
         self._model_registry = None
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
         self._report_template_service = ReportTemplateService()
+        self._security_execution_environment = SecurityExecutionEnvironmentService(
+            settings=settings,
+            workspace_root=self._workspace_root,
+        )
         self._ui_graph_store = UIGraphStore(settings) if settings is not None else None
         self._ui_exploration_service = (
             UIExplorationService(
@@ -118,6 +124,15 @@ class ToolRuntimeService:
             settings=settings,
             coordinator_runtime_service=coordinator_runtime_service,
             session_store=session_store,
+        )
+        self._security_testing_mode_runtime = SecurityTestingModeRuntime(
+            settings=settings,
+            coordinator_runtime_service=coordinator_runtime_service,
+            session_store=session_store,
+            memory_runtime_service=memory_runtime_service,
+            report_template_service=self._report_template_service,
+            runner_executor=self._execute_security_runner,
+            report_delivery_executor=self._deliver_security_testing_report,
         )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
@@ -147,6 +162,12 @@ class ToolRuntimeService:
             "ui-automation-runner": self._run_ui_automation_runner,
             "api-test-runner": self._run_api_test_runner,
             "security-scan-runner": self._run_security_scan_runner,
+            "network-recon-runner": self._run_network_recon_runner,
+            "web-scan-runner": self._run_web_scan_runner,
+            "service-audit-runner": self._run_service_audit_runner,
+            "credential-attack-runner": self._run_credential_attack_runner,
+            "traffic-analysis-runner": self._run_traffic_analysis_runner,
+            "exploit-workbench-runner": self._run_exploit_workbench_runner,
             "performance-test-runner": self._run_performance_test_runner,
             "smoke-suite-runner": self._run_smoke_suite_runner,
         }
@@ -154,12 +175,14 @@ class ToolRuntimeService:
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
         self._coordinator_runtime_service = coordinator_runtime_service
         self._api_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
+        self._security_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
 
     def set_model_registry(self, model_registry) -> None:
         self._model_registry = model_registry
 
     def set_memory_runtime_service(self, memory_runtime_service: MemoryRuntimeService) -> None:
         self._memory_runtime_service = memory_runtime_service
+        self._security_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         self._ui_automation_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         if self._ui_exploration_service is not None:
             self._ui_exploration_service._memory_runtime_service = memory_runtime_service
@@ -170,6 +193,7 @@ class ToolRuntimeService:
     def set_session_store(self, session_store: SessionStore) -> None:
         self._session_store = session_store
         self._api_testing_mode_runtime.set_session_store(session_store)
+        self._security_testing_mode_runtime.set_session_store(session_store)
 
     def has_handler(self, tool_key: str) -> bool:
         return tool_key in self._handlers
@@ -1367,13 +1391,28 @@ class ToolRuntimeService:
                     "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
                     "error": "missing_recipients",
                 }
-            email_result = await asyncio.to_thread(
-                self._send_email_message,
-                recipients,
-                subject,
-                content,
-                content_html,
-            )
+            try:
+                email_result = await asyncio.to_thread(
+                    self._send_email_message,
+                    recipients,
+                    subject,
+                    content,
+                    content_html,
+                )
+            except Exception as exc:
+                return {
+                    "status": "failed",
+                    "ok": False,
+                    "summary": f"Email delivery failed: {exc}",
+                    "delivery": {
+                        "channel": "email",
+                        "sent": False,
+                        "recipients": recipients,
+                        "error": str(exc),
+                    },
+                    "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
+                    "error": str(exc),
+                }
             return {
                 "summary": f"Delivered email notification to {len(recipients)} recipient(s).",
                 "delivery": {"channel": "email", **email_result},
@@ -1421,6 +1460,13 @@ class ToolRuntimeService:
         if not str(email_arguments.get("subject") or "").strip():
             email_arguments["subject"] = "Runtime Notification"
         return await self._run_message_dispatch(email_arguments, context)
+
+    async def _deliver_security_testing_report(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._run_send_email(arguments, context)
 
     async def _run_report_writer(
         self,
@@ -1884,12 +1930,429 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        return self._build_placeholder_mode_result(
-            mode_key="security_testing",
-            summary="Security testing mode scaffold is ready; specialized scanners are not connected yet.",
-            arguments=arguments,
-            context=context,
+        if self._is_security_campaign_request(arguments):
+            return await self._security_testing_mode_runtime.handle(arguments, context)
+        return await self._execute_security_runner(arguments, context, "security-scan-runner")
+
+    async def _run_network_recon_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._execute_security_runner(arguments, context, "network-recon-runner")
+
+    async def _run_web_scan_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._execute_security_runner(arguments, context, "web-scan-runner")
+
+    async def _run_service_audit_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._execute_security_runner(arguments, context, "service-audit-runner")
+
+    async def _run_credential_attack_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._execute_security_runner(arguments, context, "credential-attack-runner")
+
+    async def _run_traffic_analysis_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "status": "denied",
+            "ok": False,
+            "success": False,
+            "summary": "Traffic analysis runner is reserved for a later security testing phase.",
+            "runner_key": "traffic-analysis-runner",
+            "error": "runner_not_enabled",
+        }
+
+    async def _run_exploit_workbench_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "status": "denied",
+            "ok": False,
+            "success": False,
+            "summary": "Exploit workbench runner is reserved for approved Phase 3/4 workflows.",
+            "runner_key": "exploit-workbench-runner",
+            "error": "runner_not_enabled",
+        }
+
+    def _is_security_campaign_request(self, arguments: dict[str, Any]) -> bool:
+        worker_action = str(arguments.get("worker_action") or "").strip().lower()
+        if worker_action in {"execute_security_task", "execute_task"}:
+            return False
+        if isinstance(arguments.get("task"), dict):
+            return False
+        if str(arguments.get("command_profile") or "").strip():
+            return False
+        return True
+
+    async def _execute_security_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+        runner_key: str | None = None,
+    ) -> dict[str, Any]:
+        from src.application.security.finding_normalizer import FindingNormalizer
+        from src.application.security.result_parsers import get_parser_registry
+        from src.application.security.risk_policy import SecurityRiskPolicy
+        from src.application.security.tool_catalog import SecurityToolCatalog
+
+        runner_key = runner_key or "security-scan-runner"
+        catalog = SecurityToolCatalog()
+        risk_policy = SecurityRiskPolicy()
+        normalizer = FindingNormalizer()
+
+        task = self._security_task_from_arguments(arguments)
+        profile_key = self._resolve_security_profile_key(arguments, task, runner_key)
+        if not profile_key:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": "Security runner requires a command_profile or a serialized task.",
+                "runner_key": runner_key,
+                "error": "missing_command_profile",
+            }
+
+        profile = catalog.get_profile(profile_key)
+        if profile is None:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": f"Unknown security command profile: {profile_key}",
+                "runner_key": runner_key,
+                "command_profile": profile_key,
+                "error": "unknown_command_profile",
+            }
+
+        if not self._security_profile_matches_runner(profile.tool_family, runner_key):
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": f"Profile {profile.profile_key} belongs to {profile.tool_family}, not {runner_key}.",
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "error": "profile_runner_mismatch",
+            }
+
+        environment = str(arguments.get("environment") or context.context_bundle.get("environment") or "testing").strip().lower()
+        if not risk_policy.is_allowed_in_environment(profile.profile_key, environment):
+            return {
+                "status": "denied",
+                "ok": False,
+                "success": False,
+                "summary": f"Profile {profile.profile_key} is blocked in the {environment} environment.",
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "environment": environment,
+                "error": "profile_blocked_in_environment",
+            }
+
+        approval_granted = bool(
+            arguments.get("approved")
+            or arguments.get("approval_granted")
+            or arguments.get("authorization_confirmed")
         )
+        if task is not None and not approval_granted:
+            approval_granted = bool(getattr(task, "approval_granted", False))
+        if risk_policy.requires_approval(profile.profile_key) and not approval_granted:
+            return {
+                "status": "waiting_approval",
+                "ok": False,
+                "success": False,
+                "summary": f"Profile {profile.profile_key} requires explicit approval before execution.",
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "risk_level": profile.risk_level,
+                "approval_required": True,
+                "error": "approval_required",
+            }
+
+        try:
+            render_args, missing = self._build_security_command_arguments(profile, arguments, task)
+        except ValueError as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": str(exc),
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "error": "invalid_profile_argument",
+            }
+        if missing:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": f"Missing required argument(s) for {profile.profile_key}: {', '.join(missing)}",
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "missing_arguments": missing,
+                "error": "missing_profile_arguments",
+            }
+
+        command = profile.command_template.format(**render_args)
+        command_args = self._split_security_command(command)
+        if not command_args:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": f"Profile {profile.profile_key} rendered an empty command.",
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "error": "empty_command",
+            }
+
+        executable = command_args[0]
+        timeout_seconds = float(
+            arguments.get("timeout_seconds")
+            or (task.timeout_seconds if task is not None else 0)
+            or profile.timeout_seconds
+            or 120
+        )
+        timeout_seconds = max(1.0, min(timeout_seconds, 1800.0))
+        artifact_dir = self._prepare_local_artifact_dir(context, runner_key)
+        try:
+            execution_result = await self._security_execution_environment.execute(
+                command=command,
+                command_args=command_args,
+                timeout_seconds=timeout_seconds,
+                artifact_dir=artifact_dir,
+                context=context,
+            )
+        except FileNotFoundError as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": str(exc),
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "tool_name": profile.tool_name,
+                "command": command,
+                "error": "execution_environment_not_available",
+            }
+        except (RuntimeError, ValueError) as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": str(exc),
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "tool_name": profile.tool_name,
+                "command": command,
+                "error": "execution_environment_error",
+            }
+
+        stdout_text = execution_result.stdout or ""
+        stderr_text = execution_result.stderr or ""
+        exit_code = execution_result.exit_code
+        timed_out = execution_result.timed_out
+        raw_output = stdout_text if stdout_text.strip() else stderr_text
+        parser_input = self._security_parser_input(profile.parser_key, raw_output, artifact_dir)
+        parser_registry = get_parser_registry()
+        parsed_result = parser_registry.parse(profile.parser_key, parser_input) if profile.parser_key else {}
+        findings = [
+            finding.model_dump(mode="json")
+            for finding in normalizer.normalize_batch(
+                profile.parser_key,
+                parsed_result,
+                task.task_id if task is not None else "",
+            )
+        ]
+        success = exit_code == 0 and not timed_out
+        transcript = {
+            "runner_key": runner_key,
+            "profile_key": profile.profile_key,
+            "tool_name": profile.tool_name,
+            "command": command,
+            "execution_backend": execution_result.backend,
+            "container_name": execution_result.container_name,
+            "rendered_arguments": render_args,
+            "started_at": execution_result.started_at.isoformat(),
+            "completed_at": execution_result.completed_at.isoformat(),
+            "duration_seconds": max(0.0, (execution_result.completed_at - execution_result.started_at).total_seconds()),
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "stdout": stdout_text[-20000:],
+            "stderr": stderr_text[-12000:],
+        }
+        transcript_path = artifact_dir / "security_tool_transcript.json"
+        transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        summary = (
+            f"Executed {profile.profile_key} with exit code {exit_code}; parsed {len(findings)} finding(s)."
+            if not timed_out
+            else f"Profile {profile.profile_key} timed out after {timeout_seconds:.0f}s."
+        )
+        return {
+            "status": "completed" if success else "failed",
+            "ok": success,
+            "success": success,
+            "summary": summary,
+            "runner_key": runner_key,
+            "command_profile": profile.profile_key,
+            "tool_name": profile.tool_name,
+            "command": command,
+            "execution_backend": execution_result.backend,
+            "container_name": execution_result.container_name,
+            "target": render_args.get("target") or render_args.get("query") or "",
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "parsed_result": parsed_result,
+            "findings": findings,
+            "raw_output": raw_output[-10000:],
+            "stderr": stderr_text[-4000:],
+            "artifacts": [
+                {"type": "security_tool_transcript", "path": str(transcript_path)},
+                *execution_result.output_artifacts,
+            ],
+            "metrics": {
+                "finding_count": len(findings),
+                "stdout_chars": len(stdout_text),
+                "stderr_chars": len(stderr_text),
+                "duration_seconds": transcript["duration_seconds"],
+            },
+            "error": None if success else ("timeout" if timed_out else stderr_text[-500:] or f"exit_code={exit_code}"),
+        }
+
+    def _security_task_from_arguments(self, arguments: dict[str, Any]):
+        from src.modes.security_testing_mode.campaign_state import SecurityTask
+
+        raw_task = arguments.get("task")
+        if not isinstance(raw_task, dict):
+            return None
+        try:
+            return SecurityTask.model_validate(raw_task)
+        except Exception:
+            return None
+
+    def _resolve_security_profile_key(
+        self,
+        arguments: dict[str, Any],
+        task: Any,
+        runner_key: str,
+    ) -> str:
+        explicit = str(arguments.get("command_profile") or "").strip()
+        if explicit:
+            return explicit
+        if task is not None and str(task.command_profile or "").strip():
+            return str(task.command_profile).strip()
+        if runner_key == "network-recon-runner":
+            return "nmap_tcp_basic"
+        if runner_key == "web-scan-runner":
+            return "httpx_probe"
+        if runner_key == "service-audit-runner":
+            return "sslscan_tls_audit"
+        if runner_key == "credential-attack-runner":
+            return "hydra_basic_login"
+        target = str(arguments.get("target") or "").strip()
+        return "httpx_probe" if target.startswith(("http://", "https://")) else "nmap_tcp_basic"
+
+    def _security_profile_matches_runner(self, tool_family: str, runner_key: str) -> bool:
+        if runner_key == "security-scan-runner":
+            return True
+        expected = {
+            "network-recon-runner": {"network_recon"},
+            "web-scan-runner": {"web_scan"},
+            "service-audit-runner": {"service_audit"},
+            "credential-attack-runner": {"credential_attack"},
+            "traffic-analysis-runner": {"traffic_analysis"},
+            "exploit-workbench-runner": {"exploit"},
+        }.get(runner_key, set())
+        return tool_family in expected
+
+    def _build_security_command_arguments(
+        self,
+        profile: Any,
+        arguments: dict[str, Any],
+        task: Any,
+    ) -> tuple[dict[str, Any], list[str]]:
+        supplied: dict[str, Any] = {}
+        nested = arguments.get("arguments")
+        if isinstance(nested, dict):
+            supplied.update(nested)
+        for key in (
+            "target",
+            "ports",
+            "query",
+            "service",
+            "userlist",
+            "passlist",
+        ):
+            if arguments.get(key) not in (None, ""):
+                supplied[key] = arguments.get(key)
+        if task is not None:
+            supplied.setdefault("target", task.target)
+            if task.target_port:
+                supplied.setdefault("ports", str(task.target_port))
+        if profile.profile_key == "searchsploit_lookup":
+            supplied.setdefault("query", supplied.get("target") or "")
+        supplied.setdefault("ports", "1-1000")
+
+        render_args: dict[str, Any] = {}
+        missing: list[str] = []
+        for key in profile.allowed_arguments:
+            value = supplied.get(key)
+            if value in (None, ""):
+                missing.append(key)
+                continue
+            render_args[key] = self._sanitize_security_argument(str(value), allow_spaces=key == "query")
+        return render_args, missing
+
+    def _sanitize_security_argument(self, value: str, *, allow_spaces: bool = False) -> str:
+        cleaned = value.replace("\r", "").replace("\n", "").strip()
+        if not allow_spaces and any(ch.isspace() for ch in cleaned):
+            raise ValueError("Security command arguments may not contain whitespace.")
+        return cleaned
+
+    def _security_parser_input(self, parser_key: str, raw_output: str, artifact_dir: Path) -> str:
+        if not parser_key:
+            return raw_output
+
+        preferred_outputs = {
+            "ffuf": ("ffuf_result.json",),
+            "hydra": ("hydra_result.txt",),
+        }
+        search_roots = [
+            artifact_dir,
+            artifact_dir.parent / "_security_runner_work",
+            artifact_dir.parent,
+        ]
+        for file_name in preferred_outputs.get(parser_key, ()):
+            for root in search_roots:
+                candidate = root / file_name
+                if not candidate.exists() or not candidate.is_file():
+                    continue
+                try:
+                    content = candidate.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if content.strip():
+                    return content
+        return raw_output
+
+    def _split_security_command(self, command: str) -> list[str]:
+        return shlex.split(command, posix=os.name != "nt")
 
     async def _run_performance_test_runner(
         self,

@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     upload_scan_max_bytes: int = 10 * 1024 * 1024
     upload_scan_medium_risk_threshold: int = 30
     upload_scan_high_risk_threshold: int = 70
+    security_runner_backend: str = "local"
+    security_runner_docker_image: str = "vxcontrol/kali-linux"
+    security_runner_docker_container_prefix: str = "qa-security-runner"
+    security_runner_docker_workdir: str = "/work"
+    security_runner_docker_network: str = ""
+    security_runner_docker_net_raw: bool = True
+    security_runner_docker_net_admin: bool = False
+    security_runner_docker_pull_policy: str = "never"
+    security_runner_container_reuse: bool = True
+    security_runner_wrap_timeout: bool = True
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90
     browser_backend: str = "playwright-cli"

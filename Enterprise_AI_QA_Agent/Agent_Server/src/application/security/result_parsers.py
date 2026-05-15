@@ -1,0 +1,495 @@
+"""Security Tool Result Parsers.
+
+Parse raw CLI output from security tools into structured data.
+"""
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Base
+# ---------------------------------------------------------------------------
+
+class BaseSecurityParser:
+    """Base class for security tool output parsers."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# Nmap
+# ---------------------------------------------------------------------------
+
+class NmapParser(BaseSecurityParser):
+    """Parse nmap text output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        hosts: list[dict[str, Any]] = []
+        open_ports: list[dict[str, Any]] = []
+        current_host = ""
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+
+            # Host line
+            host_match = re.match(r"Nmap scan report for (.+)", line)
+            if host_match:
+                current_host = host_match.group(1).strip()
+                hosts.append({"host": current_host, "ports": []})
+                continue
+
+            # Open port line: 80/tcp   open  http   Apache httpd 2.4.41
+            port_match = re.match(
+                r"(\d+)/(tcp|udp)\s+(open|filtered|closed)\s+(\S+)(?:\s+(.+))?", line
+            )
+            if port_match and current_host:
+                port_info = {
+                    "port": int(port_match.group(1)),
+                    "protocol": port_match.group(2),
+                    "state": port_match.group(3),
+                    "service": port_match.group(4),
+                    "version": (port_match.group(5) or "").strip(),
+                    "host": current_host,
+                }
+                open_ports.append(port_info)
+                if hosts:
+                    hosts[-1]["ports"].append(port_info)
+
+        return {
+            "tool": "nmap",
+            "hosts": hosts,
+            "open_ports": open_ports,
+            "host_count": len(hosts),
+            "open_port_count": len(open_ports),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Httpx
+# ---------------------------------------------------------------------------
+
+class HttpxParser(BaseSecurityParser):
+    """Parse httpx output (one JSON per line or plain text)."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Try JSON line
+            if line.startswith("{"):
+                try:
+                    obj = json.loads(line)
+                    results.append({
+                        "url": obj.get("url") or obj.get("input", ""),
+                        "status_code": obj.get("status-code") or obj.get("status_code"),
+                        "title": obj.get("title", ""),
+                        "technologies": obj.get("tech") or obj.get("technologies") or [],
+                        "content_length": obj.get("content-length"),
+                        "webserver": obj.get("webserver", ""),
+                    })
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            # Plain text: https://example.com [200] [Title] [Apache]
+            plain_match = re.match(r"(https?://\S+)\s+\[(\d+)\](?:\s+\[([^\]]+)\])?(?:\s+\[([^\]]+)\])?", line)
+            if plain_match:
+                results.append({
+                    "url": plain_match.group(1),
+                    "status_code": int(plain_match.group(2)),
+                    "title": plain_match.group(3) or "",
+                    "technologies": [plain_match.group(4)] if plain_match.group(4) else [],
+                })
+
+        return {
+            "tool": "httpx",
+            "results": results,
+            "live_count": len(results),
+        }
+
+
+# ---------------------------------------------------------------------------
+# WhatWeb
+# ---------------------------------------------------------------------------
+
+class WhatwebParser(BaseSecurityParser):
+    """Parse whatweb output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # URL [status] [tech1, tech2, ...]
+            url_match = re.match(r"(https?://\S+)\s+\[(\d+)\s+\w+\]\s*(.*)", line)
+            if url_match:
+                url = url_match.group(1)
+                status = int(url_match.group(2))
+                tech_raw = url_match.group(3)
+                technologies = [t.strip() for t in re.split(r",\s*(?=[A-Z])", tech_raw) if t.strip()]
+                results.append({
+                    "url": url,
+                    "status_code": status,
+                    "technologies": technologies,
+                })
+
+        return {
+            "tool": "whatweb",
+            "results": results,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Ffuf
+# ---------------------------------------------------------------------------
+
+class FfufParser(BaseSecurityParser):
+    """Parse ffuf JSON output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        # Try to parse as JSON
+        try:
+            data = json.loads(raw_output)
+            results = data.get("results") or []
+            findings = [
+                {
+                    "url": r.get("url", ""),
+                    "status": r.get("status"),
+                    "length": r.get("length"),
+                    "words": r.get("words"),
+                    "lines": r.get("lines"),
+                    "input": r.get("input", {}).get("FUZZ", ""),
+                }
+                for r in results
+            ]
+            return {
+                "tool": "ffuf",
+                "findings": findings,
+                "finding_count": len(findings),
+            }
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+        # Plain text fallback
+        findings = []
+        for line in raw_output.splitlines():
+            line = line.strip()
+            # [Status: 200, Size: 1234, Words: 56, Lines: 78] /path
+            match = re.search(r"\[Status:\s*(\d+).*?\]\s+(\S+)", line)
+            if match:
+                findings.append({
+                    "status": int(match.group(1)),
+                    "url": match.group(2),
+                })
+
+        return {
+            "tool": "ffuf",
+            "findings": findings,
+            "finding_count": len(findings),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Nikto
+# ---------------------------------------------------------------------------
+
+class NiktoParser(BaseSecurityParser):
+    """Parse nikto text output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        findings: list[dict[str, Any]] = []
+        target = ""
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if line.startswith("+ Target IP:") or line.startswith("+ Target Host:"):
+                target = line.split(":", 1)[-1].strip()
+            elif line.startswith("+ ") and "OSVDB" not in line and len(line) > 5:
+                # Finding line
+                finding_text = line[2:].strip()
+                if finding_text and not finding_text.startswith("Target") and not finding_text.startswith("Start"):
+                    findings.append({
+                        "description": finding_text,
+                        "target": target,
+                    })
+
+        return {
+            "tool": "nikto",
+            "target": target,
+            "findings": findings,
+            "finding_count": len(findings),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Nuclei
+# ---------------------------------------------------------------------------
+
+class NucleiParser(BaseSecurityParser):
+    """Parse nuclei JSON output (one JSON per line)."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        findings: list[dict[str, Any]] = []
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+                info = obj.get("info") or {}
+                findings.append({
+                    "template_id": obj.get("template-id") or obj.get("templateID", ""),
+                    "name": info.get("name", ""),
+                    "severity": info.get("severity", "info"),
+                    "description": info.get("description", ""),
+                    "url": obj.get("matched-at") or obj.get("host", ""),
+                    "type": obj.get("type", ""),
+                    "tags": info.get("tags") or [],
+                    "reference": info.get("reference") or [],
+                    "cve": self._extract_cve(info),
+                })
+            except json.JSONDecodeError:
+                continue
+
+        return {
+            "tool": "nuclei",
+            "findings": findings,
+            "finding_count": len(findings),
+            "critical_count": sum(1 for f in findings if f["severity"] == "critical"),
+            "high_count": sum(1 for f in findings if f["severity"] == "high"),
+            "medium_count": sum(1 for f in findings if f["severity"] == "medium"),
+        }
+
+    def _extract_cve(self, info: dict) -> str:
+        classification = info.get("classification") or {}
+        cve_ids = classification.get("cve-id") or []
+        if isinstance(cve_ids, list) and cve_ids:
+            return cve_ids[0]
+        if isinstance(cve_ids, str):
+            return cve_ids
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Sqlmap
+# ---------------------------------------------------------------------------
+
+class SqlmapParser(BaseSecurityParser):
+    """Parse sqlmap output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        vulnerable = False
+        injections: list[dict[str, Any]] = []
+        dbms = ""
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if "is vulnerable" in line.lower() or "sqlmap identified" in line.lower():
+                vulnerable = True
+            if "back-end DBMS:" in line:
+                dbms = line.split(":", 1)[-1].strip()
+            # Parameter injection line
+            param_match = re.search(r"Parameter:\s+(.+?)\s+\((.+?)\)", line)
+            if param_match:
+                injections.append({
+                    "parameter": param_match.group(1),
+                    "type": param_match.group(2),
+                })
+
+        return {
+            "tool": "sqlmap",
+            "vulnerable": vulnerable,
+            "dbms": dbms,
+            "injections": injections,
+            "injection_count": len(injections),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Hydra
+# ---------------------------------------------------------------------------
+
+class HydraParser(BaseSecurityParser):
+    """Parse hydra output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        credentials: list[dict[str, Any]] = []
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            # [port][service] host: user  password: pass
+            cred_match = re.search(
+                r"\[(\d+)\]\[(\w+)\]\s+host:\s+(\S+)\s+login:\s+(\S+)\s+password:\s+(\S+)",
+                line,
+            )
+            if cred_match:
+                credentials.append({
+                    "port": int(cred_match.group(1)),
+                    "service": cred_match.group(2),
+                    "host": cred_match.group(3),
+                    "username": cred_match.group(4),
+                    "password": cred_match.group(5),
+                })
+
+        return {
+            "tool": "hydra",
+            "credentials_found": credentials,
+            "credential_count": len(credentials),
+        }
+
+
+# ---------------------------------------------------------------------------
+# SSLScan
+# ---------------------------------------------------------------------------
+
+class SslscanParser(BaseSecurityParser):
+    """Parse sslscan output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        issues: list[str] = []
+        protocols: list[str] = []
+        ciphers: list[str] = []
+
+        for line in raw_output.splitlines():
+            line = line.strip()
+            # Enabled protocols
+            if re.match(r"(SSLv2|SSLv3|TLSv1\.0|TLSv1\.1)\s+enabled", line, re.IGNORECASE):
+                protocols.append(line)
+                issues.append(f"弱协议已启用: {line}")
+            # Weak ciphers
+            if "RC4" in line or "DES" in line or "NULL" in line or "EXPORT" in line:
+                ciphers.append(line)
+                issues.append(f"弱加密套件: {line}")
+
+        return {
+            "tool": "sslscan",
+            "issues": issues,
+            "weak_protocols": protocols,
+            "weak_ciphers": ciphers,
+            "issue_count": len(issues),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Searchsploit
+# ---------------------------------------------------------------------------
+
+class SearchsploitParser(BaseSecurityParser):
+    """Parse searchsploit JSON output."""
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        try:
+            data = json.loads(raw_output)
+            exploits = data.get("RESULTS_EXPLOIT") or []
+            shellcodes = data.get("RESULTS_SHELLCODE") or []
+            results = [
+                {
+                    "title": e.get("Title", ""),
+                    "path": e.get("Path", ""),
+                    "type": e.get("Type", ""),
+                    "platform": e.get("Platform", ""),
+                    "date": e.get("Date", ""),
+                    "edb_id": e.get("EDB-ID", ""),
+                }
+                for e in exploits
+            ]
+            return {
+                "tool": "searchsploit",
+                "exploits": results,
+                "shellcodes": shellcodes,
+                "exploit_count": len(results),
+            }
+        except (json.JSONDecodeError, AttributeError):
+            # Plain text fallback
+            results = []
+            for line in raw_output.splitlines():
+                if "|" in line and not line.startswith("-") and not line.startswith("="):
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) >= 2:
+                        results.append({"title": parts[0], "path": parts[1]})
+            return {
+                "tool": "searchsploit",
+                "exploits": results,
+                "exploit_count": len(results),
+            }
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+class SecurityResultParserRegistry:
+    """Registry of all security tool output parsers."""
+
+    def __init__(self) -> None:
+        self._parsers: dict[str, BaseSecurityParser] = {
+            "nmap": NmapParser(),
+            "httpx": HttpxParser(),
+            "whatweb": WhatwebParser(),
+            "ffuf": FfufParser(),
+            "gobuster": FfufParser(),   # similar output format
+            "nikto": NiktoParser(),
+            "nuclei": NucleiParser(),
+            "sqlmap": SqlmapParser(),
+            "hydra": HydraParser(),
+            "sslscan": SslscanParser(),
+            "searchsploit": SearchsploitParser(),
+        }
+
+    def parse(self, parser_key: str, raw_output: str) -> dict[str, Any]:
+        """Parse raw tool output using the registered parser."""
+        parser = self._parsers.get(parser_key)
+        if parser is None:
+            return {
+                "tool": parser_key,
+                "raw": raw_output[:2000],
+                "parse_error": f"No parser registered for '{parser_key}'",
+            }
+        try:
+            return parser.parse(raw_output)
+        except Exception as e:
+            return {
+                "tool": parser_key,
+                "raw": raw_output[:2000],
+                "parse_error": str(e),
+            }
+
+    def has_parser(self, parser_key: str) -> bool:
+        return parser_key in self._parsers
+
+
+# Module-level singleton
+_parser_registry: SecurityResultParserRegistry | None = None
+
+
+def get_parser_registry() -> SecurityResultParserRegistry:
+    global _parser_registry
+    if _parser_registry is None:
+        _parser_registry = SecurityResultParserRegistry()
+    return _parser_registry
+
+
+__all__ = [
+    "BaseSecurityParser",
+    "NmapParser",
+    "HttpxParser",
+    "WhatwebParser",
+    "FfufParser",
+    "NiktoParser",
+    "NucleiParser",
+    "SqlmapParser",
+    "HydraParser",
+    "SslscanParser",
+    "SearchsploitParser",
+    "SecurityResultParserRegistry",
+    "get_parser_registry",
+]

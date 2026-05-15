@@ -12,6 +12,7 @@ class ReportTemplateService:
         self._template_paths = {
             "default": self._template_dir / "report_email.html",
             "code_review_debate": self._template_dir / "code_review_debate_report.html",
+            "security_testing_full": self._template_dir / "security_testing_report.html",
         }
 
     def render_report_html(
@@ -27,6 +28,15 @@ class ReportTemplateService:
         content_html = self.render_markdown(markdown_content)
         if template_key == "code_review_debate":
             return self.render_code_review_debate_html(
+                title=title,
+                time_label=time_label,
+                sender=sender,
+                markdown_content=markdown_content,
+                template_context=template_context,
+                content_html=content_html,
+            )
+        if template_key == "security_testing_full":
+            return self.render_security_testing_html(
                 title=title,
                 time_label=time_label,
                 sender=sender,
@@ -72,6 +82,44 @@ class ReportTemplateService:
             "{{ content_html }}": content_html,
         }
         return self._render_template("code_review_debate", replacements)
+
+    def render_security_testing_html(
+        self,
+        *,
+        title: str,
+        time_label: str,
+        sender: str,
+        markdown_content: str,
+        template_context: dict[str, Any] | None = None,
+        content_html: str | None = None,
+    ) -> str:
+        context = template_context or {}
+        content_html = content_html or self.render_markdown(markdown_content)
+        replacements = {
+            "{{ title }}": html.escape(title),
+            "{{ time }}": html.escape(time_label),
+            "{{ sender }}": html.escape(sender),
+            "{{ target_summary }}": html.escape(str(context.get("target_summary") or "")),
+            "{{ scope_description }}": html.escape(str(context.get("scope_description") or "")),
+            "{{ campaign_id }}": html.escape(str(context.get("campaign_id") or "")),
+            "{{ total_tasks }}": html.escape(str(context.get("total_tasks") or "0")),
+            "{{ completed_tasks }}": html.escape(str(context.get("completed_tasks") or "0")),
+            "{{ failed_tasks }}": html.escape(str(context.get("failed_tasks") or "0")),
+            "{{ skipped_tasks }}": html.escape(str(context.get("skipped_tasks") or "0")),
+            "{{ total_findings }}": html.escape(str(context.get("total_findings") or "0")),
+            "{{ critical_count }}": html.escape(str(context.get("critical_count") or "0")),
+            "{{ high_count }}": html.escape(str(context.get("high_count") or "0")),
+            "{{ medium_count }}": html.escape(str(context.get("medium_count") or "0")),
+            "{{ low_count }}": html.escape(str(context.get("low_count") or "0")),
+            "{{ info_count }}": html.escape(str(context.get("info_count") or "0")),
+            "{{ assets_discovered }}": html.escape(str(context.get("assets_discovered") or "0")),
+            "{{ services_discovered }}": html.escape(str(context.get("services_discovered") or "0")),
+            "{{ evidence_count }}": html.escape(str(context.get("evidence_count") or "0")),
+            "{{ execution_record_count }}": html.escape(str(context.get("execution_record_count") or "0")),
+            "{{ duration_seconds }}": html.escape(f"{float(context.get('duration_seconds') or 0):.0f}s"),
+            "{{ content_html }}": content_html,
+        }
+        return self._render_template("security_testing_full", replacements)
 
     def render_markdown(self, markdown_text: str) -> str:
         lines = markdown_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
