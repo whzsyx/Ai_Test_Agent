@@ -1,9 +1,10 @@
 """Execution environment for security command profiles.
 
 The security runner can execute tools either on the local host or inside a
-long-lived Docker container. Docker mode mirrors PentAGI's pattern: keep a
-pentest image running and use ``docker exec sh -lc`` for each controlled
-command profile.
+Docker container. Docker mode mirrors PentAGI's controlled command pattern:
+start a pentest image, run ``docker exec sh -lc`` for the approved command
+profile, then either keep the container for reuse or remove it as a temporary
+runner.
 """
 from __future__ import annotations
 
@@ -151,6 +152,7 @@ class SecurityExecutionEnvironmentService:
         artifact_dir.mkdir(parents=True, exist_ok=True)
         host_workdir = self._host_workdir_for_container(artifact_dir)
         host_workdir.mkdir(parents=True, exist_ok=True)
+        cleanup_after_run = self._cleanup_after_run_enabled()
 
         self._ensure_container(
             docker=docker,
@@ -172,24 +174,31 @@ class SecurityExecutionEnvironmentService:
             "-lc",
             shell_command,
         ]
+        cleanup_error = ""
         try:
-            completed = subprocess.run(
-                docker_args,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_seconds + 5,
-            )
-            stdout_text = completed.stdout or ""
-            stderr_text = completed.stderr or ""
-            exit_code = completed.returncode
-            timed_out = exit_code == 124
-        except subprocess.TimeoutExpired as exc:
-            stdout_text = exc.stdout or ""
-            stderr_text = exc.stderr or ""
-            exit_code = -1
-            timed_out = True
+            try:
+                completed = subprocess.run(
+                    docker_args,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout_seconds + 5,
+                )
+                stdout_text = completed.stdout or ""
+                stderr_text = completed.stderr or ""
+                exit_code = completed.returncode
+                timed_out = exit_code == 124
+            except subprocess.TimeoutExpired as exc:
+                stdout_text = exc.stdout or ""
+                stderr_text = exc.stderr or ""
+                exit_code = -1
+                timed_out = True
+        finally:
+            if cleanup_after_run:
+                cleanup_error = self._remove_container(docker=docker, container_name=container_name)
+        if cleanup_error:
+            stderr_text = _append_stderr(stderr_text, cleanup_error)
 
         return SecurityCommandExecutionResult(
             backend="docker",
@@ -205,6 +214,33 @@ class SecurityExecutionEnvironmentService:
             container_name=container_name,
             output_artifacts=self._collect_output_artifacts(host_workdir),
         )
+
+    def _cleanup_after_run_enabled(self) -> bool:
+        return self._get_bool(
+            "security_runner_docker_cleanup_after_run",
+            "SECURITY_RUNNER_DOCKER_CLEANUP_AFTER_RUN",
+            not self._container_reuse_enabled(),
+        )
+
+    def _container_reuse_enabled(self) -> bool:
+        return self._get_bool("security_runner_container_reuse", "SECURITY_RUNNER_CONTAINER_REUSE", True)
+
+    def _remove_container(self, *, docker: str, container_name: str) -> str:
+        try:
+            remove = subprocess.run(
+                [docker, "rm", "-f", container_name],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return f"Failed to remove security Docker container {container_name}: cleanup timed out."
+        if remove.returncode == 0:
+            return ""
+        detail = (remove.stderr or remove.stdout or "").strip()
+        return f"Failed to remove security Docker container {container_name}: {detail or 'unknown error'}"
 
     def _ensure_container(
         self,
@@ -316,14 +352,14 @@ class SecurityExecutionEnvironmentService:
         )
         session_id = getattr(context, "session_id", "") or "session"
         turn_id = getattr(context, "turn_id", "") or "turn"
-        reuse = self._get_bool("security_runner_container_reuse", "SECURITY_RUNNER_CONTAINER_REUSE", True)
+        reuse = self._container_reuse_enabled()
         suffix = f"{_slug(session_id)}-{_slug(turn_id)}"
         if not reuse:
             suffix = f"{suffix}-{_utc_now().strftime('%Y%m%d%H%M%S')}"
         return f"{_slug(prefix)}-{suffix}"[:120].strip("-") or "qa-security-runner"
 
     def _host_workdir_for_container(self, artifact_dir: Path) -> Path:
-        if self._get_bool("security_runner_container_reuse", "SECURITY_RUNNER_CONTAINER_REUSE", True):
+        if self._container_reuse_enabled():
             return artifact_dir.parent / "_security_runner_work"
         return artifact_dir
 
@@ -366,3 +402,9 @@ def _slug(value: str) -> str:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _append_stderr(stderr_text: str, extra: str) -> str:
+    if not stderr_text:
+        return extra
+    return f"{stderr_text.rstrip()}\n{extra}"

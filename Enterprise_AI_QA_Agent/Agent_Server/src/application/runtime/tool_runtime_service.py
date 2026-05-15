@@ -224,18 +224,21 @@ class ToolRuntimeService:
         try:
             job_context = context
             if self._tool_job_service is not None:
-                job = await self._tool_job_service.create_job(
-                    tool=tool,
-                    call_id=call.id,
-                    session_id=context.session_id,
-                    turn_id=context.turn_id,
-                    trace_id=context.trace_id,
-                    input_payload=call.arguments,
-                    metadata={
-                        "selected_agent_key": context.selected_agent_key,
-                        "selected_model_key": context.selected_model_key,
-                    },
-                )
+                if context.tool_job_id:
+                    job = await self._tool_job_service.get_job(context.tool_job_id)
+                if job is None:
+                    job = await self._tool_job_service.create_job(
+                        tool=tool,
+                        call_id=call.id,
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                        trace_id=context.trace_id,
+                        input_payload=call.arguments,
+                        metadata={
+                            "selected_agent_key": context.selected_agent_key,
+                            "selected_model_key": context.selected_model_key,
+                        },
+                    )
                 await self._tool_job_service.mark_running(job)
                 job_context = ToolExecutionContext(
                     session_id=context.session_id,
@@ -2323,7 +2326,7 @@ class ToolRuntimeService:
         cleaned = value.replace("\r", "").replace("\n", "").strip()
         if not allow_spaces and any(ch.isspace() for ch in cleaned):
             raise ValueError("Security command arguments may not contain whitespace.")
-        return cleaned
+        return shlex.quote(cleaned)
 
     def _security_parser_input(self, parser_key: str, raw_output: str, artifact_dir: Path) -> str:
         if not parser_key:

@@ -184,9 +184,19 @@ class RuntimeService:
                 pending_turn=pending_turn,
             )
 
+        conversation_messages = list(pending_turn.get("conversation_messages", []))
+        latest_tool_call_ids = self._latest_assistant_tool_call_ids(conversation_messages)
+        if latest_tool_call_ids:
+            resume_tool_messages = [
+                message
+                for message in tool_messages
+                if str(message.get("tool_call_id") or "") in latest_tool_call_ids
+            ]
+        else:
+            resume_tool_messages = [approved_tool_message]
         state["runtime_messages"] = [
-            *list(pending_turn.get("conversation_messages", [])),
-            approved_tool_message,
+            *conversation_messages,
+            *resume_tool_messages,
         ]
         append_graph_event(
             state,
@@ -703,3 +713,12 @@ class RuntimeService:
                 ensure_ascii=False,
             ),
         }
+
+    def _latest_assistant_tool_call_ids(self, messages: list[dict[str, Any]]) -> set[str]:
+        for message in reversed(messages):
+            if message.get("role") != "assistant":
+                continue
+            tool_calls = message.get("tool_calls") or []
+            ids = {str(item.get("id") or "") for item in tool_calls if isinstance(item, dict)}
+            return {item for item in ids if item}
+        return set()

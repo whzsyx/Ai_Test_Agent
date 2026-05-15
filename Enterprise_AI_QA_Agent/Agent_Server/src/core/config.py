@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     security_runner_docker_net_admin: bool = False
     security_runner_docker_pull_policy: str = "never"
     security_runner_container_reuse: bool = True
+    security_runner_docker_cleanup_after_run: bool | None = None
     security_runner_wrap_timeout: bool = True
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90

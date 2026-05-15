@@ -170,14 +170,22 @@ class InputOrchestratorService:
         }
         if mode_intent_state is not None:
             context.update(self._build_mode_intent_context(mode.key, mode_intent_state))
-        requested_agent_key = payload.agent_key or session.selected_agent or mode.default_agent_key
+        payload_agent_key = (payload.agent_key or "").strip()
+        has_explicit_agent_key = bool(payload_agent_key and payload_agent_key != "auto")
+        requested_agent_key = payload_agent_key or session.selected_agent or mode.default_agent_key
         routed_test_agent_key = test_route.get("agent_key") if bool(test_task_state["is_test_task"]) else ""
-        if mode.key == "default" and routed_test_agent_key and (not requested_agent_key or requested_agent_key in {"auto", "coordinator"}):
+        if (
+            mode.key == "default"
+            and routed_test_agent_key
+            and not has_explicit_agent_key
+            and (not requested_agent_key or requested_agent_key in {"auto", "coordinator"})
+        ):
             resolved_agent_key = routed_test_agent_key
         elif (
             mode.is_test_mode
             and mode_intent_state is not None
             and mode_intent_state.suggested_agent_key
+            and not has_explicit_agent_key
             and requested_agent_key in {"", "auto", mode.default_agent_key}
         ):
             resolved_agent_key = mode_intent_state.suggested_agent_key

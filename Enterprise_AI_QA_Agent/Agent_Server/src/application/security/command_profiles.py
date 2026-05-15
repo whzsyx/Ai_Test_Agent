@@ -130,7 +130,27 @@ class SecurityCommandProfileRegistry:
         self.register(SecurityCommandProfile(
             profile_key="httpx_probe",
             tool_name="httpx",
-            command_template="httpx -u {target} -title -status-code -tech-detect -follow-redirects -silent",
+            command_template=(
+                "sh -lc '"
+                "TARGET=\"$1\"; export TARGET; "
+                "if httpx -h 2>&1 | grep -q -- \"-status-code\"; then "
+                "httpx -u \"$TARGET\" -title -status-code -tech-detect -follow-redirects -silent; "
+                "else "
+                "python3 -c \"import os,re,urllib.request; "
+                "u=os.environ.get(\\\"TARGET\\\", \\\"\\\"); "
+                "req=urllib.request.Request(u, headers={{\\\"User-Agent\\\":\\\"Enterprise-AI-QA-Agent security-smoke\\\"}}); "
+                "NoRaise=type(\\\"NoRaise\\\", (urllib.request.HTTPErrorProcessor,), "
+                "{{\\\"http_response\\\": lambda self, request, response: response, "
+                "\\\"https_response\\\": lambda self, request, response: response}}); "
+                "r=urllib.request.build_opener(NoRaise).open(req, timeout=20); "
+                "body=r.read(200000).decode(\\\"utf-8\\\", \\\"ignore\\\"); "
+                "m=re.search(\\\"<title[^>]*>(.*?)</title>\\\", body, re.I|re.S); "
+                "title=re.sub(r\\\"\\\\s+\\\", \\\" \\\", m.group(1)).strip() if m else \\\"\\\"; "
+                "server=r.headers.get(\\\"server\\\", \\\"\\\"); "
+                "print(\\\"%s [%s] [%s] [%s]\\\" % (r.geturl(), getattr(r, \\\"status\\\", 0), title, server))\"; "
+                "fi"
+                "' sh {target}"
+            ),
             description="HTTP 服务探测与技术栈识别",
             tool_family="web_scan",
             surface_types=["web", "api"],

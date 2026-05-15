@@ -165,6 +165,9 @@ class ToolJobService:
         artifacts = await self._store.list_artifacts(tool_job_id=job_id)
         return ToolJobDetail(**job.model_dump(mode="python"), artifacts=artifacts)
 
+    async def get_job(self, job_id: str) -> ToolJobRecord | None:
+        return await self._store.get_job(job_id)
+
     async def list_jobs(self, session_id: str | None = None) -> list[ToolJobRecord]:
         return await self._store.list_jobs(session_id=session_id)
 
