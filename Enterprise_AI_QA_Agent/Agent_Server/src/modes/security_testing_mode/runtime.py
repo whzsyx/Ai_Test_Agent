@@ -24,6 +24,7 @@ from src.modes.security_testing_mode.campaign_state import (
     SecurityCampaign,
     SecurityReport,
     SecurityTask,
+    SecurityTaskEventRecord,
     SecurityTestingRequestState,
     SecurityTestingState,
     TargetCandidate,
@@ -48,6 +49,7 @@ from src.modes.security_testing_mode.contracts import (
     TERMINAL_PHASES,
 )
 from src.modes.security_testing_mode.evidence_service import SecurityEvidenceService
+from src.modes.security_testing_mode.evaluation import SecurityTestingEvaluationPolicy
 from src.modes.security_testing_mode.memory_service import SecurityMemoryService
 from src.modes.security_testing_mode.recon_planner import SecurityReconPlanner
 from src.modes.security_testing_mode.reflection_service import SecurityReflectionService
@@ -57,6 +59,8 @@ from src.modes.security_testing_mode.request_interpreter import SecurityRequestI
 from src.modes.security_testing_mode.severity_evaluator import SeverityEvaluator
 from src.modes.security_testing_mode.subagent_coordinator import SecuritySubagentCoordinator
 from src.modes.security_testing_mode.task_pool import SecurityTaskPool
+from src.modes.security_testing_mode.tools import SECURITY_TESTING_TOOL_KEYS
+from src.modes.security_testing_mode.verification import SecurityTestingVerificationPolicy
 from src.modes.security_testing_mode.vulnerability_planner import SecurityVulnerabilityPlanner
 
 RunnerExecutor = Callable[[dict[str, Any], Any, str | None], Awaitable[dict[str, Any]]]
@@ -87,6 +91,8 @@ class SecurityTestingModeRuntime:
         self._risk_policy = SecurityRiskPolicy()
         self._finding_normalizer = FindingNormalizer()
         self._severity_evaluator = SeverityEvaluator()
+        self._verification_policy = SecurityTestingVerificationPolicy()
+        self._evaluation_policy = SecurityTestingEvaluationPolicy()
         self._request_interpreter = SecurityRequestInterpreter()
         self._asset_discovery = SecurityAssetDiscoveryService()
         self._auth_strategy_planner = SecurityAuthStrategyPlanner()
@@ -137,6 +143,7 @@ class SecurityTestingModeRuntime:
             state = SecurityTestingState()
 
         state.request = request
+        self._attach_runtime_context(state, context)
         state = await self._advance(state, context)
         self._persist_state(state, context)
         return self._build_output(state)
@@ -171,6 +178,7 @@ class SecurityTestingModeRuntime:
             return state
 
         state.targets = [target]
+        state.context_refs = self._build_context_refs(state)
         state.record_phase_transition(PHASE_TARGET_DISCOVERED, f"Resolved target: {target.value}")
         return state
 
@@ -204,6 +212,7 @@ class SecurityTestingModeRuntime:
         else:
             state.campaign.assets = assets
             state.campaign.credential_session = credential_session
+        state.context_refs = self._build_context_refs(state)
         return state
 
     def _build_campaign(self, state: SecurityTestingState) -> SecurityTestingState:
@@ -230,9 +239,23 @@ class SecurityTestingModeRuntime:
             return state
 
         state.record_phase_transition(PHASE_TASK_DISPATCHING, "Dispatching security tasks.")
+        self._checkpoint_execution_state(
+            state=state,
+            context=context,
+            event_type="campaign_dispatching",
+            tasks=state.campaign.tasks,
+            summary="Dispatching security tasks.",
+        )
         pool = SecurityTaskPool(tasks=state.campaign.tasks)
         state.record_phase_transition(PHASE_TASK_RUNNING, "Executing security tasks.")
         state.record_phase_transition(PHASE_RECON_RUNNING, "Reconnaissance tasks are running.")
+        self._checkpoint_execution_state(
+            state=state,
+            context=context,
+            event_type="campaign_running",
+            tasks=state.campaign.tasks,
+            summary="Reconnaissance tasks are running.",
+        )
 
         if self._can_use_subagent_execution(context):
             coordinator = SecuritySubagentCoordinator(
@@ -242,13 +265,26 @@ class SecurityTestingModeRuntime:
                 parent_context=self._build_dispatch_context(context),
                 max_workers=state.campaign.max_workers,
                 worker_model_key=str(getattr(context, "selected_model_key", "") or "") or None,
+                checkpoint_callback=self._build_checkpoint_callback(state, context),
             )
             completed_tasks = await coordinator.run_all()
             state.campaign.activities.extend(coordinator.activities)
         else:
-            completed_tasks = await self._run_tasks_locally(pool, context, state.campaign)
+            completed_tasks = await self._run_tasks_locally(
+                pool,
+                context,
+                state.campaign,
+                checkpoint_callback=self._build_checkpoint_callback(state, context),
+            )
 
         state.campaign.tasks = completed_tasks
+        self._checkpoint_execution_state(
+            state=state,
+            context=context,
+            event_type="campaign_tasks_settled",
+            tasks=completed_tasks,
+            summary="All security tasks have settled.",
+        )
         self._evidence_service.hydrate_missing_records(state.campaign)
         self._hydrate_campaign_from_task_results(state.campaign)
         reflection = self._reflection_service.analyze_campaign(state.campaign)
@@ -259,7 +295,6 @@ class SecurityTestingModeRuntime:
         state.record_phase_transition(PHASE_RECON_COMPLETE, "Task execution complete.")
 
         report = self._report_builder.build_report(state.campaign)
-        state.report = report
         markdown_report = self._report_builder.build_markdown(report)
         html_report = self._report_template.render(
             report=report,
@@ -273,6 +308,27 @@ class SecurityTestingModeRuntime:
             markdown_report=markdown_report,
             html_report=html_report,
         )
+        state.report_markdown = markdown_report
+        state.report_html = html_report
+        state.artifacts = self._artifact_metadata(self._last_artifacts)
+        verification_verdict = self._verification_policy.verify(campaign=state.campaign, report=report)
+        evaluation_result = self._evaluation_policy.evaluate(
+            campaign=state.campaign,
+            report=report,
+            verification_verdict=verification_verdict,
+        )
+        state.verification_result = verification_verdict.to_dict()
+        state.evaluation_result = evaluation_result.to_dict()
+        state.errors = self._build_error_records(evaluation_result.to_dict(), completed_tasks)
+        report.artifacts = list(state.artifacts)
+        report.verification_result = dict(state.verification_result)
+        report.evaluation_result = dict(state.evaluation_result)
+        state.report = report
+        state.notes.append(f"Verification verdict: {verification_verdict.summary}")
+        state.notes.append(f"Security evaluation: {evaluation_result.summary}")
+        for recommendation in evaluation_result.recommendations[:5]:
+            if recommendation not in state.notes:
+                state.notes.append(recommendation)
         memory_ids = await self._memory_service.persist_campaign_observations(
             campaign=state.campaign,
             context=context,
@@ -408,6 +464,7 @@ class SecurityTestingModeRuntime:
         pool: SecurityTaskPool,
         context: Any,
         campaign: SecurityCampaign,
+        checkpoint_callback: Callable[[str, SecurityTask, list[SecurityTask]], None] | None = None,
     ) -> list[SecurityTask]:
         while not pool.is_complete:
             pool.resolve_blocked()
@@ -416,6 +473,8 @@ class SecurityTestingModeRuntime:
                 break
             for task in ready:
                 pool.mark_running(task.task_id)
+                if checkpoint_callback is not None:
+                    checkpoint_callback("task_running", task, pool.all_tasks)
                 started_at = task.started_at
                 runner_key = self._tool_catalog.resolve_runner_for_family(task.tool_family)
                 result = await self._execute_task_with_runner(task, context, runner_key)
@@ -429,8 +488,12 @@ class SecurityTestingModeRuntime:
                 ]
                 if result.get("success") or result.get("ok"):
                     pool.mark_completed(task.task_id, task.result_summary)
+                    if checkpoint_callback is not None:
+                        checkpoint_callback("task_completed", task, pool.all_tasks)
                 else:
                     pool.mark_failed(task.task_id, str(result.get("error") or task.result_summary or "execution_failed"))
+                    if checkpoint_callback is not None:
+                        checkpoint_callback("task_failed", task, pool.all_tasks)
                 self._evidence_service.record_runner_result(campaign, task, result, started_at=started_at)
                 self._record_local_activity(task, started_at)
         return pool.all_tasks
@@ -526,6 +589,82 @@ class SecurityTestingModeRuntime:
     def _build_request(self, arguments: dict[str, Any], context: Any) -> SecurityTestingRequestState:
         return self._request_interpreter.interpret(arguments, context)
 
+    def _attach_runtime_context(self, state: SecurityTestingState, context: Any) -> None:
+        state.session_id = str(getattr(context, "session_id", "") or state.session_id)
+        state.trace_id = str(getattr(context, "trace_id", "") or state.trace_id)
+        state.selected_agent = str(
+            getattr(context, "selected_agent_key", "") or state.selected_agent or "security-testing-agent"
+        )
+        state.selected_tools = list(SECURITY_TESTING_TOOL_KEYS)
+        if not state.context_refs:
+            state.context_refs = self._build_context_refs(state)
+
+    def _build_checkpoint_callback(
+        self,
+        state: SecurityTestingState,
+        context: Any,
+    ) -> Callable[[str, SecurityTask, list[SecurityTask]], None]:
+        def checkpoint(event_type: str, task: SecurityTask, tasks: list[SecurityTask]) -> None:
+            self._checkpoint_execution_state(
+                state=state,
+                context=context,
+                event_type=event_type,
+                task=task,
+                tasks=tasks,
+            )
+
+        return checkpoint
+
+    def _checkpoint_execution_state(
+        self,
+        *,
+        state: SecurityTestingState,
+        context: Any,
+        event_type: str,
+        task: SecurityTask | None = None,
+        tasks: list[SecurityTask] | None = None,
+        summary: str = "",
+    ) -> None:
+        if state.campaign and tasks is not None:
+            state.campaign.tasks = list(tasks)
+        task_list = list(tasks or (state.campaign.tasks if state.campaign else []))
+        now = datetime.now(timezone.utc).isoformat()
+        if task is not None:
+            runner_key = self._tool_catalog.resolve_runner_for_family(task.tool_family)
+            event = SecurityTaskEventRecord(
+                event_id=f"{event_type}_{task.task_id}_{task.attempts}_{len(state.task_events) + 1}",
+                event_type=event_type,
+                task_id=task.task_id,
+                task_name=task.name,
+                command_profile=task.command_profile,
+                tool_family=task.tool_family,
+                target=task.target,
+                status=task.status,
+                phase=state.phase,
+                attempts=task.attempts,
+                worker_session_id=task.worker_session_id,
+                runner_key=runner_key,
+                summary=summary or task.result_summary,
+                error=task.last_error,
+                at=now,
+            )
+            state.task_events.append(event)
+            if len(state.task_events) > 200:
+                state.task_events = state.task_events[-200:]
+
+        state.execution_checkpoint = {
+            "phase": state.phase,
+            "campaign_id": state.campaign.campaign_id if state.campaign else "",
+            "last_event_type": event_type,
+            "active_task_id": task.task_id if task is not None else "",
+            "active_task_status": task.status if task is not None else "",
+            "task_summary": self._task_status_summary(task_list),
+            "event_count": len(state.task_events),
+            "updated_at": now,
+            "trace_id": state.trace_id,
+        }
+        self._persist_state(state, context)
+
     def _restore_state(self, context: Any) -> SecurityTestingState:
         bundle = getattr(context, "context_bundle", None) or {}
         raw = bundle.get(STATE_METADATA_KEY)
@@ -550,6 +689,14 @@ class SecurityTestingModeRuntime:
             "phase": state.phase,
             "summary": self._build_summary(state),
         }
+        if state.trace_id:
+            output["trace_id"] = state.trace_id
+        if state.selected_agent:
+            output["selected_agent"] = state.selected_agent
+        if state.selected_tools:
+            output["selected_tools"] = list(state.selected_tools)
+        if state.context_refs:
+            output["context_refs"] = list(state.context_refs)
         if state.targets:
             output["targets"] = [target.model_dump(mode="json") for target in state.targets]
         if state.campaign:
@@ -558,19 +705,24 @@ class SecurityTestingModeRuntime:
             output["task_summary"] = self._task_summary(state.campaign.tasks)
         if state.report:
             output["report"] = state.report.model_dump(mode="json")
-            output["report_markdown"] = self._last_markdown_report
-            output["report_html"] = self._last_html_report
-            output["artifacts"] = [
-                {
-                    "type": item.get("type"),
-                    "filename": item.get("filename"),
-                    "content_type": item.get("content_type"),
-                    "label": item.get("label"),
-                }
-                for item in self._last_artifacts
-            ]
+            output["report_markdown"] = self._last_markdown_report or state.report_markdown
+            output["report_html"] = self._last_html_report or state.report_html
+            if self._last_artifacts:
+                output["artifacts"] = self._artifact_metadata(self._last_artifacts)
+            elif state.artifacts:
+                output["artifacts"] = list(state.artifacts)
         if state.delivery:
             output["delivery"] = state.delivery.model_dump(mode="json")
+        if state.verification_result:
+            output["verification_result"] = dict(state.verification_result)
+        if state.evaluation_result:
+            output["evaluation_result"] = dict(state.evaluation_result)
+        if state.errors:
+            output["errors"] = list(state.errors)
+        if state.execution_checkpoint:
+            output["execution_checkpoint"] = dict(state.execution_checkpoint)
+        if state.task_events:
+            output["task_events"] = [event.model_dump(mode="json") for event in state.task_events]
         if state.notes:
             output["notes"] = list(state.notes)
         if state.error:
@@ -621,6 +773,100 @@ class SecurityTestingModeRuntime:
             "failed": sum(1 for task in tasks if task.status == TASK_FAILED),
             "skipped": sum(1 for task in tasks if task.status == TASK_SKIPPED),
         }
+
+    def _task_status_summary(self, tasks: list[SecurityTask]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for task in tasks:
+            counts[task.status] = counts.get(task.status, 0) + 1
+        counts["total"] = len(tasks)
+        return counts
+
+    def _build_context_refs(self, state: SecurityTestingState) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = []
+        for target in state.targets:
+            refs.append(
+                {
+                    "type": "security_target",
+                    "source": "user_request",
+                    "target_id": target.target_id,
+                    "target_type": target.target_type,
+                    "value": target.value,
+                    "label": target.label,
+                    "protocol": target.protocol,
+                    "port": target.port,
+                }
+            )
+        if state.campaign:
+            for asset in state.campaign.assets:
+                refs.append(
+                    {
+                        "type": "security_asset",
+                        "source": "asset_discovery",
+                        "asset_id": asset.asset_id,
+                        "asset_type": asset.asset_type,
+                        "address": asset.address,
+                        "hostname": asset.hostname,
+                        "port": asset.port,
+                        "protocol": asset.protocol,
+                    }
+                )
+        return refs
+
+    def _artifact_metadata(self, artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        metadata: list[dict[str, Any]] = []
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            artifact = {
+                "type": item.get("type"),
+                "filename": item.get("filename"),
+                "content_type": item.get("content_type"),
+                "label": item.get("label"),
+            }
+            if item.get("task_id"):
+                artifact["task_id"] = item.get("task_id")
+            metadata.append(artifact)
+        return metadata
+
+    def _build_error_records(
+        self,
+        evaluation_result: dict[str, Any],
+        tasks: list[SecurityTask],
+    ) -> list[dict[str, Any]]:
+        errors: list[dict[str, Any]] = []
+        classifications = evaluation_result.get("failure_classifications")
+        if isinstance(classifications, list):
+            for item in classifications:
+                if not isinstance(item, dict):
+                    continue
+                errors.append(
+                    {
+                        "task_id": item.get("task_id"),
+                        "category": item.get("category"),
+                        "severity": item.get("severity"),
+                        "message": item.get("description"),
+                        "command_profile": item.get("command_profile"),
+                        "target": item.get("target"),
+                        "is_transient": item.get("is_transient"),
+                    }
+                )
+        if errors:
+            return errors
+        for task in tasks:
+            if not task.last_error:
+                continue
+            errors.append(
+                {
+                    "task_id": task.task_id,
+                    "category": "execution",
+                    "severity": "medium",
+                    "message": task.last_error,
+                    "command_profile": task.command_profile,
+                    "target": task.target,
+                    "is_transient": False,
+                }
+            )
+        return errors
 
     def _to_string_list(self, value: Any) -> list[str]:
         if isinstance(value, list):

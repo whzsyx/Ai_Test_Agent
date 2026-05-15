@@ -11,6 +11,52 @@ class ToolModule:
     handler_key: str | None = None
 
 
+SECURITY_RUNNER_OUTPUT_SCHEMA = {
+    "status": "string",
+    "ok": "boolean",
+    "success": "boolean",
+    "summary": "string",
+    "runner_key": "string",
+    "command_profile": "string",
+    "tool_name": "string",
+    "command": "string",
+    "execution_backend": "string",
+    "container_name": "string",
+    "exit_code": "integer",
+    "timed_out": "boolean",
+    "metrics": "object",
+    "findings": "array",
+    "parsed_result": "object",
+    "raw_output": "string",
+    "artifacts": "array",
+    "error": "string",
+}
+
+
+SECURITY_SCAN_RUNNER_OUTPUT_SCHEMA = {
+    **SECURITY_RUNNER_OUTPUT_SCHEMA,
+    "phase": "string",
+    "trace_id": "string",
+    "selected_agent": "string",
+    "selected_tools": "array",
+    "context_refs": "array",
+    "targets": "array",
+    "campaign_id": "string",
+    "task_count": "integer",
+    "task_summary": "object",
+    "report": "object",
+    "report_markdown": "string",
+    "report_html": "string",
+    "delivery": "object",
+    "verification_result": "object",
+    "evaluation_result": "object",
+    "errors": "array",
+    "execution_checkpoint": "object",
+    "task_events": "array",
+    "security_testing_state": "object",
+}
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolModule] = {
@@ -1007,13 +1053,7 @@ class ToolRegistry:
                             "objective": {"type": "string", "description": "测试目标描述。"},
                         },
                     },
-                    output_schema={
-                        "success": "boolean",
-                        "summary": "string",
-                        "findings": "array",
-                        "parsed_result": "object",
-                        "raw_output": "string",
-                    },
+                    output_schema=SECURITY_SCAN_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "testing", "scan", "runner"],
                 ),
                 handler_key="security-scan-runner",
@@ -1043,13 +1083,7 @@ class ToolRegistry:
                         },
                         "required": ["target"],
                     },
-                    output_schema={
-                        "success": "boolean",
-                        "summary": "string",
-                        "findings": "array",
-                        "parsed_result": "object",
-                        "raw_output": "string",
-                    },
+                    output_schema=SECURITY_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "network", "recon", "nmap", "runner"],
                 ),
                 handler_key="network-recon-runner",
@@ -1078,13 +1112,7 @@ class ToolRegistry:
                         },
                         "required": ["target"],
                     },
-                    output_schema={
-                        "success": "boolean",
-                        "summary": "string",
-                        "findings": "array",
-                        "parsed_result": "object",
-                        "raw_output": "string",
-                    },
+                    output_schema=SECURITY_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "web", "scan", "nuclei", "nikto", "runner"],
                 ),
                 handler_key="web-scan-runner",
@@ -1112,13 +1140,7 @@ class ToolRegistry:
                             "task": {"type": "object", "description": "SecurityTask 对象（worker 模式）。"},
                         },
                     },
-                    output_schema={
-                        "success": "boolean",
-                        "summary": "string",
-                        "findings": "array",
-                        "parsed_result": "object",
-                        "raw_output": "string",
-                    },
+                    output_schema=SECURITY_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "service", "audit", "ssl", "runner"],
                 ),
                 handler_key="service-audit-runner",
@@ -1132,7 +1154,7 @@ class ToolRegistry:
                         "支持 hydra_basic_login 等 profile。"
                     ),
                     category="execution",
-                    permission_level="deny",
+                    permission_level="restricted",
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -1149,13 +1171,7 @@ class ToolRegistry:
                         },
                         "required": ["target", "service"],
                     },
-                    output_schema={
-                        "success": "boolean",
-                        "summary": "string",
-                        "findings": "array",
-                        "parsed_result": "object",
-                        "raw_output": "string",
-                    },
+                    output_schema=SECURITY_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "credential", "attack", "hydra", "runner"],
                 ),
                 handler_key="credential-attack-runner",
@@ -1166,7 +1182,7 @@ class ToolRegistry:
                     name="Traffic Analysis Runner",
                     description="流量分析 runner，执行网络流量捕获和 TLS 分析（Phase 2）。",
                     category="execution",
-                    permission_level="deny",
+                    permission_level="restricted",
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -1176,7 +1192,7 @@ class ToolRegistry:
                             "task": {"type": "object"},
                         },
                     },
-                    output_schema={"success": "boolean", "summary": "string", "findings": "array"},
+                    output_schema=SECURITY_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "traffic", "analysis", "runner"],
                 ),
                 handler_key="traffic-analysis-runner",
@@ -1187,7 +1203,7 @@ class ToolRegistry:
                     name="Exploit Workbench Runner",
                     description="漏洞利用工作台 runner，执行 PoC 验证和漏洞利用（高风险，Phase 3/4）。",
                     category="execution",
-                    permission_level="deny",
+                    permission_level="restricted",
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -1197,7 +1213,7 @@ class ToolRegistry:
                             "task": {"type": "object"},
                         },
                     },
-                    output_schema={"success": "boolean", "summary": "string", "findings": "array"},
+                    output_schema=SECURITY_RUNNER_OUTPUT_SCHEMA,
                     tags=["security", "exploit", "runner"],
                 ),
                 handler_key="exploit-workbench-runner",

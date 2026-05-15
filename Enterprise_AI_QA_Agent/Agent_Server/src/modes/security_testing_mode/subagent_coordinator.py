@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from src.modes.security_testing_mode.agent import SURFACE_WORKER_MAP, SECURITY_RECON_WORKER_KEY
 from src.modes.security_testing_mode.campaign_state import (
@@ -23,6 +23,8 @@ from src.modes.security_testing_mode.task_pool import SecurityTaskPool
 
 logger = logging.getLogger(__name__)
 
+CheckpointCallback = Callable[[str, SecurityTask, list[SecurityTask]], None]
+
 
 class SecuritySubagentCoordinator:
     """Orchestrate security task execution through background worker sessions."""
@@ -37,6 +39,7 @@ class SecuritySubagentCoordinator:
         max_workers: int = MAX_CONCURRENT_WORKERS,
         worker_model_key: str | None = None,
         poll_interval_seconds: float = 0.5,
+        checkpoint_callback: CheckpointCallback | None = None,
     ) -> None:
         self._pool = pool
         self._coordinator_runtime_service = coordinator_runtime_service
@@ -45,6 +48,7 @@ class SecuritySubagentCoordinator:
         self._max_workers = max(1, max_workers)
         self._worker_model_key = worker_model_key
         self._poll_interval_seconds = max(0.1, poll_interval_seconds)
+        self._checkpoint_callback = checkpoint_callback
         self._activities: list[AgentActivityRecord] = []
         self._active_resource_locks: set[str] = set()
 
@@ -137,6 +141,7 @@ class SecuritySubagentCoordinator:
             for task in batch:
                 self._pool.mark_running(task.task_id)
                 task.worker_status = "dispatching"
+                self._emit_checkpoint("task_running", task)
                 for lock in task.resource_locks:
                     self._active_resource_locks.add(lock)
                 launched_tasks.append(task)
@@ -193,6 +198,7 @@ class SecuritySubagentCoordinator:
                     # Worker completed but no structured output
                     task.result_summary = assistant_summary
                     self._pool.mark_completed(task.task_id, assistant_summary)
+                    self._emit_checkpoint("task_completed", task)
                 else:
                     self._fail_task(task, f"Worker finished without runner output ({session.status.value})")
 
@@ -282,9 +288,10 @@ class SecuritySubagentCoordinator:
         task.parsed_result = tool_output.get("parsed_result") or {}
 
         # Check if worker reported success
-        success = tool_output.get("success", False)
+        success = bool(tool_output.get("success") or tool_output.get("ok"))
         if success:
             self._pool.mark_completed(task.task_id, task.result_summary)
+            self._emit_checkpoint("task_completed", task)
         else:
             error = tool_output.get("error") or task.result_summary or "execution_failed"
             self._fail_task(task, error)
@@ -297,12 +304,25 @@ class SecuritySubagentCoordinator:
         # Collect artifacts
         artifacts = tool_output.get("artifacts") or []
         if artifacts:
-            task.artifacts = [a.get("artifact_id", "") for a in artifacts if isinstance(a, dict)]
+            task.artifacts = [
+                str(a.get("artifact_id") or a.get("path") or a.get("filename") or "")
+                for a in artifacts
+                if isinstance(a, dict)
+            ]
 
     def _fail_task(self, task: SecurityTask, error: str) -> None:
         """Mark a task as failed."""
         task.last_error = str(error or "execution_failed")
         self._pool.mark_failed(task.task_id, task.last_error)
+        self._emit_checkpoint("task_failed", task)
+
+    def _emit_checkpoint(self, event_type: str, task: SecurityTask) -> None:
+        if self._checkpoint_callback is None:
+            return
+        try:
+            self._checkpoint_callback(event_type, task, self._pool.all_tasks)
+        except Exception:
+            return
 
     def _record_activity(self, task: SecurityTask, summary: str = "") -> None:
         """Record an agent activity for this task."""
@@ -382,4 +402,4 @@ class SecuritySubagentCoordinator:
         return ""
 
 
-__all__ = ["SecuritySubagentCoordinator"]
+__all__ = ["SecuritySubagentCoordinator", "CheckpointCallback"]

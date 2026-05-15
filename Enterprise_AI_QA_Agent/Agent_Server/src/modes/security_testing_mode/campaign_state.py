@@ -307,6 +307,9 @@ class SecurityReport(BaseModel):
     generated_at: str = ""
     recommendations: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    verification_result: dict[str, Any] = Field(default_factory=dict)
+    evaluation_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReportDeliveryRecord(BaseModel):
@@ -326,6 +329,26 @@ class ReportDeliveryRecord(BaseModel):
     delivered_at: str = ""
 
 
+class SecurityTaskEventRecord(BaseModel):
+    """A checkpoint event emitted while a security campaign is executing."""
+
+    event_id: str = ""
+    event_type: str = ""  # task_running / task_completed / task_failed / task_skipped
+    task_id: str = ""
+    task_name: str = ""
+    command_profile: str = ""
+    tool_family: str = ""
+    target: str = ""
+    status: str = ""
+    phase: str = ""
+    attempts: int = 0
+    worker_session_id: str = ""
+    runner_key: str = ""
+    summary: str = ""
+    error: str = ""
+    at: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Full state machine
 # ---------------------------------------------------------------------------
@@ -335,16 +358,28 @@ class SecurityTestingState(BaseModel):
     """Top-level state captured per session for the security testing mode."""
 
     session_id: str = ""
+    trace_id: str = ""
     phase: str = "request_resolved"
     previous_phase: str = ""
+    selected_agent: str = ""
+    selected_tools: list[str] = Field(default_factory=list)
+    context_refs: list[dict[str, Any]] = Field(default_factory=list)
     request: SecurityTestingRequestState = Field(default_factory=SecurityTestingRequestState)
     targets: list[TargetCandidate] = Field(default_factory=list)
     campaign: SecurityCampaign | None = None
     report: SecurityReport | None = None
+    report_markdown: str = ""
+    report_html: str = ""
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    verification_result: dict[str, Any] = Field(default_factory=dict)
+    evaluation_result: dict[str, Any] = Field(default_factory=dict)
+    execution_checkpoint: dict[str, Any] = Field(default_factory=dict)
+    task_events: list[SecurityTaskEventRecord] = Field(default_factory=list)
     delivery: ReportDeliveryRecord | None = None
     last_updated_at: str = ""
     history: list[dict[str, Any]] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
     error: str = ""
 
     def record_phase_transition(self, new_phase: str, reason: str = "") -> None:
@@ -378,5 +413,6 @@ __all__ = [
     "SecurityCampaign",
     "SecurityReport",
     "ReportDeliveryRecord",
+    "SecurityTaskEventRecord",
     "SecurityTestingState",
 ]
