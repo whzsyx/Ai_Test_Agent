@@ -25,6 +25,7 @@ from src.modes.api_testing_mode.task_pool import ApiTaskPool
 
 # Type alias for the executor callback.
 TaskExecutorFn = Callable[[ApiTestTask], Awaitable[ApiTestTask]]
+CheckpointCallback = Callable[[str, ApiTestTask, list[ApiTestTask]], None]
 
 
 class ApiTestCoordinator:
@@ -36,10 +37,12 @@ class ApiTestCoordinator:
         pool: ApiTaskPool,
         policy: ExecutionPolicy,
         executor_fn: TaskExecutorFn,
+        checkpoint_callback: CheckpointCallback | None = None,
     ) -> None:
         self._pool = pool
         self._policy = policy
         self._executor_fn = executor_fn
+        self._checkpoint_callback = checkpoint_callback
         self._active_resource_locks: set[str] = set()
         self._write_running: bool = False
         self._task_outputs: dict[str, Any] = {}  # task_id -> response_body
@@ -169,6 +172,7 @@ class ApiTestCoordinator:
 
     async def _execute_one(self, task: ApiTestTask) -> None:
         self._pool.mark_running(task.task_id)
+        self._emit_checkpoint("task_running", task)
         for lock in task.resource_locks:
             self._active_resource_locks.add(lock)
         if task.execution_mode == EXECUTION_MODE_WRITE:
@@ -181,6 +185,7 @@ class ApiTestCoordinator:
             result = await self._executor_fn(task)
             if result.status == TASK_COMPLETED:
                 self._pool.mark_completed(task.task_id)
+                self._emit_checkpoint("task_completed", task)
                 # Store output for downstream input bindings.
                 self._task_outputs[task.task_id] = result.response_body
                 # If auth task completed, propagate credential to dependent tasks.
@@ -188,13 +193,23 @@ class ApiTestCoordinator:
                     self._propagate_auth_ref(result.auth_ref)
             else:
                 self._pool.mark_failed(task.task_id, result.last_error or "execution_failed")
+                self._emit_checkpoint("task_failed", task)
         except Exception as exc:
             self._pool.mark_failed(task.task_id, str(exc))
+            self._emit_checkpoint("task_failed", task)
         finally:
             for lock in task.resource_locks:
                 self._active_resource_locks.discard(lock)
             if task.execution_mode == EXECUTION_MODE_WRITE:
                 self._write_running = False
+
+    def _emit_checkpoint(self, event_type: str, task: ApiTestTask) -> None:
+        if self._checkpoint_callback is None:
+            return
+        try:
+            self._checkpoint_callback(event_type, task, self._pool.all_tasks)
+        except Exception:
+            return
 
     def _propagate_auth_ref(self, auth_ref: str) -> None:
         """Update all blocked/ready tasks that lack an auth_ref."""
@@ -323,4 +338,4 @@ class ApiTestCoordinator:
         current[parts[-1]] = value
 
 
-__all__ = ["ApiTestCoordinator", "TaskExecutorFn"]
+__all__ = ["ApiTestCoordinator", "TaskExecutorFn", "CheckpointCallback"]

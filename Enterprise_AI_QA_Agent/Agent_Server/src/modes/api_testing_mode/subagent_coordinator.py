@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Callable
 
 from src.modes.api_testing_mode.campaign_state import ApiTestTask, CredentialSession, ExecutionPolicy
 from src.modes.api_testing_mode.contracts import (
@@ -17,6 +17,8 @@ from src.modes.api_testing_mode.credential_manager import CredentialManager
 from src.modes.api_testing_mode.task_pool import ApiTaskPool
 from src.runtime.store import SessionStore
 from src.schemas.session import MessageRole, SessionStatus
+
+CheckpointCallback = Callable[[str, ApiTestTask, list[ApiTestTask]], None]
 
 
 class ApiSubagentCoordinator:
@@ -35,6 +37,7 @@ class ApiSubagentCoordinator:
         worker_agent_key: str = "api-executor-worker",
         worker_model_key: str | None = None,
         poll_interval_seconds: float = 0.25,
+        checkpoint_callback: CheckpointCallback | None = None,
     ) -> None:
         self._pool = pool
         self._policy = policy
@@ -46,6 +49,7 @@ class ApiSubagentCoordinator:
         self._worker_agent_key = worker_agent_key
         self._worker_model_key = worker_model_key
         self._poll_interval_seconds = max(0.1, poll_interval_seconds)
+        self._checkpoint_callback = checkpoint_callback
         self._active_resource_locks: set[str] = set()
         self._write_running: bool = False
         self._task_outputs: dict[str, Any] = {}
@@ -152,6 +156,7 @@ class ApiSubagentCoordinator:
             for task in batch:
                 self._pool.mark_running(task.task_id)
                 task.worker_status = "dispatching"
+                self._emit_checkpoint("task_running", task)
                 for lock in task.resource_locks:
                     self._active_resource_locks.add(lock)
                 if task.execution_mode == EXECUTION_MODE_WRITE:
@@ -279,17 +284,28 @@ class ApiSubagentCoordinator:
 
         if task.status == TASK_COMPLETED:
             self._pool.mark_completed(task.task_id)
+            self._emit_checkpoint("task_completed", task)
             self._task_outputs[task.task_id] = task.response_body
             if task.execution_mode == EXECUTION_MODE_AUTH and task.auth_ref:
                 self._propagate_auth_ref(task.auth_ref)
             return
 
         self._pool.mark_failed(task.task_id, task.last_error or str(tool_output.get("summary") or "execution_failed"))
+        self._emit_checkpoint("task_failed", task)
 
     def _fail_task(self, task: ApiTestTask, error: str) -> None:
         task.status = TASK_FAILED
         task.last_error = str(error or "execution_failed")
         self._pool.mark_failed(task.task_id, task.last_error)
+        self._emit_checkpoint("task_failed", task)
+
+    def _emit_checkpoint(self, event_type: str, task: ApiTestTask) -> None:
+        if self._checkpoint_callback is None:
+            return
+        try:
+            self._checkpoint_callback(event_type, task, self._pool.all_tasks)
+        except Exception:
+            return
 
     def _propagate_auth_ref(self, auth_ref: str) -> None:
         for task in self._pool.all_tasks:
@@ -444,4 +460,4 @@ class ApiSubagentCoordinator:
         return ""
 
 
-__all__ = ["ApiSubagentCoordinator"]
+__all__ = ["ApiSubagentCoordinator", "CheckpointCallback"]
