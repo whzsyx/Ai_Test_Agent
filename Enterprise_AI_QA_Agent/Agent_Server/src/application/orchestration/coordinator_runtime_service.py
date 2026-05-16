@@ -111,11 +111,13 @@ class CoordinatorRuntimeService:
             debate_stage = str(worker.context.get("debate_stage") or "").strip()
             debate_round_index = int(worker.context.get("debate_round_index") or 0)
             dispatch_role = str(worker.context.get("dispatch_role") or "worker").strip() or "worker"
+            mode_key = self._resolve_worker_mode_key(worker)
             child_session = await self._session_service.create_session(
                 CreateSessionRequest(
                     title=f"Worker: {worker.description}",
                     session_mode=SessionMode.background_task,
                     runtime_mode=RuntimeMode.background,
+                    mode_key=mode_key,
                     preferred_model=worker.model_key,
                     selected_agent=worker.agent_key,
                     metadata={
@@ -239,10 +241,12 @@ class CoordinatorRuntimeService:
         usage: dict[str, Any] = {}
 
         try:
+            mode_key = self._resolve_worker_mode_key(worker)
             response = await self._session_service.send_message(
                 child_session_id,
                 SendMessageRequest(
                     content=worker.prompt,
+                    mode_key=mode_key,
                     agent_key=worker.agent_key,
                     model_key=worker.model_key,
                     skill_keys=worker.skill_keys,
@@ -655,9 +659,44 @@ class CoordinatorRuntimeService:
         if str(guard.get("turn_id") or "") != parent_turn_id:
             self._reset_failure_guard(parent_session, parent_turn_id)
 
-        worker_dispatches = list(parent_session.metadata.get("worker_dispatches", []))
-        worker_dispatches.extend(launch_records)
-        parent_session.metadata["worker_dispatches"] = worker_dispatches
+        existing = parent_session.metadata.get("worker_dispatches", [])
+        merged_by_task_id: dict[str, dict[str, Any]] = {}
+        ordered_task_ids: list[str] = []
+        anonymous: list[dict[str, Any]] = []
+        for record in existing:
+            if not isinstance(record, dict):
+                continue
+            task_id = str(record.get("task_id") or "").strip()
+            if not task_id:
+                anonymous.append(record)
+                continue
+            if task_id not in merged_by_task_id:
+                ordered_task_ids.append(task_id)
+            merged_by_task_id[task_id] = record
+
+        for record in launch_records:
+            if not isinstance(record, dict):
+                continue
+            task_id = str(record.get("task_id") or "").strip()
+            if not task_id:
+                anonymous.append(record)
+                continue
+            existing_record = merged_by_task_id.get(task_id)
+            if existing_record is None:
+                merged_by_task_id[task_id] = dict(record)
+                ordered_task_ids.append(task_id)
+                continue
+            # Merge into the existing record. Preserve the first non-empty
+            # child_session_id so downstream consumers can still correlate to
+            # the original launch even if the same task is re-registered.
+            merged = {**existing_record, **record}
+            if not str(merged.get("child_session_id") or "").strip():
+                merged["child_session_id"] = existing_record.get("child_session_id") or ""
+            merged_by_task_id[task_id] = merged
+
+        rebuilt = [merged_by_task_id[task_id] for task_id in ordered_task_ids]
+        rebuilt.extend(anonymous)
+        parent_session.metadata["worker_dispatches"] = rebuilt
         await self._store.save_session(parent_session)
 
     async def _register_followup_workers(
@@ -809,7 +848,7 @@ class CoordinatorRuntimeService:
             ]
             workers.append(
                 WorkerDispatchSpec(
-                    task_id=str(uuid4()),
+                    task_id=str(item.get("task_id") or uuid4()),
                     description=description,
                     prompt=prompt,
                     agent_key=agent_key,
@@ -841,7 +880,7 @@ class CoordinatorRuntimeService:
             ]
             workers.append(
                 WorkerDispatchSpec(
-                    task_id=str(uuid4()),
+                    task_id=str(item.get("task_id") or uuid4()),
                     description=description,
                     prompt=prompt,
                     agent_key=agent_key,
@@ -867,7 +906,7 @@ class CoordinatorRuntimeService:
             if str(skill_key).strip()
         ]
         return WorkerDispatchSpec(
-            task_id=str(uuid4()),
+            task_id=str(raw_item.get("task_id") or uuid4()),
             description=description,
             prompt=prompt,
             agent_key=agent_key,
@@ -935,6 +974,7 @@ class CoordinatorRuntimeService:
                 title=f"Worker: {worker.description}",
                 session_mode=SessionMode.background_task,
                 runtime_mode=RuntimeMode.background,
+                mode_key=self._resolve_worker_mode_key(worker),
                 preferred_model=worker.model_key,
                 selected_agent=worker.agent_key,
                 metadata={
@@ -1078,6 +1118,7 @@ class CoordinatorRuntimeService:
                     title=f"Worker: {worker.description}",
                     session_mode=SessionMode.background_task,
                     runtime_mode=RuntimeMode.background,
+                    mode_key=self._resolve_worker_mode_key(worker),
                     preferred_model=worker.model_key,
                     selected_agent=worker.agent_key,
                     metadata={
@@ -1339,6 +1380,10 @@ class CoordinatorRuntimeService:
         except KeyError:
             return False
         return True
+
+    def _resolve_worker_mode_key(self, worker: WorkerDispatchSpec) -> str:
+        mode_key = str(worker.context.get("mode_key") or "").strip()
+        return mode_key or "default"
 
     def _get_failure_guard(self, session) -> dict[str, Any]:
         guard = session.metadata.get("worker_failure_guard", {})

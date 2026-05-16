@@ -444,18 +444,10 @@ class AgentRegistry:
                         "聚合 Finding、计算严重级别、生成结构化报告并按需发送邮件。"
                     ),
                     supported_tools=[
-                        "security-scan-runner",
-                        "network-recon-runner",
-                        "web-scan-runner",
-                        "service-audit-runner",
-                        "credential-attack-runner",
-                        "traffic-analysis-runner",
-                        "exploit-workbench-runner",
                         "subagent-dispatch",
                         "knowledge-rag",
                         "report-writer",
                         "send-email",
-                        "cli-executor",
                         "observation-search",
                         "session-history",
                     ],
@@ -503,7 +495,6 @@ class AgentRegistry:
                     supported_tools=[
                         "network-recon-runner",
                         "security-scan-runner",
-                        "cli-executor",
                         "knowledge-rag",
                         "observation-search",
                     ],
@@ -523,7 +514,6 @@ class AgentRegistry:
                     supported_tools=[
                         "credential-attack-runner",
                         "web-scan-runner",
-                        "cli-executor",
                         "knowledge-rag",
                     ],
                     supported_skills=["vulnerability-analysis"],
@@ -542,7 +532,6 @@ class AgentRegistry:
                     supported_tools=[
                         "web-scan-runner",
                         "security-scan-runner",
-                        "cli-executor",
                         "knowledge-rag",
                         "observation-search",
                     ],
@@ -562,7 +551,6 @@ class AgentRegistry:
                     supported_tools=[
                         "web-scan-runner",
                         "security-scan-runner",
-                        "cli-executor",
                         "knowledge-rag",
                     ],
                     supported_skills=["vulnerability-analysis"],
@@ -581,7 +569,6 @@ class AgentRegistry:
                     supported_tools=[
                         "service-audit-runner",
                         "network-recon-runner",
-                        "cli-executor",
                         "knowledge-rag",
                     ],
                     supported_skills=["vulnerability-analysis"],
@@ -599,7 +586,6 @@ class AgentRegistry:
                     description="根据发现的漏洞编写 PoC 代码或定制利用脚本，用于验证漏洞的可利用性。高风险操作需要明确授权。",
                     supported_tools=[
                         "exploit-workbench-runner",
-                        "cli-executor",
                         "knowledge-rag",
                     ],
                     supported_skills=["vulnerability-analysis"],

@@ -39,14 +39,56 @@ class MemoryRuntimeService:
         if not query.strip():
             return MemorySearchResult(query=query, backend=self.backend)
 
+        context = context or {}
+        if self._is_security_session_isolated(context):
+            request = MemorySearchRequest(
+                query=query,
+                session_id=session_id,
+                trace_id=trace_id,
+                scopes=["session", "page", "artifact"],
+                top_k=max(self._top_k, 6),
+                tags=self._derive_read_tags(context),
+                day_window=0,
+                metadata_filters=self._derive_memory_filters(context),
+            )
+            hits = await self._memory_store.search(request)
+            total_docs = await self._memory_store.count_documents(request)
+            prompt_blocks = [
+                (
+                    "Memory inventory summary: "
+                    f"current_session docs={total_docs}, "
+                    "cross_session session/page/artifact docs=0, "
+                    "global long-term docs=0, "
+                    f"retrieved_hits={len(hits)}."
+                ),
+                *[
+                    (
+                        f"- [{hit.kind}] {hit.summary or truncate_text(hit.content, 140)} "
+                        f"(scope={hit.scope}, source={hit.source or 'memory'}, score={hit.score or 0:.3f}, stale={hit.stale})"
+                    )
+                    for hit in hits
+                ],
+            ]
+            return MemorySearchResult(
+                query=query,
+                hits=hits,
+                prompt_blocks=prompt_blocks,
+                source_count=len(hits),
+                total_session_docs=total_docs,
+                total_global_docs=0,
+                total_docs=total_docs,
+                backend=self.backend,
+            )
+
         current_session_request = MemorySearchRequest(
             query=query,
             session_id=session_id,
             trace_id=trace_id,
             scopes=["session", "page", "artifact"],
             top_k=max(self._top_k, 6),
-            tags=self._derive_read_tags(context or {}),
+            tags=self._derive_read_tags(context),
             day_window=0,
+            metadata_filters=self._derive_memory_filters(context),
         )
         historical_request = MemorySearchRequest(
             query=query,
@@ -54,8 +96,9 @@ class MemoryRuntimeService:
             trace_id=trace_id,
             scopes=["session", "page", "artifact"],
             top_k=max(self._top_k, 8),
-            tags=self._derive_read_tags(context or {}),
+            tags=self._derive_read_tags(context),
             day_window=0,
+            metadata_filters=self._derive_memory_filters(context),
         )
         global_request = MemorySearchRequest(
             query=query,
@@ -63,8 +106,9 @@ class MemoryRuntimeService:
             trace_id=trace_id,
             scopes=["global"],
             top_k=max(self._top_k, 6),
-            tags=self._derive_read_tags(context or {}),
+            tags=self._derive_read_tags(context),
             day_window=0,
+            metadata_filters=self._derive_memory_filters(context),
         )
         current_session_hits = await self._memory_store.search(current_session_request)
         historical_hits = await self._memory_store.search(historical_request)
@@ -118,6 +162,46 @@ class MemoryRuntimeService:
         if not query.strip():
             return MemorySearchResult(query=query, backend=self.backend)
 
+        context = context or {}
+        if self._is_security_session_isolated(context):
+            request = MemorySearchRequest(
+                query=query,
+                session_id=session_id,
+                trace_id=trace_id,
+                scopes=["session", "page", "artifact"],
+                kinds=["observation"],
+                top_k=max(top_k, 4),
+                tags=self._derive_read_tags(context),
+                day_window=0,
+                metadata_filters=self._derive_memory_filters(context),
+            )
+            hits = await self._memory_store.search(request)
+            total_docs = await self._memory_store.count_documents(request)
+            prompt_blocks: list[str] = []
+            if hits:
+                prompt_blocks = [
+                    (
+                        "Historical testing observations: "
+                        f"current_session={total_docs}, "
+                        "cross_session=0, "
+                        f"retrieved_hits={len(hits)}."
+                    ),
+                    *[
+                        self._format_observation_prompt_block(hit)
+                        for hit in hits
+                    ],
+                ]
+            return MemorySearchResult(
+                query=query,
+                hits=hits,
+                prompt_blocks=prompt_blocks,
+                source_count=len(hits),
+                total_session_docs=total_docs,
+                total_global_docs=0,
+                total_docs=total_docs,
+                backend=self.backend,
+            )
+
         current_session_request = MemorySearchRequest(
             query=query,
             session_id=session_id,
@@ -125,8 +209,9 @@ class MemoryRuntimeService:
             scopes=["session", "page", "artifact"],
             kinds=["observation"],
             top_k=max(top_k, 4),
-            tags=self._derive_read_tags(context or {}),
+            tags=self._derive_read_tags(context),
             day_window=0,
+            metadata_filters=self._derive_memory_filters(context),
         )
         historical_request = MemorySearchRequest(
             query=query,
@@ -135,8 +220,9 @@ class MemoryRuntimeService:
             scopes=["session", "page", "artifact"],
             kinds=["observation"],
             top_k=max(top_k, 6),
-            tags=self._derive_read_tags(context or {}),
+            tags=self._derive_read_tags(context),
             day_window=0,
+            metadata_filters=self._derive_memory_filters(context),
         )
         current_hits = await self._memory_store.search(current_session_request)
         historical_hits = await self._memory_store.search(historical_request)
@@ -335,6 +421,7 @@ class MemoryRuntimeService:
         context_bundle: dict[str, Any],
     ) -> list[MemoryWriteRequest]:
         mode_key = str(context_bundle.get("mode_key") or "default").strip() or "default"
+        metadata = self._build_common_metadata(context_bundle)
         requests = [
             MemoryWriteRequest(
                 scope="session",
@@ -347,6 +434,7 @@ class MemoryRuntimeService:
                 trace_id=trace_id,
                 source="session.user",
                 metadata={
+                    **metadata,
                     "context_keys": sorted(context_bundle.keys()),
                     "mode_key": mode_key,
                 },
@@ -361,30 +449,37 @@ class MemoryRuntimeService:
                 turn_id=turn_id,
                 trace_id=trace_id,
                 source="session.assistant",
-                metadata={"mode_key": mode_key},
-            ),
-            MemoryWriteRequest(
-                scope="global",
-                kind="semantic",
-                content=(
-                    f"Conversation turn summary.\n"
-                    f"User message: {user_message.strip()}\n"
-                    f"Assistant response: {assistant_message.strip()}"
-                ),
-                summary=truncate_text(f"{user_message.strip()} -> {assistant_message.strip()}", 180),
-                tags=["long_term", "conversation", "semantic", f"mode:{mode_key}"],
-                session_id=session_id,
-                turn_id=turn_id,
-                trace_id=trace_id,
-                source="conversation.long_term",
                 metadata={
-                    "memory_id": self._stable_long_term_memory_id(session_id, turn_id, user_message),
-                    "memory_level": "long_term",
+                    **metadata,
                     "mode_key": mode_key,
-                    "context_keys": sorted(context_bundle.keys()),
                 },
             ),
         ]
+        if not self._is_security_session_isolated(context_bundle):
+            requests.append(
+                MemoryWriteRequest(
+                    scope="global",
+                    kind="semantic",
+                    content=(
+                        f"Conversation turn summary.\n"
+                        f"User message: {user_message.strip()}\n"
+                        f"Assistant response: {assistant_message.strip()}"
+                    ),
+                    summary=truncate_text(f"{user_message.strip()} -> {assistant_message.strip()}", 180),
+                    tags=["long_term", "conversation", "semantic", f"mode:{mode_key}"],
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    trace_id=trace_id,
+                    source="conversation.long_term",
+                    metadata={
+                        **metadata,
+                        "memory_id": self._stable_long_term_memory_id(session_id, turn_id, user_message),
+                        "memory_level": "long_term",
+                        "mode_key": mode_key,
+                        "context_keys": sorted(context_bundle.keys()),
+                    },
+                )
+            )
         for tool_result in tool_results:
             if str(tool_result.get("status")) != "completed":
                 continue
@@ -406,6 +501,7 @@ class MemoryRuntimeService:
                     trace_id=trace_id,
                     source=f"tool.{tool_result.get('tool_key', 'unknown')}",
                     metadata={
+                        **metadata,
                         "tool_key": tool_result.get("tool_key"),
                         "mode_key": mode_key,
                         "artifact_count": len((output or {}).get("artifacts", []))
@@ -424,6 +520,33 @@ class MemoryRuntimeService:
         if context.get("verification_mode"):
             tags.append("verification")
         return tags
+
+    def _derive_memory_filters(self, context: dict[str, Any]) -> dict[str, Any]:
+        filters: dict[str, Any] = {}
+        mode_key = str(context.get("mode_key") or "").strip()
+        if mode_key:
+            filters["mode_key"] = mode_key
+        target_fingerprint = str(context.get("target_fingerprint") or "").strip()
+        if target_fingerprint:
+            filters["target_fingerprint"] = target_fingerprint
+        campaign_id = str(context.get("campaign_id") or "").strip()
+        if campaign_id:
+            filters["campaign_id"] = campaign_id
+        return filters
+
+    def _build_common_metadata(self, context: dict[str, Any]) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for key in ("mode_key", "target_fingerprint", "campaign_id", "platform_label"):
+            value = str(context.get(key) or "").strip()
+            if value:
+                metadata[key] = value
+        return metadata
+
+    def _is_security_session_isolated(self, context: dict[str, Any]) -> bool:
+        mode_key = str(context.get("mode_key") or "").strip().lower()
+        scope = str(context.get("security_memory_scope") or "").strip().lower()
+        allow_cross_session = bool(context.get("allow_cross_session_memory"))
+        return mode_key == "security_testing" and scope != "shared" and not allow_cross_session
 
     def _merge_ranked_hits(
         self,

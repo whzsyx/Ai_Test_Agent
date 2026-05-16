@@ -148,6 +148,77 @@ class WhatwebParser(BaseSecurityParser):
 
 
 # ---------------------------------------------------------------------------
+# HTTP Headers
+# ---------------------------------------------------------------------------
+
+class HttpHeadersParser(BaseSecurityParser):
+    """Parse controlled HTTP header probe output."""
+
+    SECURITY_HEADERS = [
+        "strict-transport-security",
+        "content-security-policy",
+        "x-frame-options",
+        "x-content-type-options",
+        "referrer-policy",
+        "permissions-policy",
+    ]
+
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        parsed: dict[str, Any] | None = None
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and isinstance(candidate.get("headers"), dict):
+                parsed = candidate
+                break
+
+        if parsed is None:
+            parsed = self._parse_header_block(raw_output)
+
+        headers = {
+            str(key).lower(): str(value)
+            for key, value in (parsed.get("headers") or {}).items()
+            if str(key).strip()
+        }
+        missing = parsed.get("missing_security_headers")
+        if not isinstance(missing, list):
+            missing = [header for header in self.SECURITY_HEADERS if header not in headers]
+
+        return {
+            "tool": "http_headers",
+            "url": str(parsed.get("url") or ""),
+            "status_code": parsed.get("status_code"),
+            "headers": headers,
+            "header_count": len(headers),
+            "missing_security_headers": [str(item).lower() for item in missing],
+            "present_security_headers": [header for header in self.SECURITY_HEADERS if header in headers],
+        }
+
+    def _parse_header_block(self, raw_output: str) -> dict[str, Any]:
+        headers: dict[str, str] = {}
+        status_code: int | None = None
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            status_match = re.match(r"HTTP/\S+\s+(\d+)", line, flags=re.IGNORECASE)
+            if status_match:
+                status_code = int(status_match.group(1))
+                continue
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            if key.strip():
+                headers[key.strip().lower()] = value.strip()
+        return {"status_code": status_code, "headers": headers}
+
+
+# ---------------------------------------------------------------------------
 # Ffuf
 # ---------------------------------------------------------------------------
 
@@ -435,6 +506,7 @@ class SecurityResultParserRegistry:
             "nmap": NmapParser(),
             "httpx": HttpxParser(),
             "whatweb": WhatwebParser(),
+            "http_headers": HttpHeadersParser(),
             "ffuf": FfufParser(),
             "gobuster": FfufParser(),   # similar output format
             "nikto": NiktoParser(),
@@ -483,6 +555,7 @@ __all__ = [
     "NmapParser",
     "HttpxParser",
     "WhatwebParser",
+    "HttpHeadersParser",
     "FfufParser",
     "NiktoParser",
     "NucleiParser",

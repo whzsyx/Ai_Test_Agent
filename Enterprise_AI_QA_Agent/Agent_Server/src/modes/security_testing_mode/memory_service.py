@@ -74,6 +74,7 @@ class SecurityMemoryService:
         )
         content = {
             "campaign_id": campaign.campaign_id,
+            "target_fingerprint": campaign.target_fingerprint,
             "objective": campaign.objective,
             "targets": [target.value for target in campaign.targets],
             "assets": len(campaign.assets),
@@ -105,6 +106,7 @@ class SecurityMemoryService:
         title = f"Security finding: {finding.title or finding.finding_id or 'untitled'}"
         content = {
             "campaign_id": campaign.campaign_id,
+            "target_fingerprint": campaign.target_fingerprint,
             "finding_id": finding.finding_id,
             "title": finding.title,
             "severity": finding.severity,
@@ -144,6 +146,7 @@ class SecurityMemoryService:
     ) -> ObservationRecord:
         content = {
             "campaign_id": campaign.campaign_id,
+            "target_fingerprint": campaign.target_fingerprint,
             "task_id": task.task_id,
             "command_profile": task.command_profile,
             "target": task.target,
@@ -172,6 +175,7 @@ class SecurityMemoryService:
     ) -> ObservationRecord:
         content = {
             "campaign_id": campaign.campaign_id,
+            "target_fingerprint": campaign.target_fingerprint,
             "record_id": record.record_id,
             "task_id": record.task_id,
             "tool_name": record.tool_name,
@@ -224,6 +228,7 @@ class SecurityMemoryService:
             metadata={
                 "mode": "security_testing",
                 "campaign_id": content.get("campaign_id"),
+                "target_fingerprint": content.get("target_fingerprint"),
                 "observation_kind": tags[2] if len(tags) > 2 else "security",
             },
         )

@@ -151,7 +151,7 @@ class SecurityCommandProfileRegistry:
                 "fi"
                 "' sh {target}"
             ),
-            description="HTTP 服务探测与技术栈识别",
+            description="HTTP probe and technology fingerprint",
             tool_family="web_scan",
             surface_types=["web", "api"],
             allowed_arguments=["target"],
@@ -166,7 +166,7 @@ class SecurityCommandProfileRegistry:
             profile_key="whatweb_fingerprint",
             tool_name="whatweb",
             command_template="whatweb -a 3 {target}",
-            description="Web 应用指纹识别",
+            description="Web application fingerprinting",
             tool_family="web_scan",
             surface_types=["web"],
             allowed_arguments=["target"],
@@ -178,16 +178,49 @@ class SecurityCommandProfileRegistry:
         ))
 
         self.register(SecurityCommandProfile(
+            profile_key="http_headers_probe",
+            tool_name="python3",
+            command_template=(
+                "sh -lc '"
+                "TARGET=\"$1\"; export TARGET; "
+                "python3 -c \"import json,os,urllib.request; "
+                "u=os.environ.get(\\\"TARGET\\\", \\\"\\\"); "
+                "req=urllib.request.Request(u, headers=dict([(\\\"User-Agent\\\",\\\"Enterprise-AI-QA-Agent security-smoke\\\")])); "
+                "NoRaise=type(\\\"NoRaise\\\", (urllib.request.HTTPErrorProcessor,), "
+                "dict(http_response=lambda self, request, response: response, "
+                "https_response=lambda self, request, response: response)); "
+                "r=urllib.request.build_opener(NoRaise).open(req, timeout=20); "
+                "headers=dict((k.lower(), v) for k, v in r.headers.items()); "
+                "security=[\\\"strict-transport-security\\\",\\\"content-security-policy\\\","
+                "\\\"x-frame-options\\\",\\\"x-content-type-options\\\",\\\"referrer-policy\\\","
+                "\\\"permissions-policy\\\"]; "
+                "print(json.dumps(dict(url=r.geturl(), status_code=getattr(r, \\\"status\\\", 0), "
+                "headers=headers, missing_security_headers=[h for h in security if h not in headers]), "
+                "ensure_ascii=False))\""
+                "' sh {target}"
+            ),
+            description="HTTP security header baseline probe",
+            tool_family="web_scan",
+            surface_types=["web", "api"],
+            allowed_arguments=["target"],
+            timeout_seconds=45,
+            risk_level="info",
+            requires_approval=False,
+            parser_key="http_headers",
+            artifact_policy="always",
+        ))
+
+        self.register(SecurityCommandProfile(
             profile_key="ffuf_common_dirs",
             tool_name="ffuf",
             command_template=(
-                "ffuf -u {target}/FUZZ -w /usr/share/seclists/Discovery/Web-Content/common.txt "
-                "-mc 200,301,302,403 -t 50 -timeout 10 -o /work/ffuf_result.json -of json"
+                "ffuf -u {target}/FUZZ -w {wordlist} "
+                "-mc 200,301,302,403 -t 50 -timeout 10 -o {ffuf_output} -of json"
             ),
             description="常见目录爆破",
             tool_family="web_scan",
             surface_types=["web"],
-            allowed_arguments=["target"],
+            allowed_arguments=["target", "wordlist", "ffuf_output"],
             timeout_seconds=180,
             risk_level="low",
             requires_approval=False,
@@ -200,13 +233,13 @@ class SecurityCommandProfileRegistry:
             tool_name="gobuster",
             command_template=(
                 "gobuster dir -u {target} "
-                "-w /usr/share/seclists/Discovery/Web-Content/common.txt "
+                "-w {wordlist} "
                 "-t 50 --timeout 10s -q"
             ),
             description="目录枚举（gobuster）",
             tool_family="web_scan",
             surface_types=["web"],
-            allowed_arguments=["target"],
+            allowed_arguments=["target", "wordlist"],
             timeout_seconds=180,
             risk_level="low",
             requires_approval=False,
@@ -217,7 +250,7 @@ class SecurityCommandProfileRegistry:
         self.register(SecurityCommandProfile(
             profile_key="nikto_web_scan",
             tool_name="nikto",
-            command_template="nikto -h {target} -nointeractive -Format txt",
+            command_template="nikto -h {target} -ask no -nointeractive",
             description="Web 服务器漏洞扫描",
             tool_family="web_scan",
             surface_types=["web"],
@@ -232,11 +265,11 @@ class SecurityCommandProfileRegistry:
         self.register(SecurityCommandProfile(
             profile_key="nuclei_baseline",
             tool_name="nuclei",
-            command_template="nuclei -u {target} -severity low,medium,high,critical -silent -json",
-            description="Nuclei 基线漏洞扫描",
+            command_template="nuclei -u {target} -t {templates_dir} -severity low,medium,high,critical -silent -jsonl -duc",
+            description="Nuclei baseline vulnerability scan",
             tool_family="web_scan",
             surface_types=["web", "api"],
-            allowed_arguments=["target"],
+            allowed_arguments=["target", "templates_dir"],
             timeout_seconds=300,
             risk_level="medium",
             requires_approval=False,
@@ -247,11 +280,11 @@ class SecurityCommandProfileRegistry:
         self.register(SecurityCommandProfile(
             profile_key="nuclei_cve_scan",
             tool_name="nuclei",
-            command_template="nuclei -u {target} -tags cve -severity medium,high,critical -silent -json",
+            command_template="nuclei -u {target} -t {templates_dir} -tags cve -severity medium,high,critical -silent -jsonl -duc",
             description="Nuclei CVE 专项扫描",
             tool_family="web_scan",
             surface_types=["web", "api"],
-            allowed_arguments=["target"],
+            allowed_arguments=["target", "templates_dir"],
             timeout_seconds=300,
             risk_level="medium",
             requires_approval=False,
@@ -264,12 +297,12 @@ class SecurityCommandProfileRegistry:
             tool_name="sqlmap",
             command_template=(
                 "sqlmap -u {target} --batch --level=1 --risk=1 "
-                "--technique=B --no-cast --output-dir=/work/sqlmap_out"
+                "--technique=B --no-cast --output-dir={sqlmap_output_dir}"
             ),
             description="SQL 注入只读探测（不修改数据）",
             tool_family="web_scan",
             surface_types=["web", "api"],
-            allowed_arguments=["target"],
+            allowed_arguments=["target", "sqlmap_output_dir"],
             timeout_seconds=300,
             risk_level="medium",
             requires_approval=False,
@@ -283,12 +316,12 @@ class SecurityCommandProfileRegistry:
         self.register(SecurityCommandProfile(
             profile_key="sslscan_tls_audit",
             tool_name="sslscan",
-            command_template="sslscan --no-colour {target}",
-            description="TLS/SSL 配置审计",
+            command_template="sslscan --no-colour --connect-timeout=30 {target}",
+            description="TLS/SSL configuration audit",
             tool_family="service_audit",
             surface_types=["web", "service"],
             allowed_arguments=["target"],
-            timeout_seconds=60,
+            timeout_seconds=120,
             risk_level="info",
             requires_approval=False,
             parser_key="sslscan",
@@ -317,12 +350,12 @@ class SecurityCommandProfileRegistry:
             tool_name="hydra",
             command_template=(
                 "hydra -L {userlist} -P {passlist} {target} {service} "
-                "-t 4 -f -o /work/hydra_result.txt"
+                "-t 4 -f -o {hydra_output}"
             ),
             description="基础凭证爆破（需审批）",
             tool_family="credential_attack",
             surface_types=["credential", "service"],
-            allowed_arguments=["target", "service", "userlist", "passlist"],
+            allowed_arguments=["target", "service", "userlist", "passlist", "hydra_output"],
             timeout_seconds=300,
             risk_level="high",
             requires_approval=True,

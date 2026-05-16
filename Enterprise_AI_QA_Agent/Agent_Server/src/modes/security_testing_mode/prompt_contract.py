@@ -5,6 +5,19 @@ These contracts enforce tool usage discipline, model access rules, and output fo
 """
 from __future__ import annotations
 
+import json
+
+from src.modes.security_testing_mode.agent import (
+    SECURITY_API_VERIFIER_KEY,
+    SECURITY_AUTH_WORKER_KEY,
+    SECURITY_EXPLOIT_CODER_KEY,
+    SECURITY_FAILURE_ANALYST_KEY,
+    SECURITY_HOST_VERIFIER_KEY,
+    SECURITY_RECON_WORKER_KEY,
+    SECURITY_WEB_VERIFIER_KEY,
+)
+from src.modes.security_testing_mode.campaign_state import SecurityTask
+
 
 SECURITY_MODE_SYSTEM_CONTRACT = """\
 # 安全测试模式 - 主控智能体协议
@@ -25,8 +38,7 @@ SECURITY_MODE_SYSTEM_CONTRACT = """\
 
 ## 工具使用规则
 - 所有安全工具执行必须通过 runner 工具（security-scan-runner、network-recon-runner 等）
-- 禁止直接通过 cli-executor 执行高风险安全命令（如 sqlmap --batch、hydra 等）
-- cli-executor 仅用于辅助操作（如检查工具版本、查看文件等）
+- 禁止在安全测试模式中直接使用 cli-executor 执行探测命令；所有探测必须通过受控 runner profile 完成
 - 每个 runner 调用必须指定 command_profile 和结构化参数
 
 ## 模型规则
@@ -90,8 +102,102 @@ SECURITY_FAILURE_ANALYSIS_CONTRACT = """\
 """
 
 
+WORKER_ROLE_GUIDANCE: dict[str, str] = {
+    SECURITY_RECON_WORKER_KEY: (
+        "Focus on reachability, banners, service inventory, HTTP or TLS posture, and technology fingerprinting. "
+        "Do not speculate beyond directly observed evidence."
+    ),
+    SECURITY_WEB_VERIFIER_KEY: (
+        "Focus on web-facing risk interpretation such as missing headers, exposure signals, directory findings, "
+        "template detections, and reproducible web observations."
+    ),
+    SECURITY_API_VERIFIER_KEY: (
+        "Focus on API behavior, request and response evidence, authentication boundaries, and endpoint exposure. "
+        "Do not broaden into generic host scanning."
+    ),
+    SECURITY_AUTH_WORKER_KEY: (
+        "Focus on the assigned credential or session control only. Do not expand into unrelated attack paths or "
+        "additional brute-force attempts beyond the provided profile."
+    ),
+    SECURITY_HOST_VERIFIER_KEY: (
+        "Focus on host and service posture, TLS or service configuration weaknesses, version evidence, and "
+        "service-level misconfiguration."
+    ),
+    SECURITY_EXPLOIT_CODER_KEY: (
+        "Focus on exploit verification only when the task explicitly authorizes it. Preserve containment and do not "
+        "invent additional execution steps outside the assigned profile."
+    ),
+    SECURITY_FAILURE_ANALYST_KEY: (
+        "Do not execute tools. Analyze only the provided evidence, classify the failure, decide if it is retryable, "
+        "and suggest the safest next step."
+    ),
+}
+
+
+def build_security_worker_prompt(
+    task: SecurityTask,
+    *,
+    agent_key: str,
+    runner_args: dict[str, object],
+) -> str:
+    role_guidance = WORKER_ROLE_GUIDANCE.get(agent_key, WORKER_ROLE_GUIDANCE[SECURITY_RECON_WORKER_KEY])
+    return (
+        f"{SECURITY_WORKER_EXECUTION_CONTRACT}\n\n"
+        "Role-specific guidance:\n"
+        f"- Assigned worker: {agent_key}\n"
+        f"- Specialization: {role_guidance}\n\n"
+        "Task assignment:\n"
+        f"- task_id: {task.task_id}\n"
+        f"- task_name: {task.name}\n"
+        f"- surface_type: {task.surface_type}\n"
+        f"- tool_family: {task.tool_family}\n"
+        f"- command_profile: {task.command_profile}\n"
+        f"- target: {task.target}\n"
+        f"- risk_level: {task.risk_level}\n"
+        f"- timeout_seconds: {task.timeout_seconds}\n\n"
+        "Execution constraints:\n"
+        "- You are not the primary agent. Do not re-plan the campaign.\n"
+        "- Use only the assigned runner path and profile payload below.\n"
+        "- Do not switch to a different scanner, shell, or attack path on your own.\n"
+        "- If execution fails, return the failure clearly and stop.\n\n"
+        "Runner invocation payload:\n"
+        f"{json.dumps(runner_args, ensure_ascii=False, indent=2)}\n\n"
+        "Return a concise structured summary after execution, including success, summary, findings, evidence, raw_output, and error."
+    )
+
+
+def build_security_failure_analysis_prompt(task: SecurityTask) -> str:
+    evidence = {
+        "task_id": task.task_id,
+        "task_name": task.name,
+        "surface_type": task.surface_type,
+        "tool_family": task.tool_family,
+        "command_profile": task.command_profile,
+        "target": task.target,
+        "worker_agent_key": task.worker_agent_key,
+        "worker_execution_mode": task.worker_execution_mode,
+        "status": task.status,
+        "result_summary": task.result_summary,
+        "last_error": task.last_error,
+        "artifacts": list(task.artifacts or []),
+        "observations": list(task.observations or []),
+        "raw_output_excerpt": str(task.raw_output or "")[:2000],
+    }
+    return (
+        f"{SECURITY_FAILURE_ANALYSIS_CONTRACT}\n\n"
+        "You are performing a second-pass failure review for one settled security task.\n"
+        "Do not execute scanners, do not propose free-form shell workarounds, and do not assume additional evidence.\n\n"
+        "Failure evidence:\n"
+        f"{json.dumps(evidence, ensure_ascii=False, indent=2)}\n\n"
+        "Return JSON with keys: failure_category, root_cause, retryable, suggested_fix, alternative_profile, notes."
+    )
+
+
 __all__ = [
     "SECURITY_MODE_SYSTEM_CONTRACT",
     "SECURITY_WORKER_EXECUTION_CONTRACT",
     "SECURITY_FAILURE_ANALYSIS_CONTRACT",
+    "WORKER_ROLE_GUIDANCE",
+    "build_security_worker_prompt",
+    "build_security_failure_analysis_prompt",
 ]

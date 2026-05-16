@@ -31,6 +31,11 @@ class ModelRegistry:
     ) -> ModelDescriptor:
         active = {item.key: item for item in self._store.list_active()}
 
+        try:
+            return self._to_descriptor(self._store.get_default_active())
+        except KeyError:
+            pass
+
         if requested_key and requested_key in active and requested_key in supported_model_keys:
             return self._to_descriptor(active[requested_key])
 

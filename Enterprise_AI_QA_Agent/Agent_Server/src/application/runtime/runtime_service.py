@@ -14,6 +14,7 @@ from src.infrastructure.storage_utils import make_json_safe
 from src.registry.tools import ToolRegistry
 from src.runtime.control import RuntimeControlRegistry
 from src.runtime.execution_logging import append_graph_event, truncate_text
+from src.schemas.model_config import ModelConfigRecord
 from src.schemas.session import ChatMessage, ExecutionEvent, ExecutionRequest, MessageRole, SessionSnapshot
 from src.schemas.tool_runtime import ModelToolCall, ToolExecutionRecord
 
@@ -78,6 +79,8 @@ class RuntimeService:
             context_keys=",".join(sorted(request.context.keys())) or "none",
             user_message_preview=truncate_text(request.user_message, 160),
         )
+        if self._should_use_dedicated_security_runtime(request):
+            return await self._execute_security_mode_turn(session, request, initial_state)
         return await self._execute_state(session, initial_state, on_model_chunk=on_model_chunk)
 
     async def resume_after_approval(
@@ -288,6 +291,10 @@ class RuntimeService:
         )
 
     def _build_initial_state(self, session: SessionRecord, request: ExecutionRequest) -> dict[str, Any]:
+        model_config = self._effective_model_config()
+        selected_model_key = model_config.key if model_config is not None else (request.model_key or session.preferred_model or "")
+        selected_model_name = model_config.name if model_config is not None else ""
+        selected_model_provider = model_config.provider if model_config is not None else ""
         return {
             "session_id": session.id,
             "turn_id": request.turn_id,
@@ -298,12 +305,12 @@ class RuntimeService:
             "runtime_mode": session.runtime_mode.value,
             "mode_key": request.mode_key or session.mode_key,
             "message_count": len(session.messages),
-            "preferred_model": request.model_key or session.preferred_model or "",
+            "preferred_model": selected_model_key,
             "selected_agent_key": request.agent_key or session.selected_agent or "",
             "selected_agent_name": "",
-            "selected_model_key": request.model_key or session.preferred_model or "",
-            "selected_model_name": "",
-            "selected_model_provider": "",
+            "selected_model_key": selected_model_key,
+            "selected_model_name": selected_model_name,
+            "selected_model_provider": selected_model_provider,
             "requested_skill_keys": request.skill_keys,
             "resolved_skill_keys": [],
             "skill_prompt_blocks": [],
@@ -345,6 +352,108 @@ class RuntimeService:
             "continue_loop": False,
             "termination_reason": "",
         }
+
+    def _should_use_dedicated_security_runtime(self, request: ExecutionRequest) -> bool:
+        return str(request.mode_key or "").strip() == "security_testing"
+
+    async def _execute_security_mode_turn(
+        self,
+        session: SessionRecord,
+        request: ExecutionRequest,
+        state: dict[str, Any],
+    ) -> RuntimeTurnResult:
+        tool = self._tool_registry.get("security-scan-runner")
+        call = ModelToolCall(
+            id=f"security_runtime_{request.turn_id}",
+            name=tool.key,
+            arguments=self._build_security_runtime_arguments(request),
+        )
+        context = ToolExecutionContext(
+            session_id=session.id,
+            turn_id=str(state["turn_id"]),
+            trace_id=str(state["trace_id"]),
+            user_message=str(state["user_message"]),
+            normalized_input=str(state["normalized_input"]),
+            context_bundle=dict(state["context_bundle"]),
+            selected_agent_key=str(state["selected_agent_key"]),
+            selected_model_key=str(state["selected_model_key"]),
+        )
+        append_graph_event(
+            state,
+            "security.mode_runtime_selected",
+            "runtime",
+            "Security testing mode is using the dedicated security runtime pipeline.",
+            tool_key=tool.key,
+            selected_model_key=str(state["selected_model_key"]),
+        )
+        execution_record = await self._tool_runtime_service.execute(
+            tool=tool,
+            call=call,
+            context=context,
+        )
+        state["context_bundle"] = context.context_bundle
+        state["tool_results"] = [execution_record.model_dump(mode="python")]
+        state["tool_messages"] = [self._build_tool_message(execution_record)]
+        state["selected_agent_name"] = str(state["selected_agent_key"] or "")
+        output_payload = execution_record.output if isinstance(execution_record.output, dict) else {}
+        final_response = str(
+            output_payload.get("report_markdown")
+            or output_payload.get("summary")
+            or execution_record.summary
+        ).strip()
+        state["final_response"] = final_response
+        state["control_state"] = "completed"
+        state["continue_loop"] = False
+        state["termination_reason"] = "failed" if execution_record.status == "failed" else ""
+        append_graph_event(
+            state,
+            "runtime.turn_completed" if execution_record.status != "failed" else "runtime.turn_failed",
+            "runtime",
+            execution_record.summary,
+            tool_key=execution_record.tool_key,
+            tool_status=execution_record.status,
+        )
+        snapshot = self._build_snapshot(session, state, session.snapshot_count + 1)
+        return RuntimeTurnResult(
+            output_text=final_response,
+            events=self._events_from_log(session.id, state["event_log"]),
+            snapshot=snapshot,
+            approvals=[],
+            state=state,
+            tool_messages=self._to_chat_messages(str(state["turn_id"]), state["tool_results"]),
+            pending_turn={},
+        )
+
+    def _build_security_runtime_arguments(self, request: ExecutionRequest) -> dict[str, Any]:
+        explicit = request.context.get("security_runtime_arguments")
+        if isinstance(explicit, dict):
+            return dict(explicit)
+
+        security_request = request.context.get("security_testing_request")
+        arguments = dict(security_request) if isinstance(security_request, dict) else {}
+
+        for key in (
+            "objective",
+            "target",
+            "target_url",
+            "target_host",
+            "target_network",
+            "target_type",
+            "scope_preference",
+            "auth_hint",
+            "credentials",
+            "focus_areas",
+            "excluded_areas",
+            "risk_tolerance",
+            "report_recipients",
+        ):
+            value = request.context.get(key)
+            if value is not None and value != "" and key not in arguments:
+                arguments[key] = value
+        return arguments
+
+    def _effective_model_config(self) -> ModelConfigRecord | None:
+        return self._model_runtime_service.get_default_model_config()
 
     def _build_conversation_messages(self, session: SessionRecord) -> list[dict[str, Any]]:
         return self._transcript_hygiene_service.build_runtime_messages(session.messages, limit=24)

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import contextvars
+import json
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable
@@ -14,7 +15,13 @@ from src.application.models.oauth_token_service import OAuthTokenService
 from src.core.config import Settings
 from src.registry.models import ModelRegistry
 from src.runtime.execution_logging import summarize_messages, truncate_text
-from src.schemas.model_config import ModelConfigRecord, ModelInvocationRequest, ModelInvocationResult
+from src.schemas.model_config import (
+    ContentPart,
+    ModelConfigRecord,
+    ModelInvocationRequest,
+    ModelInvocationResult,
+    UnifiedMessage,
+)
 from src.schemas.tool_runtime import ModelToolCall
 
 
@@ -38,6 +45,12 @@ class ModelRuntimeService:
         self._adapter_registry = adapter_registry or build_default_adapter_registry()
         self._compatibility = ModelCompatibilityLayer(adapter_registry=self._adapter_registry)
         self._oauth_token_service = oauth_token_service
+
+    def get_default_model_config(self) -> ModelConfigRecord | None:
+        try:
+            return self._model_registry.get_default_runtime_config()
+        except KeyError:
+            return None
 
     async def invoke(
         self,
@@ -126,6 +139,7 @@ class ModelRuntimeService:
         descriptor = adapter.describe(config)
         url = adapter.build_url(config)
         headers = adapter.build_headers(config, api_key)
+        request = self._sanitize_request_for_provider(config, request)
         effective_request = request
         tool_name_map = adapter.build_tool_name_map(request.tools)
         payload = adapter.build_request(config, request, tool_name_map=tool_name_map)
@@ -245,6 +259,153 @@ class ModelRuntimeService:
                 "structured_messages": filtered_structured_messages,
             }
         )
+
+    def _sanitize_request_for_provider(
+        self,
+        config: ModelConfigRecord,
+        request: ModelInvocationRequest,
+    ) -> ModelInvocationRequest:
+        """Normalize tool-call transcript history for strict OpenAI-compatible providers."""
+        if config.transport != "openai_chat_completions":
+            return request
+
+        sanitized = self._sanitize_structured_tool_messages(request.structured_messages)
+        if sanitized == request.structured_messages:
+            return request
+        return request.model_copy(
+            update={
+                "structured_messages": sanitized,
+                "messages": self._raw_messages_from_structured(sanitized),
+            }
+        )
+
+    def _sanitize_structured_tool_messages(
+        self,
+        messages: list[UnifiedMessage],
+    ) -> list[UnifiedMessage]:
+        sanitized: list[UnifiedMessage] = []
+        transcript_notes: list[str] = []
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            if message.role == "assistant" and message.tool_calls:
+                tool_call_ids = {
+                    str(item.id or "").strip()
+                    for item in message.tool_calls
+                    if str(item.id or "").strip()
+                }
+                following_tools: list[UnifiedMessage] = []
+                next_index = index + 1
+                while next_index < len(messages) and messages[next_index].role == "tool":
+                    tool_message = messages[next_index]
+                    if str(tool_message.tool_call_id or "") in tool_call_ids:
+                        following_tools.append(tool_message)
+                    else:
+                        transcript_notes.append(self._summarize_tool_message(tool_message))
+                    next_index += 1
+
+                matched_ids = {
+                    str(item.tool_call_id or "").strip()
+                    for item in following_tools
+                    if str(item.tool_call_id or "").strip()
+                }
+                if tool_call_ids and tool_call_ids <= matched_ids:
+                    sanitized.append(message)
+                    sanitized.extend(following_tools)
+                else:
+                    stripped = self._assistant_message_without_tool_calls(message)
+                    if stripped is not None:
+                        sanitized.append(stripped)
+                    for tool_message in following_tools:
+                        transcript_notes.append(self._summarize_tool_message(tool_message))
+                    names = ", ".join(item.name for item in message.tool_calls if item.name)
+                    transcript_notes.append(f"Omitted unresolved assistant tool call(s): {names or 'unknown'}.")
+                index = next_index
+                continue
+
+            if message.role == "tool":
+                transcript_notes.append(self._summarize_tool_message(message))
+                index += 1
+                continue
+
+            sanitized.append(message)
+            index += 1
+
+        if transcript_notes:
+            sanitized.append(
+                UnifiedMessage(
+                    role="user",
+                    parts=[
+                        ContentPart(
+                            type="text",
+                            text=(
+                                "Runtime tool transcript summary for provider compatibility:\n"
+                                + "\n".join(f"- {note}" for note in transcript_notes[:8])
+                            ),
+                        )
+                    ],
+                )
+            )
+        return sanitized
+
+    def _assistant_message_without_tool_calls(self, message: UnifiedMessage) -> UnifiedMessage | None:
+        if not self._has_visible_message_content(message):
+            return None
+        return message.model_copy(update={"tool_calls": []})
+
+    def _summarize_tool_message(self, message: UnifiedMessage) -> str:
+        tool_call_id = str(message.tool_call_id or "").strip() or "unknown"
+        text_parts: list[str] = []
+        tool_name = ""
+        for part in message.parts:
+            if part.tool_name and not tool_name:
+                tool_name = part.tool_name
+            if part.text:
+                text_parts.append(part.text)
+            elif part.payload:
+                text_parts.append(json.dumps(part.payload, ensure_ascii=False))
+        content = truncate_text(" ".join(text_parts).strip(), 220)
+        return f"tool_call_id={tool_call_id}; tool={tool_name or 'unknown'}; {content}"
+
+    def _raw_messages_from_structured(self, messages: list[UnifiedMessage]) -> list[dict[str, Any]]:
+        raw_messages: list[dict[str, Any]] = []
+        for message in messages:
+            item: dict[str, Any] = {
+                "role": message.role,
+                "content": self._parts_to_text(message.parts),
+            }
+            if message.role == "tool":
+                item["tool_call_id"] = message.tool_call_id or ""
+                tool_part = next((part for part in message.parts if part.type == "tool_result"), None)
+                if tool_part and tool_part.tool_name:
+                    item["name"] = tool_part.tool_name
+            if message.role == "assistant" and message.tool_calls:
+                item["tool_calls"] = [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.name,
+                            "arguments": json.dumps(tool_call.arguments or {}, ensure_ascii=False),
+                        },
+                    }
+                    for tool_call in message.tool_calls
+                ]
+            raw_messages.append(item)
+        return raw_messages
+
+    def _parts_to_text(self, parts: list[ContentPart]) -> str:
+        text_parts: list[str] = []
+        for part in parts:
+            if part.text:
+                text_parts.append(part.text)
+            elif part.payload:
+                text_parts.append(json.dumps(part.payload, ensure_ascii=False))
+            elif part.url:
+                text_parts.append(part.url)
+            elif part.file_name:
+                text_parts.append(f"[file:{part.file_name}]")
+        return "\n".join(text_parts)
 
     def _has_visible_message_content(self, message: Any) -> bool:
         parts = getattr(message, "parts", []) or []

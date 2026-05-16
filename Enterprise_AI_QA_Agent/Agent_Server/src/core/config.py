@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
     postgres_database: str = "QA-Agent"
+    postgres_connect_timeout_seconds: float = 5.0
+    postgres_pool_size: int = 12
     postgres_memory_table: str = "agent_memories"
     postgres_session_table: str = "agent_sessions"
     postgres_message_table: str = "agent_session_messages"
@@ -114,6 +116,11 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("postgres_pool_size")
+    @classmethod
+    def validate_postgres_pool_size(cls, value: int) -> int:
+        return max(1, value)
 
 
 @lru_cache(maxsize=1)

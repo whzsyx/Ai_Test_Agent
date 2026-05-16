@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from src.application.security.risk_policy import SecurityRiskPolicy
 from src.application.security.tool_catalog import SecurityToolCatalog
-from src.modes.security_testing_mode.agent import SURFACE_WORKER_MAP
+from src.modes.security_testing_mode.agent import resolve_security_worker_agent
 from src.modes.security_testing_mode.campaign_state import (
     SecurityTask,
     SecurityTestingRequestState,
@@ -65,7 +65,11 @@ class SecurityReconPlanner:
                     resource_locks=[target.value],
                     timeout_seconds=profile.timeout_seconds,
                     max_retries=0 if profile.requires_approval else 1,
-                    worker_agent_key=SURFACE_WORKER_MAP.get(surface_type, ""),
+                    worker_agent_key=resolve_security_worker_agent(
+                        surface_type=surface_type,
+                        tool_family=tool_family,
+                        command_profile=profile.profile_key,
+                    ),
                 )
             )
         return tasks
@@ -77,7 +81,7 @@ class SecurityReconPlanner:
         request: SecurityTestingRequestState,
     ) -> list[str]:
         if surface_type in {"web", "api"}:
-            profiles = ["httpx_probe", "whatweb_fingerprint"]
+            profiles = ["httpx_probe", "whatweb_fingerprint", "http_headers_probe"]
             if request.risk_tolerance in {"medium", "high"}:
                 profiles.append("nuclei_baseline")
             if target.protocol == "https":

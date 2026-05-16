@@ -154,8 +154,19 @@ class FindingNormalizer:
                     recommendation=f"在服务器配置中添加 {header} 响应头",
                     source_task_ids=[task_id] if task_id else [],
                     verified=True,
+                    # Trivially-verifiable hardening hint; do not let the
+                    # severity evaluator promote this to medium just because
+                    # missing_control + verified happens to compute > 4.0.
+                    is_baseline_check=True,
                 ))
         return findings
+
+    def from_http_headers_result(self, parsed: dict[str, Any], task_id: str = "") -> list[FindingRecord]:
+        return self.from_http_headers(
+            parsed.get("headers") if isinstance(parsed.get("headers"), dict) else {},
+            target=str(parsed.get("url") or ""),
+            task_id=task_id,
+        )
 
     def from_hydra(self, parsed: dict[str, Any], task_id: str = "") -> list[FindingRecord]:
         findings: list[FindingRecord] = []
@@ -187,6 +198,7 @@ class FindingNormalizer:
             "sqlmap": self.from_sqlmap,
             "nikto": self.from_nikto,
             "hydra": self.from_hydra,
+            "http_headers": self.from_http_headers_result,
         }
         fn = dispatch.get(parser_key)
         if fn is None:

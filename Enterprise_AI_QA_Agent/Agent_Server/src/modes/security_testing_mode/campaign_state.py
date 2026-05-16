@@ -32,6 +32,9 @@ class SecurityTestingRequestState(BaseModel):
     focus_areas: list[str] = Field(default_factory=list)
     excluded_areas: list[str] = Field(default_factory=list)
     risk_tolerance: str = "medium"  # low / medium / high
+    target_fingerprint: str = ""
+    platform_label: str = ""
+    access_constraints: list[str] = Field(default_factory=list)
     report_recipients: list[str] = Field(default_factory=list)
     raw_message: str = ""
 
@@ -48,6 +51,7 @@ class TargetCandidate(BaseModel):
     target_type: str = ""  # url / host / ip / network / domain
     value: str = ""  # the actual URL, IP, domain, or CIDR
     label: str = ""
+    fingerprint: str = ""
     resolved_ip: str = ""
     resolved_domain: str = ""
     port: int | None = None
@@ -123,6 +127,26 @@ class SecurityObjective(BaseModel):
     status: str = "pending"
 
 
+class SecuritySubtask(BaseModel):
+    """PentAGI-style structured subtask derived from executable tasks."""
+
+    subtask_id: str = ""
+    task_id: str = ""
+    title: str = ""
+    description: str = ""
+    allowed_profiles: list[str] = Field(default_factory=list)
+    risk_level: str = "low"
+    success_criteria: list[str] = Field(default_factory=list)
+    stop_conditions: list[str] = Field(default_factory=list)
+    status: str = "planned"
+    worker_agent_key: str = ""
+    tool_family: str = ""
+    target: str = ""
+    result_summary: str = ""
+    failure_category: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
 class SecurityTask(BaseModel):
     """One executable security testing task inside a campaign."""
 
@@ -149,9 +173,11 @@ class SecurityTask(BaseModel):
     worker_session_id: str = ""
     worker_status: str = ""
     worker_agent_key: str = ""
+    worker_execution_mode: str = ""
     result_summary: str = ""
     raw_output: str = ""
     last_error: str = ""
+    failure_analysis: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[str] = Field(default_factory=list)
     observations: list[str] = Field(default_factory=list)
     finding_refs: list[str] = Field(default_factory=list)
@@ -209,6 +235,11 @@ class FindingRecord(BaseModel):
     raw_evidence: str = ""
     verified: bool = False
     false_positive: bool = False
+    # When True, the severity is trusted as-is and SeverityEvaluator skips
+    # the impact/exploitability promotion math. Use for trivially-verifiable
+    # baseline checks (e.g. "missing X-Frame-Options header") that pentesters
+    # conventionally rate as low/info regardless of category baseline.
+    is_baseline_check: bool = False
 
 
 class EvidenceArtifact(BaseModel):
@@ -242,6 +273,7 @@ class AgentActivityRecord(BaseModel):
     started_at: str = ""
     completed_at: str = ""
     duration_seconds: float = 0.0
+    execution_mode: str = ""
     tool_calls: list[str] = Field(default_factory=list)
     notes: str = ""
 
@@ -256,17 +288,20 @@ class SecurityCampaign(BaseModel):
 
     campaign_id: str = ""
     objective: str = ""
+    target_fingerprint: str = ""
     targets: list[TargetCandidate] = Field(default_factory=list)
     assets: list[AssetNode] = Field(default_factory=list)
     fingerprints: list[NetworkServiceFingerprint] = Field(default_factory=list)
     credential_session: CredentialSession | None = None
     objectives: list[SecurityObjective] = Field(default_factory=list)
+    subtasks: list[SecuritySubtask] = Field(default_factory=list)
     tasks: list[SecurityTask] = Field(default_factory=list)
     findings: list[FindingRecord] = Field(default_factory=list)
     evidence: list[EvidenceArtifact] = Field(default_factory=list)
     activities: list[AgentActivityRecord] = Field(default_factory=list)
     execution_records: list[ToolExecutionRecord] = Field(default_factory=list)
     scope_notes: str = ""
+    operational_constraints: list[str] = Field(default_factory=list)
     risk_tolerance: str = "medium"
     max_workers: int = 3
     created_at: str = ""
@@ -342,7 +377,9 @@ class SecurityTaskEventRecord(BaseModel):
     status: str = ""
     phase: str = ""
     attempts: int = 0
+    worker_agent_key: str = ""
     worker_session_id: str = ""
+    execution_mode: str = ""
     runner_key: str = ""
     summary: str = ""
     error: str = ""
@@ -370,6 +407,7 @@ class SecurityTestingState(BaseModel):
     report: SecurityReport | None = None
     report_markdown: str = ""
     report_html: str = ""
+    execution_strategy: str = ""
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     verification_result: dict[str, Any] = Field(default_factory=dict)
     evaluation_result: dict[str, Any] = Field(default_factory=dict)
@@ -405,6 +443,7 @@ __all__ = [
     "NetworkServiceFingerprint",
     "CredentialSession",
     "SecurityObjective",
+    "SecuritySubtask",
     "SecurityTask",
     "ToolExecutionRecord",
     "FindingRecord",

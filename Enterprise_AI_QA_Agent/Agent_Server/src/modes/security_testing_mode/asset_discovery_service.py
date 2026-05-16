@@ -14,7 +14,7 @@ from src.modes.security_testing_mode.campaign_state import (
     SecurityTestingRequestState,
     TargetCandidate,
 )
-from src.modes.security_testing_mode.agent import SURFACE_WORKER_MAP
+from src.modes.security_testing_mode.agent import resolve_security_worker_agent
 from src.modes.security_testing_mode.contracts import TASK_COMPLETED, TASK_FAILED, TASK_SKIPPED
 
 
@@ -64,7 +64,17 @@ class SecurityAssetDiscoveryService:
             profile = profile_lookup(task.command_profile)
             parser_key = profile.parser_key if profile is not None else ""
             if parser_key:
-                findings.extend(finding_normalizer.normalize_batch(parser_key, parsed, task.task_id))
+                task_findings = finding_normalizer.normalize_batch(parser_key, parsed, task.task_id)
+                # Backfill affected_target: parsers do not always extract the
+                # URL/host from their output (e.g. http_headers parser may emit
+                # missing-header findings without a `url` field if the runner
+                # output omitted it). Use the task's known target as a
+                # deterministic fallback so the report never shows
+                # ``affected_target=unknown``.
+                for finding in task_findings:
+                    if not str(finding.affected_target or "").strip():
+                        finding.affected_target = task.target
+                findings.extend(task_findings)
             if parser_key == "nmap":
                 self.append_nmap_assets(parsed, task, fingerprints, assets)
             if parser_key in {"httpx", "whatweb"}:
@@ -78,13 +88,22 @@ class SecurityAssetDiscoveryService:
         return [
             AgentActivityRecord(
                 activity_id=f"act_{task.task_id}",
-                agent_key=task.worker_agent_key or SURFACE_WORKER_MAP.get(task.surface_type, "security-recon-worker"),
-                agent_name=task.worker_agent_key or SURFACE_WORKER_MAP.get(task.surface_type, "security-recon-worker"),
+                agent_key=task.worker_agent_key or resolve_security_worker_agent(
+                    surface_type=task.surface_type,
+                    tool_family=task.tool_family,
+                    command_profile=task.command_profile,
+                ),
+                agent_name=task.worker_agent_key or resolve_security_worker_agent(
+                    surface_type=task.surface_type,
+                    tool_family=task.tool_family,
+                    command_profile=task.command_profile,
+                ),
                 task_id=task.task_id,
                 action="completed" if task.status == TASK_COMPLETED else "failed" if task.status == TASK_FAILED else task.status,
                 summary=task.result_summary or task.last_error,
                 started_at=task.started_at,
                 completed_at=task.completed_at,
+                execution_mode=task.worker_execution_mode,
                 tool_calls=[task.command_profile] if task.command_profile else [],
             )
             for task in tasks

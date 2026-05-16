@@ -45,7 +45,11 @@ class SecurityReportBuilder:
         duration = self._duration_seconds(campaign.created_at, campaign.updated_at)
         target_summary = self._target_summary(campaign)
         recommendations = self._build_recommendations(findings)
-        limitations = self._build_limitations(failed=failed, skipped=skipped)
+        limitations = self._build_limitations(
+            failed=failed,
+            skipped=skipped,
+            operational_constraints=list(campaign.operational_constraints or []),
+        )
 
         return SecurityReport(
             campaign_id=campaign.campaign_id,
@@ -124,13 +128,16 @@ class SecurityReportBuilder:
 
         if report.activities:
             lines.extend([
-                "| Agent | Task | Action | What it did |",
-                "|---|---|---|---|",
+                f"Execution strategy: {self._execution_strategy(report.activities)}",
+                "",
+                "| Agent | Task | Action | Mode | What it did |",
+                "|---|---|---|---|---|",
             ])
             for activity in report.activities:
                 lines.append(
                     f"| {activity.agent_name or activity.agent_key} | "
                     f"{activity.task_id} | {activity.action} | "
+                    f"{activity.execution_mode or 'unknown'} | "
                     f"{self._table_text(activity.summary or activity.notes)} |"
                 )
         else:
@@ -238,8 +245,18 @@ class SecurityReportBuilder:
             recommendations.append("Review each finding, validate exposure, and remediate the affected service or control.")
         return recommendations[:10]
 
-    def _build_limitations(self, *, failed: int, skipped: int) -> list[str]:
+    def _build_limitations(
+        self,
+        *,
+        failed: int,
+        skipped: int,
+        operational_constraints: list[str],
+    ) -> list[str]:
         limitations: list[str] = []
+        for constraint in operational_constraints:
+            value = str(constraint or "").strip()
+            if value and value not in limitations:
+                limitations.append(value)
         if failed:
             limitations.append(f"{failed} task(s) failed; related coverage may be incomplete.")
         if skipped:
@@ -316,6 +333,18 @@ class SecurityReportBuilder:
 
     def _table_text(self, value: str) -> str:
         return str(value or "").replace("|", "\\|").replace("\n", " ")[:180]
+
+    def _execution_strategy(self, activities: list[Any]) -> str:
+        modes = sorted({
+            str(getattr(activity, "execution_mode", "") or "").strip()
+            for activity in activities
+            if str(getattr(activity, "execution_mode", "") or "").strip()
+        })
+        if not modes:
+            return "unknown"
+        if len(modes) == 1:
+            return modes[0]
+        return ", ".join(modes)
 
 
 __all__ = ["SecurityReportBuilder"]

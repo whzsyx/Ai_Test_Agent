@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from src.modes.security_testing_mode.agent import SURFACE_WORKER_MAP, SECURITY_RECON_WORKER_KEY
+from src.modes.security_testing_mode.agent import resolve_security_worker_agent
 from src.modes.security_testing_mode.campaign_state import (
     AgentActivityRecord,
     SecurityTask,
@@ -19,11 +19,45 @@ from src.modes.security_testing_mode.contracts import (
     TASK_RUNNING,
     TOOL_EXEC_TIMEOUT_SECONDS,
 )
+from src.modes.security_testing_mode.prompt_contract import build_security_worker_prompt
 from src.modes.security_testing_mode.task_pool import SecurityTaskPool
 
 logger = logging.getLogger(__name__)
 
 CheckpointCallback = Callable[[str, SecurityTask, list[SecurityTask]], None]
+
+
+# Phrases that indicate the target platform cannot be tested further without
+# additional access (credentials, lab activation, VPN, paid subscription, ...).
+# Kept as a constant so runtime-level helpers can reuse the same vocabulary.
+RESTRICTED_ACCESS_SIGNALS: tuple[str, ...] = (
+    "login required",
+    "login_required",
+    "subscription required",
+    "premium required",
+    "room locked",
+    "machine not deployed",
+    "lab not started",
+    "lab offline",
+    "target offline",
+    "vpn required",
+    "vpn_required",
+    "access denied",
+    "auth wall",
+    "authentication required",
+    "not authorized to access",
+    "tryhackme room",
+    "hack the box subscription",
+    "htb subscription",
+    "forbidden by platform",
+)
+
+
+def _detect_restricted_access(signals: str) -> bool:
+    if not signals:
+        return False
+    haystack = signals.lower()
+    return any(phrase in haystack for phrase in RESTRICTED_ACCESS_SIGNALS)
 
 
 class SecuritySubagentCoordinator:
@@ -140,6 +174,7 @@ class SecuritySubagentCoordinator:
         try:
             for task in batch:
                 self._pool.mark_running(task.task_id)
+                task.worker_execution_mode = "subagent_session"
                 task.worker_status = "dispatching"
                 self._emit_checkpoint("task_running", task)
                 for lock in task.resource_locks:
@@ -188,19 +223,80 @@ class SecuritySubagentCoordinator:
                     self._fail_task(task, "worker_session_not_found")
                     continue
 
-                task.worker_status = session.status.value
+                session_status_value = session.status.value
+                task.worker_status = session_status_value
                 tool_output = self._extract_runner_output(session.messages)
                 assistant_summary = self._extract_assistant_summary(session.messages)
 
                 if tool_output:
                     self._apply_worker_output(task, tool_output)
+                elif session_status_value == "waiting_approval":
+                    # The worker paused for approval before invoking the
+                    # runner. Treat the task as failed-with-context so the
+                    # campaign can settle and report on the approval gap,
+                    # rather than retrying forever or claiming success.
+                    task.failure_analysis = {
+                        "failure_category": "approval_required",
+                        "root_cause": (
+                            "Worker session is waiting for tool approval and never produced a runner result."
+                        ),
+                        "retryable": False,
+                        "suggested_fix": "Approve the pending tool request or lower the requested risk level.",
+                        "alternative_profile": "",
+                        "notes": assistant_summary[:500],
+                    }
+                    self._fail_task(
+                        task,
+                        "approval_required: worker paused before runner execution",
+                    )
+                elif session_status_value in {"running", "idle"}:
+                    # The worker is still in a non-terminal state when the
+                    # wait loop deadline expired. Treat as timeout so the
+                    # campaign settles instead of looping.
+                    task.failure_analysis = {
+                        "failure_category": "worker_timeout",
+                        "root_cause": (
+                            "Worker child session did not reach a terminal state before the wait deadline."
+                        ),
+                        "retryable": False,
+                        "suggested_fix": (
+                            "Investigate why the worker session is stuck (model hang, infinite loop, "
+                            "or downstream service hang) before retrying."
+                        ),
+                        "alternative_profile": "",
+                        "notes": assistant_summary[:500],
+                    }
+                    # Disable retries so we don't spin again on the same hang.
+                    task.max_retries = 0
+                    self._fail_task(
+                        task,
+                        f"worker_timeout: child session never settled (status={session_status_value})",
+                    )
                 elif assistant_summary:
-                    # Worker completed but no structured output
+                    # The worker completed the conversation but did not invoke
+                    # any runner tool. We cannot treat this as a successful
+                    # security finding — there is no structured evidence to
+                    # back it. Surface this as a failed task so the campaign
+                    # report records the coverage gap.
                     task.result_summary = assistant_summary
-                    self._pool.mark_completed(task.task_id, assistant_summary)
-                    self._emit_checkpoint("task_completed", task)
+                    task.failure_analysis = {
+                        "failure_category": "no_runner_output",
+                        "root_cause": (
+                            "Worker session ended without invoking a security runner tool."
+                        ),
+                        "retryable": False,
+                        "suggested_fix": (
+                            "Tighten the worker prompt so the agent always invokes the assigned runner."
+                        ),
+                        "alternative_profile": "",
+                        "notes": assistant_summary[:500],
+                    }
+                    self._fail_task(
+                        task,
+                        f"no_runner_output: worker finished without runner evidence ({session_status_value})",
+                    )
                 else:
-                    self._fail_task(task, f"Worker finished without runner output ({session.status.value})")
+                    self._fail_task(task, f"Worker finished without runner output ({session_status_value})")
 
                 # Record activity
                 self._record_activity(task, assistant_summary)
@@ -217,47 +313,82 @@ class SecuritySubagentCoordinator:
 
     def _build_worker_spec(self, task: SecurityTask) -> dict[str, Any]:
         """Build a worker dispatch specification for a task."""
-        # Determine worker agent
-        agent_key = task.worker_agent_key or SURFACE_WORKER_MAP.get(
-            task.surface_type, SECURITY_RECON_WORKER_KEY
+        agent_key = task.worker_agent_key or resolve_security_worker_agent(
+            surface_type=task.surface_type,
+            tool_family=task.tool_family,
+            command_profile=task.command_profile,
         )
+        parent_bundle = self._parent_context.get("context_bundle", {})
+        if not isinstance(parent_bundle, dict):
+            parent_bundle = {}
 
         runner_args: dict[str, Any] = {
             "worker_action": "execute_security_task",
             "task": task.model_dump(mode="json"),
         }
 
-        prompt = (
-            f"执行安全测试任务: {task.name}\n\n"
-            f"目标: {task.target}\n"
-            f"工具族: {task.tool_family}\n"
-            f"命令 Profile: {task.command_profile}\n\n"
-            f"请调用对应的 runner 工具执行此任务，工具参数:\n"
-            f"{json.dumps(runner_args, ensure_ascii=False, indent=2)}\n\n"
-            "执行完成后，返回结构化结果摘要。"
-        )
-
         return {
             "task_id": task.task_id,
             "description": f"[{task.surface_type}] {task.name} -> {task.target}",
-            "prompt": prompt,
+            "prompt": build_security_worker_prompt(
+                task,
+                agent_key=agent_key,
+                runner_args=runner_args,
+            ),
             "agent_key": agent_key,
             "model_key": self._worker_model_key,
             "context": {
                 "dispatch_role": "security_testing_worker",
+                "mode_key": "security_testing",
                 "security_task_id": task.task_id,
+                "security_runtime_arguments": runner_args,
                 "surface_type": task.surface_type,
                 "tool_family": task.tool_family,
                 "command_profile": task.command_profile,
+                "target_fingerprint": str(parent_bundle.get("target_fingerprint") or ""),
+                "campaign_id": str(parent_bundle.get("campaign_id") or ""),
+                "platform_label": str(parent_bundle.get("platform_label") or ""),
+                "security_memory_scope": "session_only",
             },
         }
 
-    async def _wait_for_sessions(self, child_session_ids: list[str]) -> list[Any]:
-        """Wait for all child sessions to reach a terminal state."""
+    async def _wait_for_sessions(
+        self,
+        child_session_ids: list[str],
+        *,
+        overall_timeout_seconds: float | None = None,
+    ) -> list[Any]:
+        """Wait for child sessions to reach a terminal state with a hard deadline.
+
+        This is the single point in the campaign loop that must NEVER block
+        indefinitely. Three exits are possible:
+
+        1. The session reaches ``completed`` / ``failed`` / ``interrupted``.
+        2. The session sits in ``waiting_approval`` longer than
+           ``max_approval_polls`` (so the caller can classify the task as
+           approval-pending instead of spinning).
+        3. The overall wait exceeds ``overall_timeout_seconds`` (default
+           ``TOOL_EXEC_TIMEOUT_SECONDS * 2``). Any session still in flight is
+           surfaced as ``timed_out`` and the caller decides how to record it.
+
+        Without the third exit the entire security mode runtime can hang
+        forever when even one worker child session gets stuck in
+        ``running`` — which is exactly what was observed in production
+        runs against PortSwigger / TryHackMe / HTB.
+        """
         from src.schemas.session import SessionStatus
 
         pending = {sid for sid in child_session_ids if sid}
         settled: dict[str, Any] = {}
+        approval_wait_counts: dict[str, int] = {}
+        max_approval_polls = 60  # ~30s at default 0.5s interval
+
+        deadline: float | None = None
+        if overall_timeout_seconds is None:
+            overall_timeout_seconds = float(TOOL_EXEC_TIMEOUT_SECONDS * 2)
+        if overall_timeout_seconds > 0:
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + overall_timeout_seconds
 
         while pending:
             completed_ids: list[str] = []
@@ -270,14 +401,35 @@ class SecuritySubagentCoordinator:
                     SessionStatus.completed,
                     SessionStatus.failed,
                     SessionStatus.interrupted,
-                    SessionStatus.waiting_approval,
                 }:
                     settled[session_id] = session
                     completed_ids.append(session_id)
+                    continue
+                if session.status == SessionStatus.waiting_approval:
+                    approval_wait_counts[session_id] = approval_wait_counts.get(session_id, 0) + 1
+                    if approval_wait_counts[session_id] >= max_approval_polls:
+                        settled[session_id] = session
+                        completed_ids.append(session_id)
             for sid in completed_ids:
                 pending.discard(sid)
-            if pending:
-                await asyncio.sleep(self._poll_interval_seconds)
+            if not pending:
+                break
+            if deadline is not None and asyncio.get_event_loop().time() >= deadline:
+                # Hard timeout: surface whatever state the remaining sessions
+                # are in so the caller can record them as timed_out without
+                # blocking the entire campaign.
+                logger.warning(
+                    "Security worker wait timed out after %.0fs; %d session(s) still pending",
+                    overall_timeout_seconds,
+                    len(pending),
+                )
+                for stuck_id in list(pending):
+                    stuck_session = await self._session_store.get_session(stuck_id)
+                    if stuck_session is not None:
+                        settled[stuck_id] = stuck_session
+                pending.clear()
+                break
+            await asyncio.sleep(self._poll_interval_seconds)
 
         return list(settled.values())
 
@@ -292,23 +444,55 @@ class SecuritySubagentCoordinator:
         if success:
             self._pool.mark_completed(task.task_id, task.result_summary)
             self._emit_checkpoint("task_completed", task)
-        else:
-            error = tool_output.get("error") or task.result_summary or "execution_failed"
-            self._fail_task(task, error)
+            # Collect findings/artifacts only on success
+            findings = tool_output.get("findings") or []
+            if findings:
+                task.finding_refs = [f.get("finding_id", "") for f in findings if isinstance(f, dict)]
+            artifacts = tool_output.get("artifacts") or []
+            if artifacts:
+                task.artifacts = [
+                    str(a.get("artifact_id") or a.get("path") or a.get("filename") or "")
+                    for a in artifacts
+                    if isinstance(a, dict)
+                ]
+            return
 
-        # Collect findings
-        findings = tool_output.get("findings") or []
-        if findings:
-            task.finding_refs = [f.get("finding_id", "") for f in findings if isinstance(f, dict)]
+        error = tool_output.get("error") or task.result_summary or "execution_failed"
+        # Detect restricted-access conditions early so the campaign does not
+        # spin on retries against platforms that cannot be probed without
+        # additional credentials or VPN access.
+        signals = " ".join(
+            str(value)
+            for value in (
+                task.result_summary,
+                task.raw_output,
+                error,
+                tool_output.get("status"),
+                str(tool_output.get("parsed_result") or ""),
+            )
+            if value
+        )
+        if _detect_restricted_access(signals):
+            task.failure_analysis = {
+                "failure_category": "restricted_access",
+                "root_cause": (
+                    "Target platform requires additional access (login, subscription, VPN, "
+                    "or lab activation) that the runner could not satisfy."
+                ),
+                "retryable": False,
+                "suggested_fix": (
+                    "Provide platform credentials, deploy the target lab, or run from an "
+                    "authorized network before retrying."
+                ),
+                "alternative_profile": "",
+                "notes": str(error)[:500],
+            }
+            # Disable retries for this task so retry_failed() will skip it.
+            task.max_retries = 0
+            self._fail_task(task, f"restricted_access: {error}")
+            return
 
-        # Collect artifacts
-        artifacts = tool_output.get("artifacts") or []
-        if artifacts:
-            task.artifacts = [
-                str(a.get("artifact_id") or a.get("path") or a.get("filename") or "")
-                for a in artifacts
-                if isinstance(a, dict)
-            ]
+        self._fail_task(task, error)
 
     def _fail_task(self, task: SecurityTask, error: str) -> None:
         """Mark a task as failed."""
@@ -326,8 +510,10 @@ class SecuritySubagentCoordinator:
 
     def _record_activity(self, task: SecurityTask, summary: str = "") -> None:
         """Record an agent activity for this task."""
-        agent_key = task.worker_agent_key or SURFACE_WORKER_MAP.get(
-            task.surface_type, SECURITY_RECON_WORKER_KEY
+        agent_key = task.worker_agent_key or resolve_security_worker_agent(
+            surface_type=task.surface_type,
+            tool_family=task.tool_family,
+            command_profile=task.command_profile,
         )
         action = "completed" if task.status == TASK_COMPLETED else "failed"
         duration = 0.0
@@ -349,6 +535,7 @@ class SecuritySubagentCoordinator:
             started_at=task.started_at,
             completed_at=task.completed_at or datetime.now(timezone.utc).isoformat(),
             duration_seconds=duration,
+            execution_mode=task.worker_execution_mode or "subagent_session",
         ))
 
     def _extract_runner_output(self, messages: list[Any]) -> dict[str, Any] | None:

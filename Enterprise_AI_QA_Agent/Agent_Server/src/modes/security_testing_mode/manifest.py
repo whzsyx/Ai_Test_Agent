@@ -37,7 +37,6 @@ MODE_MANIFEST = {
         "knowledge-rag",
         "report-writer",
         "send-email",
-        "cli-executor",
         "observation-search",
         "session-history",
     ],

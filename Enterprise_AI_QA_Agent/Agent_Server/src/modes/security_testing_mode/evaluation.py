@@ -65,10 +65,16 @@ class SecurityEvaluationResult:
     summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        overall_rounded = round(self.quality_score.overall, 1)
         return {
             "campaign_id": self.campaign_id,
             "quality_score": {
-                "overall": round(self.quality_score.overall, 1),
+                # ``score`` is an alias of ``overall`` so UI consumers that
+                # look for the conventional ``score`` field find it. Keep
+                # ``overall`` for backward compatibility with existing
+                # callers/tests.
+                "score": overall_rounded,
+                "overall": overall_rounded,
                 "execution": round(self.quality_score.execution, 1),
                 "evidence": round(self.quality_score.evidence, 1),
                 "verification": round(self.quality_score.verification, 1),

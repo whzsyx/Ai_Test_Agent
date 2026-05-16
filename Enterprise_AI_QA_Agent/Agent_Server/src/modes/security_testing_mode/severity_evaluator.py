@@ -30,6 +30,21 @@ class SeverityEvaluator:
             - confidence_score: confidence component
             - rationale: explanation
         """
+        # Baseline checks (e.g. "missing X-Frame-Options header") are
+        # intentionally NOT run through impact/exploitability promotion.
+        # Pentesters conventionally rate these as low/info regardless of
+        # category baseline, and our evaluator's missing_control + verified
+        # path would otherwise inflate them to medium.
+        if finding.is_baseline_check:
+            return {
+                "severity": finding.severity or RISK_LOW,
+                "score": 0.0,
+                "impact_score": 0.0,
+                "exploitability_score": 0.0,
+                "confidence_score": 0.0,
+                "rationale": "Baseline hardening check; severity preserved as-is.",
+            }
+
         impact = self._score_impact(finding)
         exploitability = self._score_exploitability(finding)
         confidence = self._score_confidence(finding)

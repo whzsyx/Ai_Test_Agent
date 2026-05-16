@@ -971,6 +971,8 @@ class ToolRuntimeService:
         limit = max(1, min(limit, 20))
         category_filter = str(arguments.get("category") or "").strip()
         tool_key_filter = str(arguments.get("tool_key") or "").strip()
+        if str(context.context_bundle.get("mode_key") or "").strip().lower() == "security_testing":
+            scope = "current_session"
 
         result = await memory_runtime.retrieve_observation_context(
             session_id=context.session_id if scope != "all_sessions" else None,
@@ -2010,6 +2012,7 @@ class ToolRuntimeService:
         runner_key: str | None = None,
     ) -> dict[str, Any]:
         from src.application.security.finding_normalizer import FindingNormalizer
+        from src.application.security.execution_monitor import SecurityExecutionMonitor
         from src.application.security.result_parsers import get_parser_registry
         from src.application.security.risk_policy import SecurityRiskPolicy
         from src.application.security.tool_catalog import SecurityToolCatalog
@@ -2017,6 +2020,7 @@ class ToolRuntimeService:
         runner_key = runner_key or "security-scan-runner"
         catalog = SecurityToolCatalog()
         risk_policy = SecurityRiskPolicy()
+        execution_monitor = SecurityExecutionMonitor()
         normalizer = FindingNormalizer()
 
         task = self._security_task_from_arguments(arguments)
@@ -2041,6 +2045,23 @@ class ToolRuntimeService:
                 "runner_key": runner_key,
                 "command_profile": profile_key,
                 "error": "unknown_command_profile",
+            }
+
+        risk_tolerance = self._resolve_security_risk_tolerance(arguments, context)
+        profile_allowed, monitor_reason = execution_monitor.profile_allowed_for_risk(
+            profile.profile_key,
+            risk_tolerance,
+        )
+        if not profile_allowed:
+            return {
+                "status": "denied",
+                "ok": False,
+                "success": False,
+                "summary": monitor_reason,
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "risk_tolerance": risk_tolerance,
+                "error": "profile_blocked_by_execution_monitor",
             }
 
         if not self._security_profile_matches_runner(profile.tool_family, runner_key):
@@ -2087,8 +2108,14 @@ class ToolRuntimeService:
                 "error": "approval_required",
             }
 
+        artifact_dir = self._prepare_local_artifact_dir(context, runner_key)
         try:
-            render_args, missing = self._build_security_command_arguments(profile, arguments, task)
+            render_args, missing = self._build_security_command_arguments(
+                profile,
+                arguments,
+                task,
+                artifact_dir,
+            )
         except ValueError as exc:
             return {
                 "status": "failed",
@@ -2109,6 +2136,19 @@ class ToolRuntimeService:
                 "command_profile": profile.profile_key,
                 "missing_arguments": missing,
                 "error": "missing_profile_arguments",
+            }
+
+        preflight_error = self._security_profile_preflight(profile.profile_key, render_args)
+        if preflight_error:
+            return {
+                "status": "failed",
+                "ok": False,
+                "success": False,
+                "summary": preflight_error,
+                "runner_key": runner_key,
+                "command_profile": profile.profile_key,
+                "tool_name": profile.tool_name,
+                "error": "security_profile_preflight_failed",
             }
 
         command = profile.command_template.format(**render_args)
@@ -2132,7 +2172,6 @@ class ToolRuntimeService:
             or 120
         )
         timeout_seconds = max(1.0, min(timeout_seconds, 1800.0))
-        artifact_dir = self._prepare_local_artifact_dir(context, runner_key)
         try:
             execution_result = await self._security_execution_environment.execute(
                 command=command,
@@ -2249,6 +2288,27 @@ class ToolRuntimeService:
         except Exception:
             return None
 
+    def _resolve_security_risk_tolerance(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> str:
+        explicit = str(arguments.get("risk_tolerance") or "").strip().lower()
+        if explicit:
+            return explicit
+        bundle = context.context_bundle if isinstance(context.context_bundle, dict) else {}
+        direct = str(bundle.get("risk_tolerance") or "").strip().lower()
+        if direct:
+            return direct
+        state = bundle.get("security_testing_state")
+        if isinstance(state, dict):
+            request = state.get("request")
+            if isinstance(request, dict):
+                risk = str(request.get("risk_tolerance") or "").strip().lower()
+                if risk:
+                    return risk
+        return "medium"
+
     def _resolve_security_profile_key(
         self,
         arguments: dict[str, Any],
@@ -2289,6 +2349,7 @@ class ToolRuntimeService:
         profile: Any,
         arguments: dict[str, Any],
         task: Any,
+        artifact_dir: Path,
     ) -> tuple[dict[str, Any], list[str]]:
         supplied: dict[str, Any] = {}
         nested = arguments.get("arguments")
@@ -2310,6 +2371,23 @@ class ToolRuntimeService:
                 supplied.setdefault("ports", str(task.target_port))
         if profile.profile_key == "searchsploit_lookup":
             supplied.setdefault("query", supplied.get("target") or "")
+        # Tools like sslscan only accept ``host[:port]`` targets, not full
+        # URLs. Normalize before rendering so a target like
+        # ``https://example.com/path`` becomes ``example.com:443``.
+        if profile.tool_name in {"sslscan", "openssl", "testssl.sh"}:
+            target_value = str(supplied.get("target") or "").strip()
+            if target_value:
+                supplied["target"] = self._normalize_tls_target(target_value)
+        # Inject nuclei templates path so the command never falls back to
+        # the implicit default that produces "no templates provided for
+        # scan" when templates are not installed at the default location.
+        if profile.profile_key in {"nuclei_baseline", "nuclei_cve_scan"}:
+            supplied.setdefault("templates_dir", self._resolve_nuclei_templates_dir())
+        output_root = self._security_output_root(artifact_dir)
+        supplied.setdefault("wordlist", self._resolve_security_wordlist(output_root))
+        supplied.setdefault("ffuf_output", self._security_output_path(output_root, "ffuf_result.json"))
+        supplied.setdefault("hydra_output", self._security_output_path(output_root, "hydra_result.txt"))
+        supplied.setdefault("sqlmap_output_dir", self._security_output_path(output_root, "sqlmap_out"))
         supplied.setdefault("ports", "1-1000")
 
         render_args: dict[str, Any] = {}
@@ -2321,6 +2399,123 @@ class ToolRuntimeService:
                 continue
             render_args[key] = self._sanitize_security_argument(str(value), allow_spaces=key == "query")
         return render_args, missing
+
+    @staticmethod
+    def _normalize_tls_target(target: str) -> str:
+        """Reduce a URL-style target to ``host[:port]`` for TLS scanners.
+
+        Examples:
+        - ``https://example.com/path?query`` -> ``example.com:443``
+        - ``http://example.com:8080/a/b`` -> ``example.com:8080``
+        - ``example.com`` -> ``example.com``
+        - ``example.com:8443`` -> ``example.com:8443``
+        """
+        from urllib.parse import urlparse
+
+        candidate = target.strip()
+        if "://" in candidate:
+            parsed = urlparse(candidate)
+            host = parsed.hostname or ""
+            port = parsed.port
+            if not port:
+                scheme = (parsed.scheme or "").lower()
+                if scheme == "https":
+                    port = 443
+                elif scheme == "http":
+                    port = 80
+            if host:
+                return f"{host}:{port}" if port else host
+            # Fall back to whatever was after the scheme.
+            candidate = parsed.netloc or candidate
+        # Strip any trailing path/query if URL parser did not catch it.
+        for separator in ("/", "?", "#"):
+            if separator in candidate:
+                candidate = candidate.split(separator, 1)[0]
+        return candidate
+
+    def _resolve_nuclei_templates_dir(self) -> str:
+        custom = str(os.getenv("NUCLEI_TEMPLATES_DIR", "") or "").strip()
+        if custom:
+            return custom
+        # Default to a common docker workdir mount point so docker backend
+        # users without an env override still get a deterministic path
+        # rather than an implicit, image-dependent default.
+        backend = self._security_runner_backend()
+        if backend in {"docker", "container"}:
+            return "/root/nuclei-templates"
+        for candidate in (
+            "/root/nuclei-templates",
+            "/home/kali/nuclei-templates",
+            "/usr/share/nuclei-templates",
+        ):
+            if Path(candidate).exists():
+                return candidate
+        # Last-resort placeholder; preflight will surface the real error.
+        return "/root/nuclei-templates"
+
+    def _security_output_root(self, artifact_dir: Path) -> str:
+        backend = self._security_runner_backend()
+        if backend in {"docker", "container"}:
+            return str(
+                getattr(self._settings, "security_runner_docker_workdir", None)
+                or os.getenv("SECURITY_RUNNER_DOCKER_WORKDIR")
+                or "/work"
+            ).strip() or "/work"
+        return str(artifact_dir)
+
+    def _security_output_path(self, root: str, name: str) -> str:
+        if root.startswith("/"):
+            return f"{root.rstrip('/')}/{name}"
+        return str(Path(root) / name)
+
+    def _resolve_security_wordlist(self, output_root: str) -> str:
+        custom = str(os.getenv("SECURITY_WORDLIST_PATH", "") or "").strip()
+        if custom:
+            return custom
+        if output_root.startswith("/"):
+            return "/usr/share/seclists/Discovery/Web-Content/common.txt"
+        for candidate in (
+            "/usr/share/seclists/Discovery/Web-Content/common.txt",
+            "/usr/share/wordlists/dirb/common.txt",
+        ):
+            if Path(candidate).exists():
+                return candidate
+        return "/usr/share/seclists/Discovery/Web-Content/common.txt"
+
+    def _security_profile_preflight(self, profile_key: str, render_args: dict[str, Any]) -> str:
+        wordlist_profiles = {"ffuf_common_dirs", "gobuster_dirs"}
+        if profile_key in wordlist_profiles:
+            wordlist = str(render_args.get("wordlist") or "").strip().strip("'\"")
+            if wordlist and not wordlist.startswith("/work/") and not Path(wordlist).exists():
+                return (
+                    f"Required wordlist for {profile_key} was not found: {wordlist}. "
+                    "Configure SECURITY_WORDLIST_PATH or install Seclists."
+                )
+        if profile_key in {"nuclei_baseline", "nuclei_cve_scan"} and self._security_runner_backend() in {"local", "host"}:
+            if not self._security_nuclei_templates_available():
+                return (
+                    "Nuclei templates were not found for local execution. "
+                    "Configure NUCLEI_TEMPLATES_DIR or install nuclei-templates before running this profile."
+                )
+        return ""
+
+    def _security_runner_backend(self) -> str:
+        value = getattr(self._settings, "security_runner_backend", None) if self._settings is not None else None
+        if value not in (None, ""):
+            return str(value).strip().lower()
+        return str(os.getenv("SECURITY_RUNNER_BACKEND", "local") or "local").strip().lower()
+
+    def _security_nuclei_templates_available(self) -> bool:
+        custom = str(os.getenv("NUCLEI_TEMPLATES_DIR", "") or "").strip()
+        candidates = [custom] if custom else []
+        candidates.extend(
+            [
+                "/root/nuclei-templates",
+                "/home/kali/nuclei-templates",
+                "/usr/share/nuclei-templates",
+            ]
+        )
+        return any(Path(candidate).exists() for candidate in candidates if candidate)
 
     def _sanitize_security_argument(self, value: str, *, allow_spaces: bool = False) -> str:
         cleaned = value.replace("\r", "").replace("\n", "").strip()

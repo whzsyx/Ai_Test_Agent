@@ -7,20 +7,12 @@ from __future__ import annotations
 
 # Tools available to the primary security-testing-agent
 SECURITY_TESTING_TOOL_KEYS: list[str] = [
-    "security-scan-runner",
-    "network-recon-runner",
-    "web-scan-runner",
-    "service-audit-runner",
-    "credential-attack-runner",
-    "traffic-analysis-runner",
-    "exploit-workbench-runner",
+    "subagent-dispatch",
     "knowledge-rag",
     "report-writer",
     "send-email",
-    "cli-executor",
     "observation-search",
     "session-history",
-    "subagent-dispatch",
 ]
 
 # Tools available to security worker agents
@@ -32,7 +24,6 @@ SECURITY_WORKER_TOOL_KEYS: list[str] = [
     "credential-attack-runner",
     "traffic-analysis-runner",
     "exploit-workbench-runner",
-    "cli-executor",
     "knowledge-rag",
     "observation-search",
 ]

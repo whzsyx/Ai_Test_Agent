@@ -5,8 +5,10 @@ from src.application.security.execution_environment_service import (
     SecurityCommandExecutionResult,
     SecurityExecutionEnvironmentService,
 )
+from src.application.security.execution_monitor import SecurityExecutionMonitor
 
 __all__ = [
     "SecurityCommandExecutionResult",
     "SecurityExecutionEnvironmentService",
+    "SecurityExecutionMonitor",
 ]
