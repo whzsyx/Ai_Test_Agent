@@ -223,7 +223,7 @@ class SecurityExecutionEnvironmentService:
         )
 
     def _container_reuse_enabled(self) -> bool:
-        return self._get_bool("security_runner_container_reuse", "SECURITY_RUNNER_CONTAINER_REUSE", True)
+        return self._get_bool("security_runner_container_reuse", "SECURITY_RUNNER_CONTAINER_REUSE", False)
 
     def _remove_container(self, *, docker: str, container_name: str) -> str:
         try:
@@ -262,17 +262,21 @@ class SecurityExecutionEnvironmentService:
         if inspect.returncode == 0:
             if (inspect.stdout or "").strip().lower() == "true":
                 return
-            start = subprocess.run(
-                [docker, "start", container_name],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-            )
-            if start.returncode != 0:
-                raise RuntimeError(start.stderr.strip() or start.stdout.strip() or "Failed to start security Docker container.")
-            return
+            if self._container_reuse_enabled():
+                start = subprocess.run(
+                    [docker, "start", container_name],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                )
+                if start.returncode != 0:
+                    raise RuntimeError(
+                        start.stderr.strip() or start.stdout.strip() or "Failed to start security Docker container."
+                    )
+                return
+            self._remove_container(docker=docker, container_name=container_name)
 
         self._pull_image_if_needed(docker, image)
         run_args = [
