@@ -34,6 +34,7 @@ class SessionStore(Protocol):
         status: ToolApprovalStatus,
         reason: str | None = None,
     ) -> ToolApprovalRequest: ...
+    async def delete_session(self, session_id: str) -> bool: ...
 
 
 class InMemorySessionStore:
@@ -125,3 +126,14 @@ class InMemorySessionStore:
         approval.decision_note = reason
         approval.resolved_at = datetime.utcnow()
         return approval
+
+    async def delete_session(self, session_id: str) -> bool:
+        async with self._lock:
+            if session_id not in self._sessions:
+                return False
+            del self._sessions[session_id]
+            self._events.pop(session_id, None)
+            self._queues.pop(session_id, None)
+            self._snapshots.pop(session_id, None)
+            self._approvals.pop(session_id, None)
+            return True

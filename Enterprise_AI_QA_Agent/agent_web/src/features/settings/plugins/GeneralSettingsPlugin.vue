@@ -1,10 +1,11 @@
 ﻿<script setup lang="ts">
 import { computed, ref } from "vue";
-import { NSelect, NSlider } from "naive-ui";
+import { NSelect, NSlider, NModal } from "naive-ui";
 
 import { useGeneralSettingsStore, type AppFontFamily, type AppFontSize, type GeneralSettingsSnapshot } from "../../../stores/generalSettings";
 import type { SettingsPluginDefinition } from "../plugins";
 import { t } from "../../../services/i18n";
+import { api } from "../../../services/api";
 
 defineProps<{
   plugin?: SettingsPluginDefinition;
@@ -180,37 +181,115 @@ async function requestNotificationPermission() {
   }
 }
 
-async function handleDataAction(key: string, title: string) {
+async function handleDataAction(key: string, _title: string) {
   if (key === "backup") {
+    exportOpen.value = true;
+    exportLoading.value = true;
+    exportSessionCount.value = 0;
+    exportDone.value = false;
     try {
-      const result = await import("../../../services/api").then(m => m.api.exportData());
-      notice.value = String((result as Record<string, unknown>).summary || t("settings.action_backup_ready", { title }));
+      const res = await api.exportPreview();
+      exportSessionCount.value = res.session_count;
     } catch (error) {
-      notice.value = t("settings.action_failed", { title, error: error instanceof Error ? error.message : "unknown error" });
+      notice.value = error instanceof Error ? error.message : t("settings.action_failed", { title: _title, error: "unknown" });
+    } finally {
+      exportLoading.value = false;
     }
   } else if (key === "import") {
-    try {
-      const result = await import("../../../services/api").then(m => m.api.importData());
-      notice.value = String((result as Record<string, unknown>).summary || t("settings.action_import_soon", { title }));
-    } catch (error) {
-      notice.value = t("settings.action_failed", { title, error: error instanceof Error ? error.message : "unknown error" });
-    }
+    importOpen.value = true;
+    importFile.value = null;
+    importResult.value = null;
+    importLoading.value = false;
   } else if (key === "cleanup") {
-    try {
-      const result = await import("../../../services/api").then(m =>
-        m.api.cleanupData({ action: "cleanup", dry_run: true, time_range_days: 30 })
-      );
-      const summary = String((result as Record<string, unknown>).summary || "");
-      const affectedCount = Number((result as Record<string, unknown>).affected_count || 0);
-      notice.value = t("settings.action_cleanup_preview", {
-        title,
-        summary: summary || `${affectedCount}`,
-      });
-    } catch (error) {
-      notice.value = t("settings.action_failed", { title, error: error instanceof Error ? error.message : "unknown error" });
-    }
-  } else {
-    notice.value = t("settings.action_coming_soon", { title });
+    cleanupOpen.value = true;
+    cleanupDays.value = 30;
+    cleanupPreview.value = null;
+    cleanupDone.value = false;
+    cleanupLoading.value = false;
+  }
+}
+
+// --- Export ---
+const exportOpen = ref(false);
+const exportLoading = ref(false);
+const exportSessionCount = ref(0);
+const exportDone = ref(false);
+
+async function doExport() {
+  exportLoading.value = true;
+  try {
+    await api.exportDownload();
+    exportDone.value = true;
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : "Export failed";
+  } finally {
+    exportLoading.value = false;
+  }
+}
+
+// --- Import ---
+const importOpen = ref(false);
+const importLoading = ref(false);
+const importFile = ref<File | null>(null);
+const importResult = ref<{ imported_count: number; skipped_count: number } | null>(null);
+
+function onImportFileChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  importFile.value = input.files?.[0] ?? null;
+}
+
+async function doImport() {
+  if (!importFile.value) return;
+  importLoading.value = true;
+  try {
+    const res = await api.importData(importFile.value) as { imported_count: number; skipped_count: number };
+    importResult.value = res;
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : "Import failed";
+  } finally {
+    importLoading.value = false;
+  }
+}
+
+// --- Cleanup ---
+const cleanupOpen = ref(false);
+const cleanupLoading = ref(false);
+const cleanupDays = ref<number>(30);
+const cleanupPreview = ref<{ affected_count: number; total_sessions: number } | null>(null);
+const cleanupDone = ref(false);
+
+const cleanupDaysOptions = [
+  { value: 7, label: "7" },
+  { value: 30, label: "30" },
+  { value: 90, label: "90" },
+  { value: 180, label: "180" },
+  { value: 0, label: t("settings.data_cleanup_all") },
+];
+
+async function doCleanupPreview() {
+  cleanupLoading.value = true;
+  try {
+    const res = await api.cleanupData({ action: "cleanup", dry_run: true, time_range_days: cleanupDays.value || null }) as Record<string, unknown>;
+    cleanupPreview.value = {
+      affected_count: Number(res.affected_count || 0),
+      total_sessions: Number((res.details as Record<string, unknown>)?.total_sessions || 0),
+    };
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : "Preview failed";
+  } finally {
+    cleanupLoading.value = false;
+  }
+}
+
+async function doCleanupConfirm() {
+  cleanupLoading.value = true;
+  try {
+    await api.cleanupData({ action: "cleanup", dry_run: false, time_range_days: cleanupDays.value || null, confirm: true });
+    cleanupDone.value = true;
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : "Cleanup failed";
+  } finally {
+    cleanupLoading.value = false;
   }
 }
 </script>
@@ -421,6 +500,143 @@ async function handleDataAction(key: string, title: string) {
         </div>
       </section>
     </div>
+
+    <!-- Export Modal -->
+    <NModal v-model:show="exportOpen" class="data-modal" :mask-closable="!exportLoading">
+      <div class="dm-card">
+        <div class="dm-head">
+          <div class="dm-icon"><i class="fa-solid fa-box-archive"></i></div>
+          <h3>{{ t("settings.data_backup") }}</h3>
+          <button class="dm-close" :disabled="exportLoading" @click="exportOpen = false"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="dm-body">
+          <template v-if="exportDone">
+            <div class="dm-success">
+              <i class="fa-solid fa-circle-check"></i>
+              <span>{{ t("settings.dm_export_done") }}</span>
+            </div>
+          </template>
+          <template v-else-if="exportLoading && exportSessionCount === 0">
+            <div class="dm-loading"><i class="fa-solid fa-spinner fa-spin"></i> {{ t("settings.dm_loading") }}</div>
+          </template>
+          <template v-else>
+            <p class="dm-info">{{ t("settings.dm_export_info") }}</p>
+            <div class="dm-stat">
+              <span class="dm-stat-label">{{ t("settings.dm_session_count") }}</span>
+              <strong>{{ exportSessionCount }}</strong>
+            </div>
+          </template>
+        </div>
+        <div v-if="!exportDone" class="dm-actions">
+          <button class="action-btn" @click="exportOpen = false">{{ t("common.cancel") }}</button>
+          <button class="action-btn primary" :disabled="exportLoading || exportSessionCount === 0" @click="doExport">
+            <i v-if="exportLoading" class="fa-solid fa-spinner fa-spin"></i>
+            {{ exportLoading ? t("settings.dm_exporting") : t("settings.dm_export_btn") }}
+          </button>
+        </div>
+        <div v-else class="dm-actions">
+          <button class="action-btn primary" @click="exportOpen = false">{{ t("common.close") }}</button>
+        </div>
+      </div>
+    </NModal>
+
+    <!-- Import Modal -->
+    <NModal v-model:show="importOpen" class="data-modal" :mask-closable="!importLoading">
+      <div class="dm-card">
+        <div class="dm-head">
+          <div class="dm-icon"><i class="fa-solid fa-file-import"></i></div>
+          <h3>{{ t("settings.data_import") }}</h3>
+          <button class="dm-close" :disabled="importLoading" @click="importOpen = false"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="dm-body">
+          <template v-if="importResult">
+            <div class="dm-success">
+              <i class="fa-solid fa-circle-check"></i>
+              <span>{{ t("settings.dm_import_done", { imported: importResult.imported_count, skipped: importResult.skipped_count }) }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <p class="dm-info">{{ t("settings.dm_import_info") }}</p>
+            <label class="dm-file-picker">
+              <input type="file" accept=".json" @change="onImportFileChange">
+              <div class="dm-file-area">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+                <span v-if="importFile">{{ importFile.name }}</span>
+                <span v-else>{{ t("settings.dm_import_select") }}</span>
+              </div>
+            </label>
+          </template>
+        </div>
+        <div v-if="!importResult" class="dm-actions">
+          <button class="action-btn" @click="importOpen = false">{{ t("common.cancel") }}</button>
+          <button class="action-btn primary" :disabled="!importFile || importLoading" @click="doImport">
+            <i v-if="importLoading" class="fa-solid fa-spinner fa-spin"></i>
+            {{ importLoading ? t("settings.dm_importing") : t("settings.dm_import_btn") }}
+          </button>
+        </div>
+        <div v-else class="dm-actions">
+          <button class="action-btn primary" @click="importOpen = false">{{ t("common.close") }}</button>
+        </div>
+      </div>
+    </NModal>
+
+    <!-- Cleanup Modal -->
+    <NModal v-model:show="cleanupOpen" class="data-modal" :mask-closable="!cleanupLoading">
+      <div class="dm-card">
+        <div class="dm-head">
+          <div class="dm-icon"><i class="fa-solid fa-broom"></i></div>
+          <h3>{{ t("settings.data_cleanup") }}</h3>
+          <button class="dm-close" :disabled="cleanupLoading" @click="cleanupOpen = false"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="dm-body">
+          <template v-if="cleanupDone">
+            <div class="dm-success">
+              <i class="fa-solid fa-circle-check"></i>
+              <span>{{ t("settings.dm_cleanup_done") }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <p class="dm-info">{{ t("settings.dm_cleanup_info") }}</p>
+            <div class="dm-field">
+              <label class="dm-field-label">{{ t("settings.dm_cleanup_range") }}</label>
+              <div class="dm-days-row">
+                <button
+                  v-for="opt in cleanupDaysOptions"
+                  :key="opt.value"
+                  class="dm-day-btn"
+                  :class="{ active: cleanupDays === opt.value }"
+                  @click="cleanupDays = opt.value; cleanupPreview = null"
+                >{{ opt.label }}{{ opt.value ? t("settings.dm_days_suffix") : "" }}</button>
+              </div>
+            </div>
+            <template v-if="cleanupPreview">
+              <div class="dm-warning">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span>{{ t("settings.dm_cleanup_preview", { count: cleanupPreview.affected_count, total: cleanupPreview.total_sessions }) }}</span>
+              </div>
+            </template>
+          </template>
+        </div>
+        <div v-if="!cleanupDone" class="dm-actions">
+          <button class="action-btn" @click="cleanupOpen = false">{{ t("common.cancel") }}</button>
+          <template v-if="!cleanupPreview">
+            <button class="action-btn primary" :disabled="cleanupLoading" @click="doCleanupPreview">
+              <i v-if="cleanupLoading" class="fa-solid fa-spinner fa-spin"></i>
+              {{ t("settings.dm_cleanup_scan") }}
+            </button>
+          </template>
+          <template v-else>
+            <button class="action-btn danger" :disabled="cleanupLoading || cleanupPreview.affected_count === 0" @click="doCleanupConfirm">
+              <i v-if="cleanupLoading" class="fa-solid fa-spinner fa-spin"></i>
+              {{ cleanupLoading ? t("settings.dm_cleaning") : t("settings.dm_cleanup_confirm", { count: cleanupPreview.affected_count }) }}
+            </button>
+          </template>
+        </div>
+        <div v-else class="dm-actions">
+          <button class="action-btn primary" @click="cleanupOpen = false">{{ t("common.close") }}</button>
+        </div>
+      </div>
+    </NModal>
 
     <footer class="general-footer">
       <div class="footer-info">
@@ -1017,5 +1233,231 @@ async function handleDataAction(key: string, title: string) {
     flex: 1;
     justify-content: center;
   }
+}
+
+/* Data Management Modals */
+:deep(.data-modal) {
+  width: min(480px, calc(100vw - 40px));
+}
+
+.dm-card {
+  border-radius: 16px;
+  background: var(--general-bg, #fff);
+  color: var(--general-text-primary, #0f172a);
+  border: 1px solid var(--general-border, #e2e8f0);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+:global(:root[data-theme="dark"]) .dm-card {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+.dm-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid var(--general-border, #e2e8f0);
+}
+
+.dm-head h3 {
+  margin: 0;
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.dm-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--general-bg-muted, #f1f5f9);
+  font-size: 16px;
+}
+
+.dm-close {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--general-text-tertiary, #64748b);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dm-close:hover { color: var(--general-text-primary, #0f172a); background: var(--general-bg-muted, #f1f5f9); }
+
+.dm-body {
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dm-info {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--general-text-secondary, #475569);
+}
+
+.dm-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--general-bg-subtle, #f8fafc);
+  border: 1px solid var(--general-border, #e2e8f0);
+}
+
+.dm-stat-label {
+  font-size: 13px;
+  color: var(--general-text-secondary, #475569);
+}
+
+.dm-stat strong {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.dm-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 0;
+  justify-content: center;
+  color: var(--general-text-tertiary, #64748b);
+  font-size: 13px;
+}
+
+.dm-success {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(22, 163, 74, 0.08);
+  color: #16a34a;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+:global(:root[data-theme="dark"]) .dm-success {
+  background: rgba(22, 163, 74, 0.15);
+  color: #86efac;
+}
+
+.dm-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(234, 179, 8, 0.08);
+  color: #a16207;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+:global(:root[data-theme="dark"]) .dm-warning {
+  background: rgba(234, 179, 8, 0.12);
+  color: #fde68a;
+}
+
+.dm-warning i { margin-top: 2px; flex-shrink: 0; }
+
+.dm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--general-border, #e2e8f0);
+}
+
+.action-btn.danger {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+}
+
+.action-btn.danger:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.dm-file-picker {
+  display: block;
+  cursor: pointer;
+}
+
+.dm-file-picker input { display: none; }
+
+.dm-file-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 16px;
+  border: 2px dashed var(--general-border-hover, #cbd5e1);
+  border-radius: 12px;
+  color: var(--general-text-tertiary, #64748b);
+  font-size: 13px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.dm-file-area:hover {
+  border-color: var(--general-text-primary, #0f172a);
+  background: var(--general-bg-subtle, #f8fafc);
+}
+
+.dm-file-area i { font-size: 24px; }
+
+.dm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dm-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--general-text-tertiary, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dm-days-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dm-day-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--general-border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--general-bg, #fff);
+  color: var(--general-text-primary, #0f172a);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.dm-day-btn:hover { border-color: var(--general-border-hover, #cbd5e1); }
+
+.dm-day-btn.active {
+  background: var(--general-text-primary, #0f172a);
+  color: var(--general-bg, #fff);
+  border-color: var(--general-text-primary, #0f172a);
 }
 </style>

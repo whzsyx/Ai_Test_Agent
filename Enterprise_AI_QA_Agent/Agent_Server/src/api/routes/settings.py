@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+import json
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi.responses import StreamingResponse
 
 from src.schemas.email_config import EmailConfigCreateRequest, EmailConfigUpdateRequest
 from src.schemas.settings import ModelConfigUpdateRequest
@@ -180,42 +184,184 @@ async def save_general_settings(payload: GeneralSettingsPayload, request: Reques
 
 @router.post("/data/export")
 async def export_data(request: Request):
-    """Export session data as a backup bundle (placeholder)."""
+    """Export all session data as a downloadable JSON file."""
     store = request.app.state.store
-    sessions = await store.list_sessions(limit=1000)
-    session_count = len(sessions)
-    return {
-        "ok": True,
-        "action": "export",
-        "summary": f"Export ready: {session_count} sessions available for backup.",
-        "session_count": session_count,
-        "format": "json",
-        "note": "Full export implementation pending. Currently returns metadata only.",
+    sessions = await store.list_sessions(limit=5000)
+
+    bundle: list[dict] = []
+    for s in sessions:
+        events = await store.list_events(s.id)
+        snapshots = await store.list_snapshots(s.id)
+        approvals = await store.list_approvals(s.id)
+        bundle.append({
+            "id": s.id,
+            "title": s.title,
+            "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+            "session_mode": s.session_mode.value if hasattr(s.session_mode, "value") else str(s.session_mode),
+            "runtime_mode": s.runtime_mode.value if hasattr(s.runtime_mode, "value") else str(s.runtime_mode),
+            "mode_key": s.mode_key,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            "preferred_model": s.preferred_model,
+            "selected_agent": s.selected_agent,
+            "metadata": s.metadata,
+            "event_count": s.event_count,
+            "snapshot_count": s.snapshot_count,
+            "messages": [
+                {"id": m.id, "role": m.role.value if hasattr(m.role, "value") else str(m.role),
+                 "content": m.content, "created_at": m.created_at.isoformat() if m.created_at else None,
+                 "metadata": m.metadata}
+                for m in (s.messages or [])
+            ],
+            "events": [
+                {"type": e.type, "session_id": e.session_id, "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                 "payload": e.payload}
+                for e in events
+            ],
+            "snapshots": [
+                {"id": snap.id, "session_id": snap.session_id, "version": snap.version,
+                 "stage": snap.stage, "created_at": snap.created_at.isoformat() if snap.created_at else None,
+                 "graph_state": snap.graph_state}
+                for snap in snapshots
+            ],
+            "approvals": [
+                {"id": a.id, "session_id": a.session_id, "tool_key": a.tool_key, "tool_name": a.tool_name,
+                 "reason": a.reason, "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                 "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
+                 "decision_note": a.decision_note, "metadata": a.metadata}
+                for a in approvals
+            ],
+        })
+
+    export_payload = {
+        "version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "session_count": len(bundle),
+        "sessions": bundle,
     }
+    content = json.dumps(export_payload, ensure_ascii=False, indent=2)
+    filename = f"qa-agent-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.json"
+
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/data/export/preview")
+async def export_data_preview(request: Request):
+    """Preview export: return session count without downloading."""
+    store = request.app.state.store
+    sessions = await store.list_sessions(limit=5000)
+    return {"ok": True, "session_count": len(sessions)}
 
 
 @router.post("/data/import")
-async def import_data(request: Request):
-    """Import data from a backup bundle (placeholder)."""
+async def import_data(request: Request, file: UploadFile = File(...)):
+    """Import sessions from a backup JSON file."""
+    store = request.app.state.store
+
+    try:
+        raw = await file.read()
+        data = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON file: {exc}") from exc
+
+    if "sessions" not in data or not isinstance(data["sessions"], list):
+        raise HTTPException(status_code=400, detail="Invalid backup format: missing 'sessions' array.")
+
+    imported = 0
+    skipped = 0
+    for item in data["sessions"]:
+        sid = item.get("id")
+        if not sid:
+            skipped += 1
+            continue
+
+        existing = await store.get_session(sid)
+        if existing is not None:
+            skipped += 1
+            continue
+
+        from src.domain.models import SessionRecord
+        from src.schemas.session import SessionStatus, SessionMode, RuntimeMode, MessageRole, ChatMessage
+
+        session = SessionRecord(
+            id=sid,
+            title=item.get("title", ""),
+            status=SessionStatus(item.get("status", "completed")),
+            session_mode=SessionMode(item.get("session_mode", "chat")),
+            runtime_mode=RuntimeMode(item.get("runtime_mode", "auto")),
+            mode_key=item.get("mode_key", ""),
+            preferred_model=item.get("preferred_model", ""),
+            selected_agent=item.get("selected_agent", ""),
+            metadata=item.get("metadata") or {},
+            event_count=item.get("event_count", 0),
+            snapshot_count=item.get("snapshot_count", 0),
+            messages=[
+                ChatMessage(
+                    id=m.get("id", ""),
+                    role=MessageRole(m.get("role", "user")),
+                    content=m.get("content", ""),
+                    metadata=m.get("metadata") or {},
+                )
+                for m in (item.get("messages") or [])
+            ],
+        )
+        await store.save_session(session)
+
+        from src.schemas.session import ExecutionEvent, SessionSnapshot, ToolApprovalRequest, ToolApprovalStatus
+
+        for ev in (item.get("events") or []):
+            await store.append_event(sid, ExecutionEvent(
+                type=ev.get("type", ""),
+                session_id=sid,
+                payload=ev.get("payload") or {},
+            ))
+
+        for snap in (item.get("snapshots") or []):
+            await store.save_snapshot(sid, SessionSnapshot(
+                id=snap.get("id", ""),
+                session_id=sid,
+                version=snap.get("version", 1),
+                stage=snap.get("stage", ""),
+                graph_state=snap.get("graph_state") or {},
+            ))
+
+        for ap in (item.get("approvals") or []):
+            await store.save_approval(sid, ToolApprovalRequest(
+                id=ap.get("id", ""),
+                session_id=sid,
+                tool_key=ap.get("tool_key", ""),
+                tool_name=ap.get("tool_name", ""),
+                reason=ap.get("reason", ""),
+                status=ToolApprovalStatus(ap.get("status", "pending")),
+                decision_note=ap.get("decision_note"),
+                metadata=ap.get("metadata") or {},
+            ))
+
+        imported += 1
+
     return {
-        "ok": False,
+        "ok": True,
         "action": "import",
-        "summary": "Import is not yet implemented. Backup file validation will be added in the next version.",
-        "note": "Requires schema version check and integrity validation before write.",
+        "summary": f"Imported {imported} sessions, skipped {skipped} (duplicate or invalid).",
+        "imported_count": imported,
+        "skipped_count": skipped,
     }
 
 
 @router.post("/data/cleanup")
 async def cleanup_data(payload: DataManagementRequest, request: Request):
-    """Clean up historical session data with dry-run support."""
+    """Clean up historical session data with dry-run and confirmation support."""
     store = request.app.state.store
-    sessions = await store.list_sessions(limit=1000)
+    sessions = await store.list_sessions(limit=5000)
 
     if payload.time_range_days and payload.time_range_days > 0:
-        from datetime import datetime, timezone, timedelta
-
         cutoff = datetime.now(timezone.utc) - timedelta(days=payload.time_range_days)
-        affected = [s for s in sessions if s.updated_at < cutoff]
+        affected = [s for s in sessions if s.updated_at and s.updated_at < cutoff]
     else:
         affected = list(sessions)
 
@@ -226,7 +372,7 @@ async def cleanup_data(payload: DataManagementRequest, request: Request):
             ok=True,
             action="cleanup",
             dry_run=True,
-            summary=f"Dry-run: {affected_count} sessions would be affected.",
+            summary=f"Dry-run: {affected_count} sessions would be deleted.",
             affected_count=affected_count,
             details={
                 "time_range_days": payload.time_range_days,
@@ -244,14 +390,10 @@ async def cleanup_data(payload: DataManagementRequest, request: Request):
             affected_count=affected_count,
         )
 
-    # Real cleanup: delete affected sessions.
     deleted_count = 0
     for session in affected:
         try:
-            # Note: SessionStore protocol doesn't have delete yet.
-            # For now, mark as completed/archived.
-            session.status = "completed"
-            await store.save_session(session)
+            await store.delete_session(session.id)
             deleted_count += 1
         except Exception:
             pass
@@ -260,10 +402,10 @@ async def cleanup_data(payload: DataManagementRequest, request: Request):
         ok=True,
         action="cleanup",
         dry_run=False,
-        summary=f"Cleanup completed: {deleted_count} sessions archived.",
+        summary=f"Cleanup completed: {deleted_count} sessions deleted.",
         affected_count=deleted_count,
         details={
             "time_range_days": payload.time_range_days,
-            "archived_count": deleted_count,
+            "deleted_count": deleted_count,
         },
     )

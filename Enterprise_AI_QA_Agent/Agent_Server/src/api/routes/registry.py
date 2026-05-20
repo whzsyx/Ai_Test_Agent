@@ -67,6 +67,11 @@ async def list_model_configs(request: Request):
     return request.app.state.registry_service.list_model_configs()
 
 
+@router.get("/security-profiles")
+async def list_security_profiles(request: Request):
+    return request.app.state.registry_service.list_security_profiles()
+
+
 @router.get("/skills")
 async def list_skills(request: Request):
     return request.app.state.skill_management_service.list_skills()

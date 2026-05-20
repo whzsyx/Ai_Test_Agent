@@ -500,6 +500,27 @@ class PostgresSessionStore:
                 )
         return _approval_from_row(row)
 
+    async def delete_session(self, session_id: str) -> bool:
+        def _do() -> bool:
+            with postgres_connect(self._settings) as conn:
+                with conn.cursor() as cur:
+                    for tbl in (
+                        self._settings.postgres_approval_table,
+                        self._settings.postgres_snapshot_table,
+                        self._settings.postgres_event_table,
+                        self._settings.postgres_message_table,
+                    ):
+                        cur.execute(f"DELETE FROM {tbl} WHERE session_id = %s", (session_id,))
+                    cur.execute(
+                        f"DELETE FROM {self._settings.postgres_session_table} WHERE id = %s RETURNING id",
+                        (session_id,),
+                    )
+                    deleted = cur.fetchone() is not None
+                    conn.commit()
+                    return deleted
+
+        return await asyncio.to_thread(_do)
+
 
 def _session_from_row(row: dict, messages: list[ChatMessage]) -> SessionRecord:
     return SessionRecord(

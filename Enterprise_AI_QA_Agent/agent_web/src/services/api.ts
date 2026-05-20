@@ -51,6 +51,7 @@ import type {
   SkillMarketplaceSearchResponse,
   SkillUploadRequest,
   SkillUpsertRequest,
+  SecurityProfilesResponse,
   SessionVerificationResponse,
 } from "../types";
 
@@ -123,6 +124,9 @@ export const api = {
   },
   listModes(): Promise<ModeDescriptor[]> {
     return request("/api/v1/registry/modes");
+  },
+  listSecurityProfiles(): Promise<SecurityProfilesResponse> {
+    return request("/api/v1/registry/security-profiles");
   },
   listSkills(): Promise<SkillDescriptor[]> {
     return request("/api/v1/registry/skills");
@@ -488,11 +492,31 @@ export const api = {
   },
 
   // Data Management
-  exportData(): Promise<Record<string, unknown>> {
-    return request("/api/v1/settings/data/export", { method: "POST" });
+  exportPreview(): Promise<{ ok: boolean; session_count: number }> {
+    return request("/api/v1/settings/data/export/preview", { method: "POST" });
   },
-  importData(): Promise<Record<string, unknown>> {
-    return request("/api/v1/settings/data/import", { method: "POST" });
+  async exportDownload(): Promise<void> {
+    const resp = await fetch("/api/v1/settings/data/export", { method: "POST" });
+    if (!resp.ok) throw new Error(await readErrorMessage(resp));
+    const blob = await resp.blob();
+    const cd = resp.headers.get("content-disposition") || "";
+    const match = cd.match(/filename="?([^"]+)"?/);
+    const filename = match?.[1] || `qa-agent-backup-${Date.now()}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  async importData(file: File): Promise<Record<string, unknown>> {
+    const form = new FormData();
+    form.append("file", file);
+    const resp = await fetch("/api/v1/settings/data/import", { method: "POST", body: form });
+    if (!resp.ok) throw new Error(await readErrorMessage(resp));
+    return resp.json();
   },
   cleanupData(payload: {
     action: string;

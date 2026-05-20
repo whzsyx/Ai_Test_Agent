@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from collections import defaultdict
+
+from src.application.mcp.manager_service import MCPManagerService
+from src.application.security.command_profiles import get_profile_registry
+from src.application.security.tool_catalog import FAMILY_RUNNER_MAP, SURFACE_FAMILY_MAP
 from src.registry.agents import AgentRegistry
 from src.registry.mcp import MCPRegistry
 from src.registry.modes import ModeRegistry
@@ -7,7 +12,6 @@ from src.registry.models import ModelRegistry
 from src.registry.skills import SkillRegistry
 from src.registry.tools import ToolRegistry
 from src.schemas.session import RuntimeMode, SessionMode
-from src.application.mcp.manager_service import MCPManagerService
 
 
 class RegistryService:
@@ -78,6 +82,35 @@ class RegistryService:
 
     def list_modes(self):
         return self._mode_registry.list()
+
+    def list_security_profiles(self) -> dict[str, object]:
+        registry = get_profile_registry()
+        grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for p in registry.list_all():
+            grouped[p.tool_family].append({
+                "profile_key": p.profile_key,
+                "tool_name": p.tool_name,
+                "description": p.description,
+                "tool_family": p.tool_family,
+                "surface_types": list(p.surface_types),
+                "risk_level": p.risk_level,
+                "requires_approval": p.requires_approval,
+                "timeout_seconds": p.timeout_seconds,
+            })
+        families = [
+            {
+                "family": family,
+                "runner_key": FAMILY_RUNNER_MAP.get(family, "security-scan-runner"),
+                "profiles": profiles,
+            }
+            for family, profiles in grouped.items()
+        ]
+        return {
+            "families": families,
+            "surface_family_map": dict(SURFACE_FAMILY_MAP),
+            "family_runner_map": dict(FAMILY_RUNNER_MAP),
+            "total_count": sum(len(f["profiles"]) for f in families),
+        }
 
     def framework_summary(self) -> dict[str, object]:
         return {

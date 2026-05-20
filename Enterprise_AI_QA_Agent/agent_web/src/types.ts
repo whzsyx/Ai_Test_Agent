@@ -999,3 +999,27 @@ export interface UploadedAttachmentRecord {
   uploaded_at: string;
   metadata: Record<string, unknown>;
 }
+
+export interface SecurityProfileDescriptor {
+  profile_key: string;
+  tool_name: string;
+  description: string;
+  tool_family: string;
+  surface_types: string[];
+  risk_level: string;
+  requires_approval: boolean;
+  timeout_seconds: number;
+}
+
+export interface SecurityFamilyGroup {
+  family: string;
+  runner_key: string;
+  profiles: SecurityProfileDescriptor[];
+}
+
+export interface SecurityProfilesResponse {
+  families: SecurityFamilyGroup[];
+  surface_family_map: Record<string, string[]>;
+  family_runner_map: Record<string, string>;
+  total_count: number;
+}
