@@ -605,6 +605,120 @@ class PostgresSessionStore:
                     return {"oldest": row["oldest"], "newest": row["newest"]}
         return await asyncio.to_thread(_do)
 
+    async def bulk_export(self, progress_fn=None) -> list[dict]:
+        return await asyncio.to_thread(self._bulk_export_sync, progress_fn)
+
+    def _bulk_export_sync(self, progress_fn=None) -> list[dict]:
+        """Batch-streamed export: iterate sessions in chunks, 5 queries per chunk."""
+        s_tbl = self._settings.postgres_session_table
+        m_tbl = self._settings.postgres_message_table
+        e_tbl = self._settings.postgres_event_table
+        snap_tbl = self._settings.postgres_snapshot_table
+        a_tbl = self._settings.postgres_approval_table
+        batch_size = 500
+
+        def _iso(v: object) -> str | None:
+            return v.isoformat() if hasattr(v, "isoformat") else None
+
+        bundle: list[dict] = []
+        with postgres_connect(self._settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT id FROM {s_tbl} ORDER BY updated_at DESC")
+                all_ids = [row["id"] for row in (cur.fetchall() or [])]
+
+            for i in range(0, len(all_ids), batch_size):
+                chunk_ids = all_ids[i : i + batch_size]
+                if progress_fn:
+                    progress_fn(min(i + len(chunk_ids), len(all_ids)))
+                placeholders = ",".join(["%s"] * len(chunk_ids))
+
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT * FROM {s_tbl} WHERE id IN ({placeholders}) ORDER BY updated_at DESC",
+                        chunk_ids,
+                    )
+                    session_rows = cur.fetchall() or []
+
+                    cur.execute(
+                        f"SELECT * FROM {m_tbl} WHERE session_id IN ({placeholders}) ORDER BY session_id, created_at",
+                        chunk_ids,
+                    )
+                    msg_rows = cur.fetchall() or []
+
+                    cur.execute(
+                        f"SELECT * FROM {e_tbl} WHERE session_id IN ({placeholders}) ORDER BY session_id, timestamp",
+                        chunk_ids,
+                    )
+                    event_rows = cur.fetchall() or []
+
+                    cur.execute(
+                        f"SELECT * FROM {snap_tbl} WHERE session_id IN ({placeholders}) ORDER BY session_id, version",
+                        chunk_ids,
+                    )
+                    snap_rows = cur.fetchall() or []
+
+                    cur.execute(
+                        f"SELECT * FROM {a_tbl} WHERE session_id IN ({placeholders}) ORDER BY session_id, created_at",
+                        chunk_ids,
+                    )
+                    approval_rows = cur.fetchall() or []
+
+                from collections import defaultdict
+                msgs_map: dict[str, list] = defaultdict(list)
+                for r in msg_rows:
+                    msgs_map[r["session_id"]].append(r)
+                events_map: dict[str, list] = defaultdict(list)
+                for r in event_rows:
+                    events_map[r["session_id"]].append(r)
+                snaps_map: dict[str, list] = defaultdict(list)
+                for r in snap_rows:
+                    snaps_map[r["session_id"]].append(r)
+                approvals_map: dict[str, list] = defaultdict(list)
+                for r in approval_rows:
+                    approvals_map[r["session_id"]].append(r)
+
+                for s in session_rows:
+                    sid = s["id"]
+                    bundle.append({
+                        "id": sid,
+                        "title": s["title"],
+                        "status": s["status"],
+                        "session_mode": s["session_mode"],
+                        "runtime_mode": s["runtime_mode"],
+                        "mode_key": s["mode_key"],
+                        "created_at": _iso(s["created_at"]),
+                        "updated_at": _iso(s["updated_at"]),
+                        "preferred_model": s.get("preferred_model"),
+                        "selected_agent": s.get("selected_agent"),
+                        "metadata": dict(s.get("metadata") or {}),
+                        "event_count": s["event_count"],
+                        "snapshot_count": s["snapshot_count"],
+                        "messages": [
+                            {"id": m["id"], "role": m["role"], "content": m["content"],
+                             "created_at": _iso(m["created_at"]), "metadata": dict(m.get("metadata") or {})}
+                            for m in msgs_map.get(sid, [])
+                        ],
+                        "events": [
+                            {"type": e["type"], "session_id": sid,
+                             "timestamp": _iso(e["timestamp"]), "payload": dict(e.get("payload") or {})}
+                            for e in events_map.get(sid, [])
+                        ],
+                        "snapshots": [
+                            {"id": sn["id"], "session_id": sid, "version": sn["version"],
+                             "stage": sn["stage"], "created_at": _iso(sn["created_at"]),
+                             "graph_state": dict(sn.get("graph_state") or {})}
+                            for sn in snaps_map.get(sid, [])
+                        ],
+                        "approvals": [
+                            {"id": a["id"], "session_id": sid, "tool_key": a["tool_key"],
+                             "tool_name": a["tool_name"], "reason": a["reason"], "status": a["status"],
+                             "created_at": _iso(a["created_at"]), "resolved_at": _iso(a.get("resolved_at")),
+                             "decision_note": a.get("decision_note"), "metadata": dict(a.get("metadata") or {})}
+                            for a in approvals_map.get(sid, [])
+                        ],
+                    })
+        return bundle
+
 
 def _session_from_row(row: dict, messages: list[ChatMessage]) -> SessionRecord:
     return SessionRecord(

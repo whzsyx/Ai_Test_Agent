@@ -495,21 +495,19 @@ export const api = {
   exportPreview(): Promise<{ ok: boolean; session_count: number }> {
     return request("/api/v1/settings/data/export/preview", { method: "POST" });
   },
-  async exportDownload(): Promise<void> {
-    const resp = await fetch("/api/v1/settings/data/export", { method: "POST" });
-    if (!resp.ok) throw new Error(await readErrorMessage(resp));
-    const blob = await resp.blob();
-    const cd = resp.headers.get("content-disposition") || "";
-    const match = cd.match(/filename="?([^"]+)"?/);
-    const filename = match?.[1] || `qa-agent-backup-${Date.now()}.json`;
-    const url = URL.createObjectURL(blob);
+  exportStart(): Promise<{ ok: boolean; task_id: string; total: number }> {
+    return request("/api/v1/settings/data/export/start", { method: "POST" });
+  },
+  exportProgress(taskId: string): Promise<{ progress: number; total: number; status: string; error?: string }> {
+    return request(`/api/v1/settings/data/export/progress/${taskId}`);
+  },
+  async exportDownload(taskId: string): Promise<void> {
     const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
+    a.href = `/api/v1/settings/data/export/download/${taskId}`;
+    a.download = `qa-agent-backup-${Date.now()}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
   },
   async importData(file: File): Promise<Record<string, unknown>> {
     const form = new FormData();

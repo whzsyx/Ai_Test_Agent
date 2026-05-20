@@ -40,6 +40,7 @@ class SessionStore(Protocol):
     async def count_sessions_by_status(self) -> dict[str, int]: ...
     async def delete_sessions_before(self, cutoff: datetime | None = None) -> int: ...
     async def get_session_date_range(self) -> dict[str, datetime | None]: ...
+    async def bulk_export(self, progress_fn: object = None) -> list[dict]: ...
 
 
 class InMemorySessionStore:
@@ -177,3 +178,48 @@ class InMemorySessionStore:
             return {"oldest": None, "newest": None}
         dates = [s.updated_at or s.created_at for s in self._sessions.values()]
         return {"oldest": min(dates), "newest": max(dates)}
+
+    async def bulk_export(self, progress_fn=None) -> list[dict]:
+        sessions = sorted(self._sessions.values(), key=lambda s: s.updated_at, reverse=True)
+        bundle: list[dict] = []
+        for s in sessions:
+            def _iso(v: object) -> str | None:
+                return v.isoformat() if hasattr(v, "isoformat") else None
+            sid = s.id
+            bundle.append({
+                "id": sid,
+                "title": s.title,
+                "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+                "session_mode": s.session_mode.value if hasattr(s.session_mode, "value") else str(s.session_mode),
+                "runtime_mode": s.runtime_mode.value if hasattr(s.runtime_mode, "value") else str(s.runtime_mode),
+                "mode_key": s.mode_key,
+                "created_at": _iso(s.created_at),
+                "updated_at": _iso(s.updated_at),
+                "preferred_model": s.preferred_model,
+                "selected_agent": s.selected_agent,
+                "metadata": s.metadata,
+                "event_count": s.event_count,
+                "snapshot_count": s.snapshot_count,
+                "messages": [
+                    {"id": m.id, "role": m.role.value if hasattr(m.role, "value") else str(m.role),
+                     "content": m.content, "created_at": _iso(m.created_at), "metadata": m.metadata}
+                    for m in (s.messages or [])
+                ],
+                "events": [
+                    {"type": e.type, "session_id": sid, "timestamp": _iso(e.timestamp), "payload": e.payload}
+                    for e in self._events.get(sid, [])
+                ],
+                "snapshots": [
+                    {"id": sn.id, "session_id": sid, "version": sn.version, "stage": sn.stage,
+                     "created_at": _iso(sn.created_at), "graph_state": sn.graph_state}
+                    for sn in self._snapshots.get(sid, [])
+                ],
+                "approvals": [
+                    {"id": a.id, "session_id": sid, "tool_key": a.tool_key, "tool_name": a.tool_name,
+                     "reason": a.reason, "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                     "created_at": _iso(a.created_at), "resolved_at": _iso(a.resolved_at),
+                     "decision_note": a.decision_note, "metadata": a.metadata}
+                    for a in sorted(self._approvals.get(sid, {}).values(), key=lambda x: x.created_at)
+                ],
+            })
+        return bundle

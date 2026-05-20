@@ -214,12 +214,36 @@ const exportOpen = ref(false);
 const exportLoading = ref(false);
 const exportSessionCount = ref(0);
 const exportDone = ref(false);
+const exportProgress = ref(0);
+const exportTotal = ref(0);
 
 async function doExport() {
   exportLoading.value = true;
+  exportProgress.value = 0;
   try {
-    await api.exportDownload();
-    exportDone.value = true;
+    const { task_id, total } = await api.exportStart();
+    exportTotal.value = total;
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const res = await api.exportProgress(task_id);
+          exportProgress.value = res.progress;
+          if (res.status === "done") {
+            clearInterval(timer);
+            await api.exportDownload(task_id);
+            exportDone.value = true;
+            resolve();
+          } else if (res.status === "error") {
+            clearInterval(timer);
+            reject(new Error(res.error || "Export failed"));
+          }
+        } catch (e) {
+          clearInterval(timer);
+          reject(e);
+        }
+      }, 400);
+    });
   } catch (error) {
     notice.value = error instanceof Error ? error.message : "Export failed";
   } finally {
@@ -525,7 +549,16 @@ async function doCleanupConfirm() {
               <span>{{ t("settings.dm_export_done") }}</span>
             </div>
           </template>
-          <template v-else-if="exportLoading && exportSessionCount === 0">
+          <template v-else-if="exportLoading && exportTotal > 0">
+            <p class="dm-info">{{ t("settings.dm_exporting") }}</p>
+            <div class="dm-progress-wrap">
+              <div class="dm-progress-bar">
+                <div class="dm-progress-fill" :style="{ width: Math.round((exportProgress / exportTotal) * 100) + '%' }"></div>
+              </div>
+              <span class="dm-progress-text">{{ exportProgress }} / {{ exportTotal }}</span>
+            </div>
+          </template>
+          <template v-else-if="exportLoading">
             <div class="dm-loading"><i class="fa-solid fa-spinner fa-spin"></i> {{ t("settings.dm_loading") }}</div>
           </template>
           <template v-else>
@@ -1341,6 +1374,33 @@ async function doCleanupConfirm() {
 .dm-stat strong {
   font-size: 20px;
   font-weight: 700;
+}
+
+.dm-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.dm-progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--general-border, #e2e8f0);
+  overflow: hidden;
+}
+
+.dm-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #3b82f6;
+  transition: width 0.3s ease;
+}
+
+.dm-progress-text {
+  font-size: 12px;
+  color: var(--general-text-secondary, #475569);
+  text-align: right;
 }
 
 .dm-loading {

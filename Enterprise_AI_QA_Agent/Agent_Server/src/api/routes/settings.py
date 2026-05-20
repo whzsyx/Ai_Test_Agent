@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -182,69 +183,79 @@ async def save_general_settings(payload: GeneralSettingsPayload, request: Reques
 # ---------------------------------------------------------------------------
 
 
-@router.post("/data/export")
-async def export_data(request: Request):
-    """Export all session data as a downloadable JSON file."""
+_export_tasks: dict[str, dict] = {}
+
+
+@router.post("/data/export/start")
+async def export_start(request: Request):
+    """Start a background export task, return task_id for progress polling."""
     store = request.app.state.store
-    sessions = await store.list_sessions(limit=5000)
+    total = await store.count_sessions()
+    task_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    _export_tasks[task_id] = {"progress": 0, "total": total, "status": "running", "data": None}
 
-    bundle: list[dict] = []
-    for s in sessions:
-        events = await store.list_events(s.id)
-        snapshots = await store.list_snapshots(s.id)
-        approvals = await store.list_approvals(s.id)
-        bundle.append({
-            "id": s.id,
-            "title": s.title,
-            "status": s.status.value if hasattr(s.status, "value") else str(s.status),
-            "session_mode": s.session_mode.value if hasattr(s.session_mode, "value") else str(s.session_mode),
-            "runtime_mode": s.runtime_mode.value if hasattr(s.runtime_mode, "value") else str(s.runtime_mode),
-            "mode_key": s.mode_key,
-            "created_at": s.created_at.isoformat() if s.created_at else None,
-            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
-            "preferred_model": s.preferred_model,
-            "selected_agent": s.selected_agent,
-            "metadata": s.metadata,
-            "event_count": s.event_count,
-            "snapshot_count": s.snapshot_count,
-            "messages": [
-                {"id": m.id, "role": m.role.value if hasattr(m.role, "value") else str(m.role),
-                 "content": m.content, "created_at": m.created_at.isoformat() if m.created_at else None,
-                 "metadata": m.metadata}
-                for m in (s.messages or [])
-            ],
-            "events": [
-                {"type": e.type, "session_id": e.session_id, "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-                 "payload": e.payload}
-                for e in events
-            ],
-            "snapshots": [
-                {"id": snap.id, "session_id": snap.session_id, "version": snap.version,
-                 "stage": snap.stage, "created_at": snap.created_at.isoformat() if snap.created_at else None,
-                 "graph_state": snap.graph_state}
-                for snap in snapshots
-            ],
-            "approvals": [
-                {"id": a.id, "session_id": a.session_id, "tool_key": a.tool_key, "tool_name": a.tool_name,
-                 "reason": a.reason, "status": a.status.value if hasattr(a.status, "value") else str(a.status),
-                 "created_at": a.created_at.isoformat() if a.created_at else None,
-                 "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
-                 "decision_note": a.decision_note, "metadata": a.metadata}
-                for a in approvals
-            ],
-        })
+    async def _run() -> None:
+        try:
+            def _on_progress(n: int) -> None:
+                _export_tasks[task_id]["progress"] = n
 
-    export_payload = {
-        "version": "1.0",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "session_count": len(bundle),
-        "sessions": bundle,
+            bundle = await store.bulk_export(progress_fn=_on_progress)
+            _export_tasks[task_id]["data"] = bundle
+            _export_tasks[task_id]["progress"] = total
+            _export_tasks[task_id]["status"] = "done"
+        except Exception as exc:
+            _export_tasks[task_id]["status"] = "error"
+            _export_tasks[task_id]["error"] = str(exc)
+
+    asyncio.get_event_loop().create_task(_run())
+    return {"ok": True, "task_id": task_id, "total": total}
+
+
+@router.get("/data/export/progress/{task_id}")
+async def export_progress(task_id: str):
+    """Poll export progress."""
+    task = _export_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Export task not found.")
+    return {
+        "progress": task["progress"],
+        "total": task["total"],
+        "status": task["status"],
+        "error": task.get("error"),
     }
-    content = json.dumps(export_payload, ensure_ascii=False, indent=2)
-    filename = f"qa-agent-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.json"
 
+
+@router.get("/data/export/download/{task_id}")
+async def export_download(task_id: str):
+    """Download completed export data via streaming JSON."""
+    task = _export_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Export task not found.")
+    if task["status"] != "done":
+        raise HTTPException(status_code=409, detail="Export not yet complete.")
+
+    bundle: list[dict] = task["data"]
+    _export_tasks.pop(task_id, None)
+
+    def _stream():
+        header = json.dumps({
+            "version": "1.0",
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "session_count": len(bundle),
+        }, ensure_ascii=False)
+        yield header[:-1].encode("utf-8")
+        yield b',"sessions":['
+
+        for i, session in enumerate(bundle):
+            if i > 0:
+                yield b","
+            yield json.dumps(session, ensure_ascii=False).encode("utf-8")
+
+        yield b"]}"
+
+    filename = f"qa-agent-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.json"
     return StreamingResponse(
-        iter([content]),
+        _stream(),
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
