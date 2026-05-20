@@ -374,7 +374,8 @@ async def cleanup_data(payload: DataManagementRequest, request: Request):
         cutoff = datetime.now(timezone.utc) - timedelta(days=payload.time_range_days)
 
     total_count = await store.count_sessions()
-    affected_count = await store.count_sessions(before=cutoff) if cutoff else total_count
+    retained_count = await store.count_sessions(after=cutoff) if cutoff else 0
+    affected_count = total_count - retained_count if cutoff else total_count
     date_range = await store.get_session_date_range()
 
     if payload.dry_run:
@@ -384,11 +385,12 @@ async def cleanup_data(payload: DataManagementRequest, request: Request):
             ok=True,
             action="cleanup",
             dry_run=True,
-            summary=f"Dry-run: {affected_count} of {total_count} sessions would be deleted.",
+            summary=f"Dry-run: {retained_count} sessions retained, {affected_count} would be deleted.",
             affected_count=affected_count,
             details={
                 "time_range_days": payload.time_range_days,
                 "total_sessions": total_count,
+                "retained_sessions": retained_count,
                 "affected_sessions": affected_count,
                 "oldest_session": oldest.isoformat() if oldest else None,
                 "newest_session": newest.isoformat() if newest else None,

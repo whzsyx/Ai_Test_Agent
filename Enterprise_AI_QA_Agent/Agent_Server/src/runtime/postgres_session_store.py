@@ -540,15 +540,26 @@ class PostgresSessionStore:
 
         return await asyncio.to_thread(_do)
 
-    async def count_sessions(self, before: datetime | None = None) -> int:
+    async def count_sessions(self, before: datetime | None = None, after: datetime | None = None) -> int:
         def _do() -> int:
             with postgres_connect(self._settings) as conn:
                 with conn.cursor() as cur:
-                    if before is None:
-                        cur.execute(f"SELECT COUNT(*) AS cnt FROM {self._settings.postgres_session_table}")
+                    table = self._settings.postgres_session_table
+                    if before is None and after is None:
+                        cur.execute(f"SELECT COUNT(id) AS cnt FROM {table}")
+                    elif before and after:
+                        cur.execute(
+                            f"SELECT COUNT(id) AS cnt FROM {table} WHERE updated_at >= %s AND updated_at < %s",
+                            (after, before),
+                        )
+                    elif after:
+                        cur.execute(
+                            f"SELECT COUNT(id) AS cnt FROM {table} WHERE updated_at >= %s",
+                            (after,),
+                        )
                     else:
                         cur.execute(
-                            f"SELECT COUNT(*) AS cnt FROM {self._settings.postgres_session_table} WHERE updated_at < %s",
+                            f"SELECT COUNT(id) AS cnt FROM {table} WHERE updated_at < %s",
                             (before,),
                         )
                     row = cur.fetchone()
@@ -560,7 +571,7 @@ class PostgresSessionStore:
             with postgres_connect(self._settings) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        f"SELECT status, COUNT(*) AS cnt FROM {self._settings.postgres_session_table} GROUP BY status"
+                        f"SELECT status, COUNT(id) AS cnt FROM {self._settings.postgres_session_table} GROUP BY status"
                     )
                     rows = cur.fetchall() or []
                     return {row["status"]: int(row["cnt"]) for row in rows}

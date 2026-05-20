@@ -36,7 +36,7 @@ class SessionStore(Protocol):
         reason: str | None = None,
     ) -> ToolApprovalRequest: ...
     async def delete_session(self, session_id: str) -> bool: ...
-    async def count_sessions(self, before: datetime | None = None) -> int: ...
+    async def count_sessions(self, before: datetime | None = None, after: datetime | None = None) -> int: ...
     async def count_sessions_by_status(self) -> dict[str, int]: ...
     async def delete_sessions_before(self, cutoff: datetime | None = None) -> int: ...
     async def get_session_date_range(self) -> dict[str, datetime | None]: ...
@@ -147,10 +147,18 @@ class InMemorySessionStore:
             self._approvals.pop(session_id, None)
             return True
 
-    async def count_sessions(self, before: datetime | None = None) -> int:
-        if before is None:
+    async def count_sessions(self, before: datetime | None = None, after: datetime | None = None) -> int:
+        if before is None and after is None:
             return len(self._sessions)
-        return sum(1 for s in self._sessions.values() if (s.updated_at or s.created_at) < before)
+        count = 0
+        for s in self._sessions.values():
+            t = s.updated_at or s.created_at
+            if after and t < after:
+                continue
+            if before and t >= before:
+                continue
+            count += 1
+        return count
 
     async def count_sessions_by_status(self) -> dict[str, int]:
         counts: dict[str, int] = {}

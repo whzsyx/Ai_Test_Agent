@@ -279,7 +279,7 @@ async function doImport() {
 const cleanupOpen = ref(false);
 const cleanupLoading = ref(false);
 const cleanupDays = ref<number>(30);
-const cleanupPreview = ref<{ affected_count: number; total_sessions: number; oldest_session: string | null; newest_session: string | null } | null>(null);
+const cleanupPreview = ref<{ affected_count: number; retained_count: number; total_sessions: number; oldest_session: string | null; newest_session: string | null } | null>(null);
 const cleanupDone = ref(false);
 
 function formatDateShort(iso: string | null): string {
@@ -303,6 +303,7 @@ async function doCleanupPreview() {
     const details = (res.details || {}) as Record<string, unknown>;
     cleanupPreview.value = {
       affected_count: Number(res.affected_count || 0),
+      retained_count: Number(details.retained_sessions || 0),
       total_sessions: Number(details.total_sessions || 0),
       oldest_session: (details.oldest_session as string) || null,
       newest_session: (details.newest_session as string) || null,
@@ -654,7 +655,7 @@ async function doCleanupConfirm() {
             <template v-if="cleanupPreview">
               <div class="dm-warning">
                 <i class="fa-solid fa-triangle-exclamation"></i>
-                <span>{{ t("settings.dm_cleanup_preview", { count: cleanupPreview.affected_count, total: cleanupPreview.total_sessions }) }}</span>
+                <span>{{ t("settings.dm_cleanup_preview", { retained: cleanupPreview.retained_count, delete: cleanupPreview.affected_count, total: cleanupPreview.total_sessions }) }}</span>
               </div>
               <div v-if="cleanupPreview.oldest_session" class="dm-date-range">
                 <i class="fa-solid fa-calendar-range"></i>
