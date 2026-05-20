@@ -247,6 +247,7 @@ export default {
   "settings.dm_cleanup_range": "Rango de Limpieza",
   "settings.dm_cleanup_scan": "Vista Previa",
   "settings.dm_cleanup_preview": "Se eliminarán {count} sesiones (de {total} en total). Esta acción es irreversible. Por favor confirme.",
+  "settings.dm_cleanup_date_range": "Rango de datos: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Confirmar eliminación de {count}",
   "settings.dm_cleanup_done": "Limpieza completada. Las sesiones relacionadas han sido eliminadas.",
   "settings.data_cleanup_all": "Todos",

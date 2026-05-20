@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Rentang Pembersihan",
   "settings.dm_cleanup_scan": "Pratinjau Pindai",
   "settings.dm_cleanup_preview": "{count} sesi (dari total {total}) akan dihapus. Tindakan ini tidak dapat dibatalkan. Silakan konfirmasi.",
+  "settings.dm_cleanup_date_range": "Rentang data: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Konfirmasi hapus {count}",
   "settings.dm_cleanup_done": "Pembersihan selesai. Sesi terkait telah dihapus.",
   "settings.data_cleanup_all": "Semua",

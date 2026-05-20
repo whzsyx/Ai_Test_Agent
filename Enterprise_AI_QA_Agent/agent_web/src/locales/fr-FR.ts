@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Plage de nettoyage",
   "settings.dm_cleanup_scan": "Aperçu du scan",
   "settings.dm_cleanup_preview": "{count} sessions (sur {total}) seront supprimées. Cette action est irréversible. Veuillez confirmer.",
+  "settings.dm_cleanup_date_range": "Plage de données : {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Confirmer la suppression de {count}",
   "settings.dm_cleanup_done": "Nettoyage terminé. Les sessions concernées ont été supprimées.",
   "settings.data_cleanup_all": "Tout",

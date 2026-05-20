@@ -42,8 +42,9 @@ class PostgresSessionStore:
         limit: int | None = None,
         offset: int = 0,
         mode_key: str | None = None,
+        cursor_before: datetime | None = None,
     ) -> list[SessionRecord]:
-        return await asyncio.to_thread(self._list_sessions_sync, limit, offset, mode_key)
+        return await asyncio.to_thread(self._list_sessions_sync, limit, offset, mode_key, cursor_before)
 
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         await asyncio.to_thread(self._append_event_sync, session_id, event)
@@ -179,6 +180,18 @@ class PostgresSessionStore:
                     f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_approval_table}_session_created "
                     f"ON {self._settings.postgres_approval_table} (session_id, created_at ASC)"
                 )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_session_table}_mode_updated "
+                    f"ON {self._settings.postgres_session_table} (mode_key, updated_at DESC)"
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_session_table}_status "
+                    f"ON {self._settings.postgres_session_table} (status)"
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_session_table}_created "
+                    f"ON {self._settings.postgres_session_table} (created_at DESC)"
+                )
 
     def _save_session_sync(self, session: SessionRecord) -> SessionRecord:
         now = datetime.utcnow()
@@ -283,18 +296,24 @@ class PostgresSessionStore:
         limit: int | None = None,
         offset: int = 0,
         mode_key: str | None = None,
+        cursor_before: datetime | None = None,
     ) -> list[SessionRecord]:
-        query = f"""
-            SELECT * FROM {self._settings.postgres_session_table}
-            {"WHERE mode_key = %s" if mode_key else ""}
-            ORDER BY updated_at DESC
-        """
+        conditions: list[str] = []
         params: list[object] = []
         if mode_key:
+            conditions.append("mode_key = %s")
             params.append(mode_key)
+        if cursor_before is not None:
+            conditions.append("updated_at < %s")
+            params.append(cursor_before)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"SELECT * FROM {self._settings.postgres_session_table} {where} ORDER BY updated_at DESC"
         if limit is not None:
-            query += " LIMIT %s OFFSET %s"
-            params = [*params, max(int(limit or 0), 0), max(int(offset or 0), 0)]
+            query += " LIMIT %s"
+            params.append(max(int(limit or 0), 0))
+            if cursor_before is None and offset:
+                query += " OFFSET %s"
+                params.append(max(int(offset or 0), 0))
         with postgres_connect(self._settings) as conn:
             with conn.cursor() as cur:
                 if params:
@@ -519,6 +538,71 @@ class PostgresSessionStore:
                     conn.commit()
                     return deleted
 
+        return await asyncio.to_thread(_do)
+
+    async def count_sessions(self, before: datetime | None = None) -> int:
+        def _do() -> int:
+            with postgres_connect(self._settings) as conn:
+                with conn.cursor() as cur:
+                    if before is None:
+                        cur.execute(f"SELECT COUNT(*) AS cnt FROM {self._settings.postgres_session_table}")
+                    else:
+                        cur.execute(
+                            f"SELECT COUNT(*) AS cnt FROM {self._settings.postgres_session_table} WHERE updated_at < %s",
+                            (before,),
+                        )
+                    row = cur.fetchone()
+                    return int(row["cnt"]) if row else 0
+        return await asyncio.to_thread(_do)
+
+    async def count_sessions_by_status(self) -> dict[str, int]:
+        def _do() -> dict[str, int]:
+            with postgres_connect(self._settings) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT status, COUNT(*) AS cnt FROM {self._settings.postgres_session_table} GROUP BY status"
+                    )
+                    rows = cur.fetchall() or []
+                    return {row["status"]: int(row["cnt"]) for row in rows}
+        return await asyncio.to_thread(_do)
+
+    async def delete_sessions_before(self, cutoff: datetime | None = None) -> int:
+        def _do() -> int:
+            with postgres_connect(self._settings) as conn:
+                with conn.cursor() as cur:
+                    if cutoff is None:
+                        where = ""
+                        params: tuple = ()
+                    else:
+                        where = "WHERE updated_at < %s"
+                        params = (cutoff,)
+                    id_query = f"SELECT id FROM {self._settings.postgres_session_table} {where}"
+                    for tbl in (
+                        self._settings.postgres_approval_table,
+                        self._settings.postgres_snapshot_table,
+                        self._settings.postgres_event_table,
+                        self._settings.postgres_message_table,
+                    ):
+                        cur.execute(f"DELETE FROM {tbl} WHERE session_id IN ({id_query})", params)
+                    cur.execute(
+                        f"DELETE FROM {self._settings.postgres_session_table} {where} RETURNING id",
+                        params,
+                    )
+                    deleted = len(cur.fetchall())
+                    conn.commit()
+                    return deleted
+        return await asyncio.to_thread(_do)
+
+    async def get_session_date_range(self) -> dict[str, datetime | None]:
+        def _do() -> dict[str, datetime | None]:
+            with postgres_connect(self._settings) as conn:
+                with conn.cursor() as cur:
+                    tbl = self._settings.postgres_session_table
+                    cur.execute(f"SELECT MIN(updated_at) AS oldest, MAX(updated_at) AS newest FROM {tbl}")
+                    row = cur.fetchone()
+                    if not row:
+                        return {"oldest": None, "newest": None}
+                    return {"oldest": row["oldest"], "newest": row["newest"]}
         return await asyncio.to_thread(_do)
 
 

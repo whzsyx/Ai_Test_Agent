@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "清理範圍",
   "settings.dm_cleanup_scan": "掃描預覽",
   "settings.dm_cleanup_preview": "將刪除 {count} 個會話（共 {total} 個）。此操作不可逆，請確認。",
+  "settings.dm_cleanup_date_range": "資料時間範圍：{oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "確認刪除 {count} 個",
   "settings.dm_cleanup_done": "清理完成，相關會話已刪除。",
   "settings.data_cleanup_all": "全部",

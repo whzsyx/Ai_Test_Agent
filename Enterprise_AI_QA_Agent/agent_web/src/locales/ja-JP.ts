@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "クリーンアップ範囲",
   "settings.dm_cleanup_scan": "スキャンプレビュー",
   "settings.dm_cleanup_preview": "{count} 件のセッション（全 {total} 件中）が削除されます。この操作は元に戻せません。ご確認ください。",
+  "settings.dm_cleanup_date_range": "データ期間：{oldest} ～ {newest}",
   "settings.dm_cleanup_confirm": "{count} 件の削除を確認",
   "settings.dm_cleanup_done": "クリーンアップ完了。関連セッションが削除されました。",
   "settings.data_cleanup_all": "すべて",

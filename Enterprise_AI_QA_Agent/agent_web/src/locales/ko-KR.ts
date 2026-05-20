@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "정리 범위",
   "settings.dm_cleanup_scan": "스캔 미리보기",
   "settings.dm_cleanup_preview": "{count}개 세션(총 {total}개 중)이 삭제됩니다. 이 작업은 되돌릴 수 없습니다. 확인하세요.",
+  "settings.dm_cleanup_date_range": "데이터 기간: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "{count}개 삭제 확인",
   "settings.dm_cleanup_done": "정리 완료. 관련 세션이 삭제되었습니다.",
   "settings.data_cleanup_all": "전체",

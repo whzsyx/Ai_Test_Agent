@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Cleanup Range",
   "settings.dm_cleanup_scan": "Scan Preview",
   "settings.dm_cleanup_preview": "{count} sessions (out of {total}) will be deleted. This action is irreversible. Please confirm.",
+  "settings.dm_cleanup_date_range": "Data range: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Confirm Delete {count}",
   "settings.dm_cleanup_done": "Cleanup complete. Related sessions have been deleted.",
   "settings.data_cleanup_all": "All",

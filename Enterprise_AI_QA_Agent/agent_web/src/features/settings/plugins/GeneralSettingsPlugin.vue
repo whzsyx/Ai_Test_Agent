@@ -255,8 +255,14 @@ async function doImport() {
 const cleanupOpen = ref(false);
 const cleanupLoading = ref(false);
 const cleanupDays = ref<number>(30);
-const cleanupPreview = ref<{ affected_count: number; total_sessions: number } | null>(null);
+const cleanupPreview = ref<{ affected_count: number; total_sessions: number; oldest_session: string | null; newest_session: string | null } | null>(null);
 const cleanupDone = ref(false);
+
+function formatDateShort(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 const cleanupDaysOptions = [
   { value: 7, label: "7" },
@@ -270,9 +276,12 @@ async function doCleanupPreview() {
   cleanupLoading.value = true;
   try {
     const res = await api.cleanupData({ action: "cleanup", dry_run: true, time_range_days: cleanupDays.value || null }) as Record<string, unknown>;
+    const details = (res.details || {}) as Record<string, unknown>;
     cleanupPreview.value = {
       affected_count: Number(res.affected_count || 0),
-      total_sessions: Number((res.details as Record<string, unknown>)?.total_sessions || 0),
+      total_sessions: Number(details.total_sessions || 0),
+      oldest_session: (details.oldest_session as string) || null,
+      newest_session: (details.newest_session as string) || null,
     };
   } catch (error) {
     notice.value = error instanceof Error ? error.message : "Preview failed";
@@ -613,6 +622,10 @@ async function doCleanupConfirm() {
               <div class="dm-warning">
                 <i class="fa-solid fa-triangle-exclamation"></i>
                 <span>{{ t("settings.dm_cleanup_preview", { count: cleanupPreview.affected_count, total: cleanupPreview.total_sessions }) }}</span>
+              </div>
+              <div v-if="cleanupPreview.oldest_session" class="dm-date-range">
+                <i class="fa-solid fa-calendar-range"></i>
+                <span>{{ t("settings.dm_cleanup_date_range", { oldest: formatDateShort(cleanupPreview.oldest_session), newest: formatDateShort(cleanupPreview.newest_session) }) }}</span>
               </div>
             </template>
           </template>
@@ -1375,6 +1388,23 @@ async function doCleanupConfirm() {
 }
 
 .dm-warning i { margin-top: 2px; flex-shrink: 0; }
+
+.dm-date-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.08);
+  color: #1d4ed8;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+:global(:root[data-theme="dark"]) .dm-date-range {
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+}
 
 .dm-actions {
   display: flex;

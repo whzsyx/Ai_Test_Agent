@@ -254,8 +254,8 @@ async def export_data(request: Request):
 async def export_data_preview(request: Request):
     """Preview export: return session count without downloading."""
     store = request.app.state.store
-    sessions = await store.list_sessions(limit=5000)
-    return {"ok": True, "session_count": len(sessions)}
+    count = await store.count_sessions()
+    return {"ok": True, "session_count": count}
 
 
 @router.post("/data/import")
@@ -357,27 +357,30 @@ async def import_data(request: Request, file: UploadFile = File(...)):
 async def cleanup_data(payload: DataManagementRequest, request: Request):
     """Clean up historical session data with dry-run and confirmation support."""
     store = request.app.state.store
-    sessions = await store.list_sessions(limit=5000)
 
+    cutoff: datetime | None = None
     if payload.time_range_days and payload.time_range_days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=payload.time_range_days)
-        affected = [s for s in sessions if s.updated_at and s.updated_at < cutoff]
-    else:
-        affected = list(sessions)
 
-    affected_count = len(affected)
+    total_count = await store.count_sessions()
+    affected_count = await store.count_sessions(before=cutoff) if cutoff else total_count
+    date_range = await store.get_session_date_range()
 
     if payload.dry_run:
+        oldest = date_range.get("oldest")
+        newest = date_range.get("newest")
         return DataManagementResponse(
             ok=True,
             action="cleanup",
             dry_run=True,
-            summary=f"Dry-run: {affected_count} sessions would be deleted.",
+            summary=f"Dry-run: {affected_count} of {total_count} sessions would be deleted.",
             affected_count=affected_count,
             details={
                 "time_range_days": payload.time_range_days,
-                "total_sessions": len(sessions),
+                "total_sessions": total_count,
                 "affected_sessions": affected_count,
+                "oldest_session": oldest.isoformat() if oldest else None,
+                "newest_session": newest.isoformat() if newest else None,
             },
         )
 
@@ -390,13 +393,7 @@ async def cleanup_data(payload: DataManagementRequest, request: Request):
             affected_count=affected_count,
         )
 
-    deleted_count = 0
-    for session in affected:
-        try:
-            await store.delete_session(session.id)
-            deleted_count += 1
-        except Exception:
-            pass
+    deleted_count = await store.delete_sessions_before(cutoff)
 
     return DataManagementResponse(
         ok=True,

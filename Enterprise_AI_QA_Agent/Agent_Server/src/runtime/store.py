@@ -18,6 +18,7 @@ class SessionStore(Protocol):
         limit: int | None = None,
         offset: int = 0,
         mode_key: str | None = None,
+        cursor_before: datetime | None = None,
     ) -> list[SessionRecord]: ...
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None: ...
     async def list_events(self, session_id: str) -> list[ExecutionEvent]: ...
@@ -35,6 +36,10 @@ class SessionStore(Protocol):
         reason: str | None = None,
     ) -> ToolApprovalRequest: ...
     async def delete_session(self, session_id: str) -> bool: ...
+    async def count_sessions(self, before: datetime | None = None) -> int: ...
+    async def count_sessions_by_status(self) -> dict[str, int]: ...
+    async def delete_sessions_before(self, cutoff: datetime | None = None) -> int: ...
+    async def get_session_date_range(self) -> dict[str, datetime | None]: ...
 
 
 class InMemorySessionStore:
@@ -63,10 +68,13 @@ class InMemorySessionStore:
         limit: int | None = None,
         offset: int = 0,
         mode_key: str | None = None,
+        cursor_before: datetime | None = None,
     ) -> list[SessionRecord]:
         sessions = sorted(self._sessions.values(), key=lambda item: item.updated_at, reverse=True)
         if mode_key:
             sessions = [item for item in sessions if item.mode_key == mode_key]
+        if cursor_before is not None:
+            sessions = [s for s in sessions if s.updated_at < cursor_before]
         start = max(int(offset or 0), 0)
         if limit is None:
             return sessions[start:]
@@ -137,3 +145,35 @@ class InMemorySessionStore:
             self._snapshots.pop(session_id, None)
             self._approvals.pop(session_id, None)
             return True
+
+    async def count_sessions(self, before: datetime | None = None) -> int:
+        if before is None:
+            return len(self._sessions)
+        return sum(1 for s in self._sessions.values() if (s.updated_at or s.created_at) < before)
+
+    async def count_sessions_by_status(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for s in self._sessions.values():
+            key = s.status.value
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    async def delete_sessions_before(self, cutoff: datetime | None = None) -> int:
+        async with self._lock:
+            if cutoff is None:
+                ids = list(self._sessions.keys())
+            else:
+                ids = [sid for sid, s in self._sessions.items() if (s.updated_at or s.created_at) < cutoff]
+            for sid in ids:
+                del self._sessions[sid]
+                self._events.pop(sid, None)
+                self._queues.pop(sid, None)
+                self._snapshots.pop(sid, None)
+                self._approvals.pop(sid, None)
+            return len(ids)
+
+    async def get_session_date_range(self) -> dict[str, datetime | None]:
+        if not self._sessions:
+            return {"oldest": None, "newest": None}
+        dates = [s.updated_at or s.created_at for s in self._sessions.values()]
+        return {"oldest": min(dates), "newest": max(dates)}

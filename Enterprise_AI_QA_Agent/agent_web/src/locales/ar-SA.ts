@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "نطاق التنظيف",
   "settings.dm_cleanup_scan": "معاينة المسح",
   "settings.dm_cleanup_preview": "سيتم حذف {count} جلسة (من أصل {total}). هذا الإجراء لا يمكن التراجع عنه. يرجى التأكيد.",
+  "settings.dm_cleanup_date_range": "نطاق البيانات: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "تأكيد حذف {count}",
   "settings.dm_cleanup_done": "اكتمل التنظيف. تم حذف الجلسات المعنية.",
   "settings.data_cleanup_all": "الكل",

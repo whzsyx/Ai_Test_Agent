@@ -749,11 +749,25 @@ class ToolRuntimeService:
         sessions = [current_session]
         full_sessions = [current_session]
         if scope == "all_sessions":
-            sessions = await store.list_sessions()
-            # Only load full transcripts for actions that actually need message bodies.
+            if action == "count_sessions":
+                status_counts = await store.count_sessions_by_status()
+                total = sum(status_counts.values())
+                recent = await store.list_sessions(limit=limit)
+                return {
+                    "summary": f"Counted {total} stored session(s) for scope 'all_sessions'.",
+                    "scope": "all_sessions",
+                    "session_count": total,
+                    "status_counts": status_counts,
+                    "sessions": [self._session_overview(item) for item in recent],
+                    "metrics": {
+                        "session_count": total,
+                        "status_kind_count": len(status_counts),
+                    },
+                }
+            sessions = await store.list_sessions(limit=limit)
             if action == "list_questions":
                 full_sessions = []
-                for item in sessions[:limit]:
+                for item in sessions:
                     loaded = await store.get_session(item.id)
                     if loaded is not None:
                         full_sessions.append(loaded)

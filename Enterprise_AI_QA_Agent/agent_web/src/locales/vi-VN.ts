@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Phạm vi Dọn dẹp",
   "settings.dm_cleanup_scan": "Xem trước Quét",
   "settings.dm_cleanup_preview": "{count} phiên (trong tổng số {total}) sẽ bị xóa. Hành động này không thể hoàn tác. Vui lòng xác nhận.",
+  "settings.dm_cleanup_date_range": "Phạm vi dữ liệu: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Xác nhận xóa {count}",
   "settings.dm_cleanup_done": "Dọn dẹp hoàn tất. Các phiên liên quan đã bị xóa.",
   "settings.data_cleanup_all": "Tất cả",

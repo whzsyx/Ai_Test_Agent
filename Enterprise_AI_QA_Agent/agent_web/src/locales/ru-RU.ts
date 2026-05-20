@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Диапазон очистки",
   "settings.dm_cleanup_scan": "Предварительный просмотр",
   "settings.dm_cleanup_preview": "Будет удалено {count} сеансов (из {total}). Это действие необратимо. Пожалуйста, подтвердите.",
+  "settings.dm_cleanup_date_range": "Диапазон данных: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Подтвердить удаление {count}",
   "settings.dm_cleanup_done": "Очистка завершена. Связанные сеансы удалены.",
   "settings.data_cleanup_all": "Все",

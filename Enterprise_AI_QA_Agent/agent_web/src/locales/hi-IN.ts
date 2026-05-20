@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "सफ़ाई सीमा",
   "settings.dm_cleanup_scan": "स्कैन पूर्वावलोकन",
   "settings.dm_cleanup_preview": "{count} सत्र (कुल {total} में से) हटाए जाएंगे। यह क्रिया अपरिवर्तनीय है। कृपया पुष्टि करें।",
+  "settings.dm_cleanup_date_range": "डेटा सीमा: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "{count} की हटाने की पुष्टि करें",
   "settings.dm_cleanup_done": "सफ़ाई पूर्ण। संबंधित सत्र हटा दिए गए हैं।",
   "settings.data_cleanup_all": "सभी",

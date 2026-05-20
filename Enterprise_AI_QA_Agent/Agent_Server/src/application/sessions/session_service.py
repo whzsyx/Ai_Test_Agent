@@ -69,7 +69,7 @@ class SessionService:
         self._approval_resume_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def list_sessions(self) -> list[SessionSummary]:
-        sessions = await self._store.list_sessions()
+        sessions = await self._store.list_sessions(limit=200)
         return [await self._to_summary(item) for item in sessions]
 
     async def list_sessions_page(

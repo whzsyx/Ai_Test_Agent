@@ -242,6 +242,7 @@ export default {
   "settings.dm_days_suffix": "天前",
   "settings.dm_cleanup_scan": "扫描预览",
   "settings.dm_cleanup_preview": "将删除 {count} 个会话（共 {total} 个）。此操作不可逆，请确认。",
+  "settings.dm_cleanup_date_range": "数据时间范围：{oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "确认删除 {count} 个",
   "settings.dm_cleaning": "正在清理...",
   "settings.dm_cleanup_done": "清理完成，相关会话已删除。",

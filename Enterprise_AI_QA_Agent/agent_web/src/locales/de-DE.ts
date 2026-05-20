@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Bereinigungsbereich",
   "settings.dm_cleanup_scan": "Vorschau scannen",
   "settings.dm_cleanup_preview": "{count} Sitzungen (von insgesamt {total}) werden gelöscht. Dieser Vorgang ist unwiderruflich. Bitte bestätigen.",
+  "settings.dm_cleanup_date_range": "Datenzeitraum: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "{count} Löschungen bestätigen",
   "settings.dm_cleanup_done": "Bereinigung abgeschlossen. Betroffene Sitzungen wurden gelöscht.",
   "settings.data_cleanup_all": "Alle",

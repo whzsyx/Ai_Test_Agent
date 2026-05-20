@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "Intervalo de Limpeza",
   "settings.dm_cleanup_scan": "Pré-visualização",
   "settings.dm_cleanup_preview": "{count} sessões (de {total} no total) serão excluídas. Esta ação é irreversível. Por favor confirme.",
+  "settings.dm_cleanup_date_range": "Intervalo de dados: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "Confirmar exclusão de {count}",
   "settings.dm_cleanup_done": "Limpeza concluída. As sessões relacionadas foram excluídas.",
   "settings.data_cleanup_all": "Todos",

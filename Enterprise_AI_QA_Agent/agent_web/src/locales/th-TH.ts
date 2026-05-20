@@ -239,6 +239,7 @@ export default {
   "settings.dm_cleanup_range": "ช่วงการล้างข้อมูล",
   "settings.dm_cleanup_scan": "แสดงตัวอย่างการสแกน",
   "settings.dm_cleanup_preview": "จะลบ {count} เซสชัน (จากทั้งหมด {total}) การดำเนินการนี้ไม่สามารถย้อนกลับได้ กรุณายืนยัน",
+  "settings.dm_cleanup_date_range": "ช่วงข้อมูล: {oldest} ~ {newest}",
   "settings.dm_cleanup_confirm": "ยืนยันการลบ {count} รายการ",
   "settings.dm_cleanup_done": "การล้างข้อมูลเสร็จสมบูรณ์ เซสชันที่เกี่ยวข้องถูกลบแล้ว",
   "settings.data_cleanup_all": "ทั้งหมด",
