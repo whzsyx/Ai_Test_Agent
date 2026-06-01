@@ -1,0 +1,144 @@
+html {
+  overflow-y: scroll !important;
+}
+
+:root {
+  /* Next.js / Vercel inspired monochrome palette */
+  --vp-c-brand-1: #111827;
+  --vp-c-brand-2: #374151;
+  --vp-c-brand-3: #6B7280;
+  
+  --vp-c-brand: var(--vp-c-brand-1);
+  --vp-c-brand-light: var(--vp-c-brand-2);
+  --vp-c-brand-dark: #000000;
+  
+  --vp-c-text-1: #111827;
+  --vp-c-text-2: #4B5563;
+  --vp-c-border: #E5E7EB;
+  --vp-c-divider: #E5E7EB;
+  
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-soft: #FAFAFA;
+  --vp-c-bg-mute: #F3F4F6;
+  
+  --vp-button-brand-border: #111827;
+  --vp-button-brand-text: #ffffff;
+  --vp-button-brand-bg: #111827;
+  --vp-button-brand-hover-border: #374151;
+  --vp-button-brand-hover-text: #ffffff;
+  --vp-button-brand-hover-bg: #374151;
+  --vp-button-brand-active-border: #000000;
+  --vp-button-brand-active-text: #ffffff;
+  --vp-button-brand-active-bg: #000000;
+}
+
+.dark {
+  --vp-c-brand-1: #ffffff;
+  --vp-c-brand-2: #F3F4F6;
+  --vp-c-brand-3: #D1D5DB;
+  
+  --vp-c-brand: var(--vp-c-brand-1);
+  --vp-c-brand-light: var(--vp-c-brand-2);
+  --vp-c-brand-dark: #E5E7EB;
+  
+  --vp-c-text-1: #F9FAFB;
+  --vp-c-text-2: #9CA3AF;
+  --vp-c-border: #374151;
+  --vp-c-divider: #374151;
+  
+  --vp-c-bg: #030712; /* Deep dark slate */
+  --vp-c-bg-soft: #111827;
+  --vp-c-bg-mute: #1F2937;
+  
+  --vp-button-brand-border: #ffffff;
+  --vp-button-brand-text: #111827;
+  --vp-button-brand-bg: #ffffff;
+  --vp-button-brand-hover-border: #F3F4F6;
+  --vp-button-brand-hover-text: #111827;
+  --vp-button-brand-hover-bg: #F3F4F6;
+  --vp-button-brand-active-border: #E5E7EB;
+  --vp-button-brand-active-text: #111827;
+  --vp-button-brand-active-bg: #E5E7EB;
+}
+
+/* Nav & Sidebar Cleanups */
+.VPNavBar {
+  border-bottom: 1px solid var(--vp-c-border);
+  background-color: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(12px);
+}
+.dark .VPNavBar {
+  background-color: rgba(3, 7, 18, 0.8) !important;
+}
+
+.VPNavBarTitle .logo {
+  height: 32px !important;
+  width: auto !important;
+  margin-right: 10px !important;
+}
+.dark .VPNavBarTitle .logo {
+  filter: invert(1);
+}
+.VPNavBarTitle .text {
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+}
+
+/* Fix horizontal jitter between home and doc pages caused by sidebar width changes */
+@media (min-width: 960px) {
+  .VPNavBarTitle {
+    /* Lock the title container width to match the sidebar width consistently */
+    width: calc(var(--vp-sidebar-width) - 64px) !important;
+    flex-shrink: 0;
+  }
+  
+  /* Ensure the title is consistently aligned */
+  .VPNavBarTitle > a {
+    width: 100%;
+  }
+}
+
+/* =========================================
+   ROUTING & COMPONENT ANIMATIONS
+   ========================================= */
+
+/* 1. Page Switch / Routing Animation */
+/* When VitePress swaps the markdown content, the new container mounts and triggers this animation */
+.vp-doc > div {
+  animation: docFadeInUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes docFadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 2. Sidebar Links Hover Animation */
+.VPSidebarItem .link {
+  transition: all 0.3s ease !important;
+}
+.VPSidebarItem .link:hover {
+  transform: translateX(4px);
+  color: var(--vp-c-brand-1) !important;
+}
+
+/* 3. Pagination (Prev/Next) Hover Animation */
+.VPDocFooter .pager-link {
+  transition: all 0.3s ease !important;
+}
+.VPDocFooter .pager-link:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1);
+  border-color: var(--vp-c-brand-2) !important;
+}
+.dark .VPDocFooter .pager-link:hover {
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+  border-color: var(--vp-c-brand-3) !important;
+}

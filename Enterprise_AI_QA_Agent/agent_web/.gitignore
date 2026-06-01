@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# App build output
+dist/
+dist-ssr/
+
+# VitePress generated artifacts (local cache + build output)
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+*.local
+.vite/

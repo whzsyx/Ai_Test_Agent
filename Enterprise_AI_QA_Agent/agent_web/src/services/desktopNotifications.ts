@@ -76,8 +76,8 @@ async function sendNotification(title: string, options?: NotificationOptions): P
     // Use Service Worker showNotification (works in background).
     try {
       await reg.showNotification(title, {
-        icon: "/logo.png",
-        badge: "/logo.png",
+        icon: "/logo.svg",
+        badge: "/logo.svg",
         tag: options?.tag || "default",
         ...options,
       } as NotificationOptions);
@@ -90,7 +90,7 @@ async function sendNotification(title: string, options?: NotificationOptions): P
   // Fallback: basic Notification API.
   try {
     const notification = new Notification(title, {
-      icon: "/logo.png",
+      icon: "/logo.svg",
       ...options,
     });
     notification.onclick = () => {

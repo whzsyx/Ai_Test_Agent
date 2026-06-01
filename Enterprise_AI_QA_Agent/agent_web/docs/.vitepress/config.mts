@@ -4,6 +4,9 @@ import { withMermaid } from 'vitepress-plugin-mermaid'
 export default withMermaid(defineConfig({
   title: "御策天检 Docs",
   description: "Enterprise AI QA Agent 文档",
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }]
+  ],
   vite: {
     optimizeDeps: {
       // mermaid 会懒加载 dayjs(CommonJS),必须强制预打包,
@@ -16,6 +19,7 @@ export default withMermaid(defineConfig({
     },
   },
   themeConfig: {
+    logo: '/logo.svg',
     nav: [
       { text: '首页', link: '/' },
       { text: '系统使用与开发手册', link: '/docs/1._系统概述' }
