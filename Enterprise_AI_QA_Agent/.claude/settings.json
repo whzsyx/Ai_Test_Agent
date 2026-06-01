@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"E:/Interpreter/Anaconda/python.exe\" -m pytest tests/modes/security_testing_mode/ tests/application/orchestration/ tests/application/runtime/test_runtime_service_security_mode.py tests/application/security/ -k \"not trio\" --tb=short)",
+      "Bash(\"E:/Interpreter/Anaconda/python.exe\" -m pytest \"tests/application/security/test_security_runner_handlers.py::test_security_runner_reports_missing_nuclei_templates_before_execution\" --tb=long)",
+      "Bash(\"E:/Interpreter/Anaconda/python.exe\" -m pytest tests/application/security/test_security_runner_handlers.py --basetemp=/tmp/pytest-secfix --tb=short)",
+      "Bash(\"E:/Interpreter/Anaconda/python.exe\" -m pytest \"tests/application/security/test_security_runner_handlers.py::test_security_runner_reports_missing_nuclei_templates_before_execution\" --basetemp=/tmp/pytest-sec2 -v --tb=long)",
+      "Bash(\"E:/Interpreter/Anaconda/python.exe\" -m pytest tests/modes/security_testing_mode/ tests/application/orchestration/ tests/application/runtime/test_runtime_service_security_mode.py tests/application/security/ --basetemp=/tmp/pytest-secfull -k \"not trio\" --tb=short)",
+      "Bash(\"E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe\" -c \"import sys; print\\('python:', sys.version\\); import httpx; print\\('httpx:', httpx.__version__\\)\")",
+      "Bash(E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe -c ' *)",
+      "Bash(\"E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe\" -m pytest tests/modes/security_testing_mode/ --basetemp=/tmp/pytest-sec3 -v --tb=short)"
+    ]
+  }
+}
