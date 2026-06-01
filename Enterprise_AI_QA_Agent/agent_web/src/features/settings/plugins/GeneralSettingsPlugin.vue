@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, ref } from "vue";
 import { NSelect, NSlider, NModal } from "naive-ui";
 
@@ -726,7 +726,7 @@ async function doCleanupConfirm() {
   padding: 8px 0 32px 0;
 }
 
-:global(:root[data-theme="dark"]) .general-settings {
+:global(.dark) .general-settings {
   --general-bg: #0f172a;
   --general-bg-subtle: #1e293b;
   --general-bg-muted: #334155;
@@ -876,7 +876,7 @@ async function doCleanupConfirm() {
   line-height: 1.6;
 }
 
-:global(:root[data-theme="dark"]) .general-notice {
+:global(.dark) .general-notice {
   color: #bfdbfe;
   background: rgba(37, 99, 235, 0.12);
 }
@@ -1236,7 +1236,7 @@ async function doCleanupConfirm() {
   --n-handle-box-shadow-focus: 0 0 0 3px rgba(15, 23, 42, 0.15) !important;
 }
 
-:global(:root[data-theme="dark"]) :deep(.n-slider) {
+:global(.dark) :deep(.n-slider) {
   --n-handle-box-shadow-focus: 0 0 0 3px rgba(248, 250, 252, 0.15) !important;
 }
 
@@ -1296,7 +1296,7 @@ async function doCleanupConfirm() {
   overflow: hidden;
 }
 
-:global(:root[data-theme="dark"]) .dm-card {
+:global(.dark) .dm-card {
   background: #1e293b;
   border-color: #334155;
   color: #f8fafc;
@@ -1426,7 +1426,7 @@ async function doCleanupConfirm() {
   font-weight: 500;
 }
 
-:global(:root[data-theme="dark"]) .dm-success {
+:global(.dark) .dm-success {
   background: rgba(22, 163, 74, 0.15);
   color: #86efac;
 }
@@ -1443,7 +1443,7 @@ async function doCleanupConfirm() {
   line-height: 1.5;
 }
 
-:global(:root[data-theme="dark"]) .dm-warning {
+:global(.dark) .dm-warning {
   background: rgba(234, 179, 8, 0.12);
   color: #fde68a;
 }
@@ -1462,7 +1462,7 @@ async function doCleanupConfirm() {
   line-height: 1.5;
 }
 
-:global(:root[data-theme="dark"]) .dm-date-range {
+:global(.dark) .dm-date-range {
   background: rgba(59, 130, 246, 0.12);
   color: #93c5fd;
 }
