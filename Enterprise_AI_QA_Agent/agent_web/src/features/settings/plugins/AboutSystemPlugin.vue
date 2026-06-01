@@ -8,7 +8,7 @@ defineProps<{
 
 const repoUrl = "https://github.com/eighteendreamer/Ai_Test_Agent";
 const issuesUrl = `${repoUrl}/issues`;
-const docsUrl = "http://localhost:5173/manual/1._系统概述.html";
+const docsUrl = "http://localhost:5173/docs/1._系统概述.html";
 
 const stackItems = [
   {
