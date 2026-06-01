@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { NConfigProvider, NDialogProvider, NMessageProvider } from "naive-ui";
+import { NConfigProvider, NDialogProvider, NMessageProvider, darkTheme } from "naive-ui";
 import type { GlobalThemeOverrides } from "naive-ui";
 
 import CodeReviewProgressPanel from "./components/chat/CodeReviewProgressPanel.vue";
@@ -16,7 +16,7 @@ import { getLocale, t } from "./services/i18n";
 import { useAppStore } from "./stores/app";
 import { useSessionStore } from "./stores/session";
 
-const themeOverrides: GlobalThemeOverrides = {
+const lightThemeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: "#111827",
     primaryColorHover: "#000000",
@@ -31,6 +31,27 @@ const themeOverrides: GlobalThemeOverrides = {
 const route = useRoute();
 const appStore = useAppStore();
 const sessionStore = useSessionStore();
+
+const activeTheme = computed(() => (appStore.theme === "dark" ? darkTheme : null));
+const activeThemeOverrides = computed<GlobalThemeOverrides>(() => {
+  if (appStore.theme === "dark") {
+    return {
+      common: {
+        primaryColor: "#ffffff",
+        primaryColorHover: "#e5e5e5",
+        primaryColorPressed: "#cccccc",
+        primaryColorSuppl: "#ffffff",
+        textColorBase: "#f5f5f5",
+        textColor2: "#9a9a9a",
+        borderColor: "#1c1c1c",
+        popoverColor: "#050505",
+        bodyColor: "#000000",
+        cardColor: "#050505",
+      },
+    };
+  }
+  return lightThemeOverrides;
+});
 const logExpanded = ref(false);
 const runtimeConsoleTab = ref("logs");
 let healthPollTimer: number | null = null;
@@ -136,7 +157,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <n-config-provider :theme-overrides="themeOverrides">
+  <n-config-provider :theme="activeTheme" :theme-overrides="activeThemeOverrides">
   <n-message-provider>
     <n-dialog-provider>
       <div class="prototype-shell">

@@ -8,7 +8,7 @@ defineProps<{
 
 const repoUrl = "https://github.com/eighteendreamer/Ai_Test_Agent";
 const issuesUrl = `${repoUrl}/issues`;
-const docsUrl = "http://localhost:5173/docs/1._系统概述.html";
+const docsUrl = "http://localhost:5173/";
 
 const stackItems = [
   {
@@ -188,14 +188,14 @@ const infoCards = [
 }
 
 :root[data-theme="dark"] .about-system {
-  --about-bg: #0f172a;
-  --about-bg-subtle: #1e293b;
-  --about-bg-muted: #334155;
-  --about-text-primary: #f8fafc;
-  --about-text-secondary: #94a3b8;
-  --about-text-tertiary: #64748b;
-  --about-border: #1e293b;
-  --about-border-hover: #334155;
+  --about-bg: #050505;
+  --about-bg-subtle: #0b0b0b;
+  --about-bg-muted: #1c1c1c;
+  --about-text-primary: #f5f5f5;
+  --about-text-secondary: #9a9a9a;
+  --about-text-tertiary: #666666;
+  --about-border: #1c1c1c;
+  --about-border-hover: #333333;
 }
 
 /* Header */

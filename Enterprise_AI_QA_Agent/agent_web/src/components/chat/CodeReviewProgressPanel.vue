@@ -624,4 +624,37 @@ function closeTaskDetail() {
     grid-template-columns: 1fr;
   }
 }
+
+:root[data-theme="dark"] .review-progress-stat,
+:root[data-theme="dark"] .review-progress-card,
+:root[data-theme="dark"] .review-progress-item,
+:root[data-theme="dark"] .review-task-modal {
+  background: var(--surface, #050505);
+  border-color: var(--border, #1c1c1c);
+}
+
+:root[data-theme="dark"] .review-task-message {
+  background: var(--panel, #0b0b0b);
+  border-color: var(--border, #1c1c1c);
+}
+
+:root[data-theme="dark"] .review-progress-item-button:hover {
+  border-color: var(--border-strong, #333333);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme="dark"] .review-task-message pre {
+  background: var(--surface, #050505);
+  color: var(--text, #f5f5f5);
+}
+
+:root[data-theme="dark"] .review-task-close {
+  background: var(--surface, #050505);
+  border-color: var(--border, #1c1c1c);
+  color: var(--text, #f5f5f5);
+}
+
+:root[data-theme="dark"] .review-task-error {
+  background: rgba(239, 68, 68, 0.12);
+}
 </style>

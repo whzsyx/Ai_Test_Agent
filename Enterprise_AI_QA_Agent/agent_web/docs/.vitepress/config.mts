@@ -1,6 +1,12 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
+// 该配置在 Node 环境执行;此处声明 process 以避免缺少 @types/node 时的类型告警。
+declare const process: { env: Record<string, string | undefined> }
+
+// 系统工作台地址,可通过环境变量覆盖(默认指向本地 dev 端口)。
+const APP_HOME_URL = process.env.DOCS_APP_URL ?? 'http://localhost:5175/home'
+
 export default withMermaid(defineConfig({
   title: "御策天检 Docs",
   description: "Enterprise AI QA Agent 文档",
@@ -22,7 +28,8 @@ export default withMermaid(defineConfig({
     logo: '/logo.svg',
     nav: [
       { text: '首页', link: '/' },
-      { text: '系统使用与开发手册', link: '/docs/1._系统概述' }
+      { text: '系统使用与开发手册', link: '/docs/1._系统概述' },
+      { text: '返回系统', link: APP_HOME_URL, target: '_self', rel: 'noopener' }
     ],
     sidebar: [
       {

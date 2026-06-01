@@ -142,3 +142,53 @@ html {
   box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
   border-color: var(--vp-c-brand-3) !important;
 }
+
+/* 4. Return to System Button in NavBar */
+.VPNavBarMenu .VPLink[target="_self"],
+.VPNavBarMenu .VPLink[href*="localhost"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  align-self: center !important; /* Force vertical centering in flex parent */
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  line-height: 1 !important;
+  padding: 0 18px !important;
+  margin: 0 0 0 16px !important;
+  background-color: #111827 !important;
+  color: #ffffff !important;
+  border-radius: 9999px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  transition: all 0.2s ease !important;
+  border: none !important;
+  box-sizing: border-box !important;
+}
+
+.VPNavBarMenu .VPLink[target="_self"]:hover,
+.VPNavBarMenu .VPLink[href*="localhost"]:hover {
+  background-color: #374151 !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+}
+
+.dark .VPNavBarMenu .VPLink[target="_self"],
+.dark .VPNavBarMenu .VPLink[href*="localhost"] {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+.dark .VPNavBarMenu .VPLink[target="_self"]:hover,
+.dark .VPNavBarMenu .VPLink[href*="localhost"]:hover {
+  background-color: #f3f4f6 !important;
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Hide the external link icon automatically added by VitePress */
+.VPNavBarMenu .VPLink[target="_self"] svg,
+.VPNavBarMenu .VPLink[href*="localhost"] svg,
+.VPNavBarMenu .VPLink[target="_self"] [class*="external"],
+.VPNavBarMenu .VPLink[href*="localhost"] [class*="external"] {
+  display: none !important;
+}
