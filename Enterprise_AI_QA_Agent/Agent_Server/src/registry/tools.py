@@ -1245,25 +1245,43 @@ class ToolRegistry:
                 handler_key="smoke-suite-runner",
             ),
         }
+        self._dynamic_tools: dict[str, ToolModule] = {}
 
     def list(self) -> list[ToolDescriptor]:
-        return [module.descriptor for module in self._tools.values()]
+        return [
+            *[module.descriptor for module in self._tools.values()],
+            *[module.descriptor for module in self._dynamic_tools.values()],
+        ]
 
     def get(self, key: str) -> ToolDescriptor:
-        if key not in self._tools:
+        module = self._dynamic_tools.get(key) or self._tools.get(key)
+        if module is None:
             raise KeyError(f"Unknown tool: {key}")
-        return self._tools[key].descriptor
+        return module.descriptor
 
     def get_many(self, keys: list[str]) -> list[ToolDescriptor]:
-        return [self._tools[key].descriptor for key in keys if key in self._tools]
+        return [self.get(key) for key in keys if key in self._tools or key in self._dynamic_tools]
 
     def get_handler_key(self, key: str) -> str | None:
-        if key not in self._tools:
+        module = self._dynamic_tools.get(key) or self._tools.get(key)
+        if module is None:
             raise KeyError(f"Unknown tool: {key}")
-        return self._tools[key].handler_key
+        return module.handler_key
 
     def has_handler_binding(self, key: str) -> bool:
-        return key in self._tools and self._tools[key].handler_key is not None
+        module = self._dynamic_tools.get(key) or self._tools.get(key)
+        return module is not None and module.handler_key is not None
+
+    def register_dynamic(self, descriptor: ToolDescriptor, handler_key: str) -> None:
+        if descriptor.key in self._tools:
+            raise ValueError(f"Cannot dynamically override static tool '{descriptor.key}'.")
+        self._dynamic_tools[descriptor.key] = ToolModule(
+            descriptor=descriptor,
+            handler_key=handler_key,
+        )
+
+    def unregister_dynamic(self, key: str) -> None:
+        self._dynamic_tools.pop(key, None)
 
     def build_model_tools(self, keys: list[str]) -> list[dict]:
         tools = self.get_many(keys)

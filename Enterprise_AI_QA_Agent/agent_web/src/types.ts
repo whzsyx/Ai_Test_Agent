@@ -912,6 +912,7 @@ export interface MCPServerDescriptor {
 }
 
 export type ManagedMCPSourceKind = "builtin" | "external";
+export type MCPServerTransport = "stdio" | "streamable_http" | "sse";
 
 export interface MCPProviderDescriptor {
   key: string;
@@ -919,6 +920,68 @@ export interface MCPProviderDescriptor {
   summary: string;
   supports_workspace_selection: boolean;
   supports_document_import: boolean;
+}
+
+export interface MCPServerCreateRequest {
+  name: string;
+  enabled?: boolean;
+  transport?: MCPServerTransport | null;
+  purpose?: string | null;
+  config?: Record<string, unknown>;
+  supported_protocols?: MCPServerTransport[];
+  description?: string | null;
+  project_name?: string | null;
+  document_url?: string | null;
+  endpoint_url?: string | null;
+  command?: string | null;
+  args?: string[];
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  cwd?: string | null;
+  capabilities?: string[];
+  provider_key?: string | null;
+  confirmed_at?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MCPServerUpdateRequest {
+  name?: string | null;
+  enabled?: boolean | null;
+  transport?: MCPServerTransport | null;
+  purpose?: string | null;
+  config?: Record<string, unknown> | null;
+  supported_protocols?: MCPServerTransport[] | null;
+  description?: string | null;
+  project_name?: string | null;
+  document_url?: string | null;
+  endpoint_url?: string | null;
+  command?: string | null;
+  args?: string[] | null;
+  headers?: Record<string, string> | null;
+  env?: Record<string, string> | null;
+  cwd?: string | null;
+  capabilities?: string[] | null;
+  provider_key?: string | null;
+  confirmed_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface MCPServerImportRequest {
+  payload: Record<string, unknown>;
+}
+
+export interface MCPServerImportResponse {
+  servers: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    transport: MCPServerTransport;
+    purpose?: string | null;
+    config: Record<string, unknown>;
+    supported_protocols: MCPServerTransport[];
+    created_at: string;
+    updated_at: string;
+  }>;
 }
 
 export interface ManagedMCPServerDescriptor {
@@ -929,6 +992,9 @@ export interface ManagedMCPServerDescriptor {
   status: string;
   capabilities: string[];
   enabled: boolean;
+  purpose?: string | null;
+  config: Record<string, unknown>;
+  supported_protocols: string[];
   source_kind: ManagedMCPSourceKind;
   provider_key?: string | null;
   provider_name?: string | null;
@@ -960,6 +1026,41 @@ export interface ManagedMCPToolsResponse {
   server_name: string;
   source_kind: ManagedMCPSourceKind;
   tools: ManagedMCPToolDescriptor[];
+}
+
+export interface ManagedMCPResourceDescriptor {
+  uri: string;
+  name: string;
+  description: string;
+  mime_type?: string | null;
+  managed_server_key: string;
+  server_name: string;
+  provider_key?: string | null;
+  tags: string[];
+}
+
+export interface ManagedMCPPromptDescriptor {
+  name: string;
+  description: string;
+  arguments: Array<Record<string, unknown>>;
+  managed_server_key: string;
+  server_name: string;
+  provider_key?: string | null;
+  tags: string[];
+}
+
+export interface ManagedMCPResourcesResponse {
+  server_key: string;
+  server_name: string;
+  source_kind: ManagedMCPSourceKind;
+  resources: ManagedMCPResourceDescriptor[];
+}
+
+export interface ManagedMCPPromptsResponse {
+  server_key: string;
+  server_name: string;
+  source_kind: ManagedMCPSourceKind;
+  prompts: ManagedMCPPromptDescriptor[];
 }
 
 export interface ManagedMCPTestResponse {

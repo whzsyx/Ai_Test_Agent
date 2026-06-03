@@ -10,8 +10,6 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
-
-from src.application.mcp.provider_registry import MCPProviderRegistry
 from src.core.config import Settings
 from src.schemas.integration import (
     IntegrationCreateRequest,
@@ -26,9 +24,8 @@ from src.schemas.mcp_management import ResolvedImportDocument
 
 
 class IntegrationCatalogService:
-    def __init__(self, *, settings: Settings, mcp_provider_registry: MCPProviderRegistry | None = None) -> None:
+    def __init__(self, *, settings: Settings) -> None:
         self._settings = settings
-        self._mcp_provider_registry = mcp_provider_registry
         self._data_dir = (Path(__file__).resolve().parents[2] / settings.data_dir / "integrations").resolve()
         self._catalog_path = self._data_dir / "catalog.json"
         self._lock = asyncio.Lock()
@@ -38,15 +35,27 @@ class IntegrationCatalogService:
         async with self._lock:
             catalog = self._load_catalog()
         items = [IntegrationRecord.model_validate(item) for item in catalog]
+        items = [item for item in items if item.kind == "api"]
         return sorted(items, key=lambda item: item.updated_at, reverse=True)
+
+    async def list_legacy_mcp_integrations(self) -> list[IntegrationRecord]:
+        async with self._lock:
+            catalog = self._load_catalog()
+        items = [IntegrationRecord.model_validate(item) for item in catalog]
+        return sorted([item for item in items if item.kind == "mcp"], key=lambda item: item.updated_at, reverse=True)
 
     async def get_integration(self, integration_id: str) -> IntegrationRecord:
         async with self._lock:
             catalog = self._load_catalog()
             item = self._find_item(catalog, integration_id)
-        return IntegrationRecord.model_validate(item)
+        record = IntegrationRecord.model_validate(item)
+        if record.kind != "api":
+            raise ValueError("MCP servers must be managed through /registry/mcp/managed.")
+        return record
 
     async def create_integration(self, payload: IntegrationCreateRequest) -> IntegrationRecord:
+        if payload.kind != "api":
+            raise ValueError("MCP servers must be managed through /registry/mcp/managed.")
         now = datetime.now(timezone.utc)
         record = IntegrationRecord(
             id=str(uuid4()),
@@ -81,6 +90,8 @@ class IntegrationCatalogService:
         async with self._lock:
             catalog = self._load_catalog()
             item = self._find_item(catalog, integration_id)
+            if str(item.get("kind") or "") != "api":
+                raise ValueError("MCP servers must be managed through /registry/mcp/managed.")
             updated = dict(item)
 
             for field in ("name", "description", "project_name", "document_url", "endpoint_url", "command", "base_url"):
@@ -116,15 +127,15 @@ class IntegrationCatalogService:
     async def delete_integration(self, integration_id: str) -> dict[str, Any]:
         async with self._lock:
             catalog = self._load_catalog()
-            self._find_item(catalog, integration_id)
+            item = self._find_item(catalog, integration_id)
+            if str(item.get("kind") or "") != "api":
+                raise ValueError("MCP servers must be managed through /registry/mcp/managed.")
             catalog = [item for item in catalog if str(item.get("id") or "") != integration_id]
             self._save_catalog(catalog)
         return {"ok": True, "deleted_id": integration_id}
 
     async def test_integration(self, integration_id: str) -> IntegrationTestResponse:
         record = await self.get_integration(integration_id)
-        if record.kind == "mcp":
-            return await self._test_mcp_integration(record)
         return await self._test_api_integration(record)
 
     async def list_import_sources(
@@ -134,9 +145,6 @@ class IntegrationCatalogService:
         workspace_id: str | None = None,
     ) -> IntegrationImportSourcesResponse:
         record = await self.get_integration(integration_id)
-        provider = self._resolve_provider(record)
-        if provider is not None:
-            return await provider.list_import_sources(record, workspace_id=workspace_id)
         return self.describe_import_sources(record)
 
     async def resolve_import_document(
@@ -148,14 +156,7 @@ class IntegrationCatalogService:
         workspace_id: str | None = None,
     ) -> ResolvedImportDocument:
         record = await self.get_integration(integration_id)
-        provider = self._resolve_provider(record)
         normalized_source_id = self._normalize_optional_text(import_source_id)
-        if provider is not None and normalized_source_id:
-            return await provider.resolve_import_document(
-                record,
-                import_source_id=normalized_source_id,
-                workspace_id=self._normalize_optional_text(workspace_id),
-            )
 
         url, headers, auth = self.build_document_import_request(
             record,
@@ -603,8 +604,3 @@ class IntegrationCatalogService:
         path = urlparse(url).path
         name = Path(path).name.strip()
         return name or url
-
-    def _resolve_provider(self, record: IntegrationRecord):
-        if self._mcp_provider_registry is None or record.kind != "mcp":
-            return None
-        return self._mcp_provider_registry.resolve(record)

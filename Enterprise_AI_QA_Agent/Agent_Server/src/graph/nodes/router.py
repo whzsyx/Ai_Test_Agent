@@ -39,6 +39,12 @@ def build_router_node(
         ]
 
         tools = tool_registry.get_many(agent.supported_tools)
+        dynamic_mcp_tools = [
+            tool
+            for tool in tool_registry.list()
+            if tool.category == "mcp" and tool.key not in {item.key for item in tools}
+        ]
+        tools = [*tools, *dynamic_mcp_tools]
         state["selected_agent_key"] = agent.key
         state["selected_agent_name"] = agent.name
         state["selected_model_key"] = selected_model.key

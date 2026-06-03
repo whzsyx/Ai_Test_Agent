@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from src.schemas.mcp_management import MCPServerCreateRequest, MCPServerImportRequest, MCPServerUpdateRequest
+
 
 router = APIRouter(prefix="/registry", tags=["registry"])
 
@@ -189,6 +191,22 @@ async def list_managed_mcp_servers(request: Request):
     return await request.app.state.registry_service.list_managed_mcp_servers()
 
 
+@router.post("/mcp/managed")
+async def create_managed_mcp_server(payload: MCPServerCreateRequest, request: Request):
+    try:
+        return await request.app.state.mcp_manager_service.create_server(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/mcp/managed/import")
+async def import_managed_mcp_servers(payload: MCPServerImportRequest, request: Request):
+    try:
+        return await request.app.state.mcp_manager_service.import_servers(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/mcp/providers")
 async def list_mcp_providers(request: Request):
     return request.app.state.registry_service.list_mcp_providers()
@@ -202,10 +220,58 @@ async def list_managed_mcp_tools(server_key: str, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/mcp/managed/{server_key}/resources")
+async def list_managed_mcp_resources(server_key: str, request: Request):
+    try:
+        return await request.app.state.registry_service.list_managed_mcp_resources(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/mcp/managed/{server_key}/prompts")
+async def list_managed_mcp_prompts(server_key: str, request: Request):
+    try:
+        return await request.app.state.registry_service.list_managed_mcp_prompts(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/mcp/managed/{server_key}/test")
 async def test_managed_mcp_server(server_key: str, request: Request):
     try:
         return await request.app.state.registry_service.test_managed_mcp_server(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/mcp/managed/{server_key}")
+async def update_managed_mcp_server(server_key: str, payload: MCPServerUpdateRequest, request: Request):
+    try:
+        return await request.app.state.mcp_manager_service.update_server(server_key, payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/mcp/managed/{server_key}")
+async def delete_managed_mcp_server(server_key: str, request: Request):
+    try:
+        return await request.app.state.mcp_manager_service.delete_server(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/mcp/managed/{server_key}/confirm-stdio")
+async def confirm_managed_mcp_stdio_server(server_key: str, request: Request):
+    try:
+        return await request.app.state.mcp_manager_service.confirm_stdio_server(server_key)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/mcp/managed/{server_key}/reconnect")
+async def reconnect_managed_mcp_server(server_key: str, request: Request):
+    try:
+        return await request.app.state.mcp_manager_service.reconnect_server(server_key)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

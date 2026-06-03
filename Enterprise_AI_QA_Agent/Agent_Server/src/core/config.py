@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     postgres_approval_table: str = "agent_session_approvals"
     postgres_tool_job_table: str = "agent_tool_jobs"
     postgres_tool_artifact_table: str = "agent_tool_artifacts"
+    postgres_mcp_server_table: str = "agent_mcp_servers"
     postgres_vector_dimension: int = 1536
     memgraph_host: str = "127.0.0.1"
     memgraph_port: int = 7687
@@ -73,6 +74,10 @@ class Settings(BaseSettings):
     security_runner_wrap_timeout: bool = True
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90
+    mcp_stdio_command_allowlist: list[str] = Field(
+        default_factory=lambda: ["npx", "uvx", "node", "python", "python3"]
+    )
+    mcp_health_check_interval_seconds: float = 30.0
     browser_backend: str = "playwright-cli"
     browser_default_name: str = "chromium"
     browser_headless: bool = True
@@ -113,6 +118,13 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def split_cors_origins(cls, value):
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("mcp_stdio_command_allowlist", mode="before")
+    @classmethod
+    def split_mcp_stdio_command_allowlist(cls, value):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value

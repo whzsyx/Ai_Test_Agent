@@ -26,9 +26,15 @@ import type {
   IntegrationTestResponse,
   ManagedMCPToolCallRequest,
   ManagedMCPToolCallResponse,
+  ManagedMCPPromptsResponse,
+  ManagedMCPResourcesResponse,
   ManagedMCPTestResponse,
   ManagedMCPToolsResponse,
   ManagedMCPServerDescriptor,
+  MCPServerCreateRequest,
+  MCPServerImportRequest,
+  MCPServerImportResponse,
+  MCPServerUpdateRequest,
   MCPProviderDescriptor,
   IntegrationUpdateRequest,
   MCPServerDescriptor,
@@ -418,11 +424,50 @@ export const api = {
   listManagedMcpServers(): Promise<ManagedMCPServerDescriptor[]> {
     return request("/api/v1/registry/mcp/managed");
   },
+  createManagedMcpServer(payload: MCPServerCreateRequest): Promise<ManagedMCPServerDescriptor> {
+    return request("/api/v1/registry/mcp/managed", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  importManagedMcpServers(payload: MCPServerImportRequest): Promise<MCPServerImportResponse> {
+    return request("/api/v1/registry/mcp/managed/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateManagedMcpServer(serverKey: string, payload: MCPServerUpdateRequest): Promise<ManagedMCPServerDescriptor> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteManagedMcpServer(serverKey: string): Promise<{ ok: boolean; deleted_id: string }> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}`, {
+      method: "DELETE",
+    });
+  },
+  confirmManagedMcpStdio(serverKey: string): Promise<ManagedMCPServerDescriptor> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/confirm-stdio`, {
+      method: "POST",
+    });
+  },
+  reconnectManagedMcpServer(serverKey: string): Promise<ManagedMCPServerDescriptor> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/reconnect`, {
+      method: "POST",
+    });
+  },
   listMcpProviders(): Promise<MCPProviderDescriptor[]> {
     return request("/api/v1/registry/mcp/providers");
   },
   listManagedMcpTools(serverKey: string): Promise<ManagedMCPToolsResponse> {
     return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/tools`);
+  },
+  listManagedMcpResources(serverKey: string): Promise<ManagedMCPResourcesResponse> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/resources`);
+  },
+  listManagedMcpPrompts(serverKey: string): Promise<ManagedMCPPromptsResponse> {
+    return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/prompts`);
   },
   testManagedMcpServer(serverKey: string): Promise<ManagedMCPTestResponse> {
     return request(`/api/v1/registry/mcp/managed/${encodeURIComponent(serverKey)}/test`, {

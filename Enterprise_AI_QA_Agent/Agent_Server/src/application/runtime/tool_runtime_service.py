@@ -20,6 +20,9 @@ from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.documents.api_docs_service import ApiDocsService
 from src.application.exploration.ui_graph_store import UIGraphStore
+from src.application.mcp.host.connection_manager import McpConnectionManager
+from src.application.mcp.host.namespace import decode as decode_mcp_tool_key
+from src.application.mcp.host.namespace import is_mcp_tool_key
 from src.application.security.execution_environment_service import SecurityExecutionEnvironmentService
 from src.modes.code_review_mode import build_code_review_campaign
 from src.modes.code_review_mode.project_source import (
@@ -69,6 +72,7 @@ class ToolExecutionContext:
     selected_agent_key: str = ""
     selected_model_key: str = ""
     tool_job_id: str = ""
+    tool_key: str = ""
 
 
 class ToolRuntimeService:
@@ -84,6 +88,7 @@ class ToolRuntimeService:
         artifact_storage_service: ArtifactStorageService | None = None,
         api_docs_service: ApiDocsService | None = None,
         coordinator_runtime_service=None,
+        mcp_connection_manager: McpConnectionManager | None = None,
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
         self._settings = settings
@@ -97,6 +102,7 @@ class ToolRuntimeService:
         self._session_store = session_store
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
+        self._mcp_connection_manager = mcp_connection_manager
         self._model_registry = None
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
         self._report_template_service = ReportTemplateService()
@@ -143,6 +149,7 @@ class ToolRuntimeService:
             "session-history": self._run_session_history,
             "session-timeline": self._run_session_timeline,
             "observation-search": self._run_observation_search,
+            "mcp-bridge": self._run_mcp_bridge,
             "test-case-generator": self._run_test_case_generator,
             "ui-page-explorer": self._run_ui_page_explorer,
             "dom-inspector": self._run_dom_inspector,
@@ -195,6 +202,9 @@ class ToolRuntimeService:
         self._api_testing_mode_runtime.set_session_store(session_store)
         self._security_testing_mode_runtime.set_session_store(session_store)
 
+    def set_mcp_connection_manager(self, mcp_connection_manager: McpConnectionManager) -> None:
+        self._mcp_connection_manager = mcp_connection_manager
+
     def has_handler(self, tool_key: str) -> bool:
         return tool_key in self._handlers
 
@@ -207,6 +217,8 @@ class ToolRuntimeService:
         started_at = datetime.utcnow()
         job = None
         handler = self._handlers.get(tool.key)
+        if handler is None and is_mcp_tool_key(tool.key):
+            handler = self._handlers.get("mcp-bridge")
         if handler is None:
             return ToolExecutionRecord(
                 call_id=call.id,
@@ -223,6 +235,19 @@ class ToolRuntimeService:
 
         try:
             job_context = context
+            if not job_context.tool_key:
+                job_context = ToolExecutionContext(
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    trace_id=context.trace_id,
+                    user_message=context.user_message,
+                    normalized_input=context.normalized_input,
+                    context_bundle=context.context_bundle,
+                    selected_agent_key=context.selected_agent_key,
+                    selected_model_key=context.selected_model_key,
+                    tool_job_id=context.tool_job_id,
+                    tool_key=tool.key,
+                )
             if self._tool_job_service is not None:
                 if context.tool_job_id:
                     job = await self._tool_job_service.get_job(context.tool_job_id)
@@ -250,6 +275,7 @@ class ToolRuntimeService:
                     selected_agent_key=context.selected_agent_key,
                     selected_model_key=context.selected_model_key,
                     tool_job_id=job.id,
+                    tool_key=tool.key,
                 )
 
             raw_result = await handler(call.arguments, job_context)
@@ -345,6 +371,38 @@ class ToolRuntimeService:
                     return "partial"
             return "failed"
         return "completed"
+
+    async def _run_mcp_bridge(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        if self._mcp_connection_manager is None:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": "MCP Host connection manager is not configured.",
+                "error": "mcp_connection_manager_not_configured",
+            }
+        try:
+            server_key, tool_name = decode_mcp_tool_key(context.tool_key)
+        except ValueError as exc:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": str(exc),
+                "error": "invalid_mcp_tool_key",
+            }
+        result = await self._mcp_connection_manager.call_tool(server_key, tool_name, arguments)
+        return {
+            "status": "completed" if result.ok else "failed",
+            "ok": result.ok,
+            "summary": result.summary,
+            "server_key": server_key,
+            "tool_name": tool_name,
+            "output": result.payload,
+            "error": result.error,
+        }
 
     async def _run_knowledge_rag(
         self,

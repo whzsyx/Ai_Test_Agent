@@ -29,10 +29,11 @@ from src.application.artifacts.artifact_storage_service import ArtifactStorageSe
 from src.application.documents.api_docs_service import ApiDocsService
 from src.application.integrations.integration_catalog_service import IntegrationCatalogService
 from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
-from src.application.mcp.client import ExternalMCPClient
+from src.application.mcp.host.connection_manager import McpConnectionManager
+from src.application.mcp.host.tool_bridge import McpToolBridge
 from src.application.mcp.manager_service import MCPManagerService
-from src.application.mcp.provider_registry import MCPProviderRegistry
 from src.application.mcp.runtime_manager import MCPRuntimeManager
+from src.application.mcp.server_store import PostgresMCPServerStore
 from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
 from src.application.context.memory_runtime_service import MemoryRuntimeService
@@ -96,24 +97,30 @@ async def lifespan(app: FastAPI):
         artifact_storage_service=artifact_storage_service,
         upload_security_service=upload_security_service,
     )
-    external_mcp_client = ExternalMCPClient(settings=settings)
-    mcp_provider_registry = MCPProviderRegistry(client=external_mcp_client)
     integration_catalog_service = IntegrationCatalogService(
         settings=settings,
-        mcp_provider_registry=mcp_provider_registry,
+    )
+    mcp_server_store = PostgresMCPServerStore(settings=settings)
+    await mcp_server_store.initialize()
+    await mcp_server_store.migrate_legacy_integrations(
+        await integration_catalog_service.list_legacy_mcp_integrations()
+    )
+    mcp_tool_bridge = McpToolBridge(tool_registry=tool_registry)
+    mcp_connection_manager = McpConnectionManager(
+        settings=settings,
+        mcp_server_store=mcp_server_store,
+        tool_bridge=mcp_tool_bridge,
     )
     mcp_runtime_manager = MCPRuntimeManager(
         builtin_registry=mcp_registry,
         mcp_runtime_service=mcp_runtime_service,
-        integration_catalog_service=integration_catalog_service,
-        provider_registry=mcp_provider_registry,
-        external_mcp_client=external_mcp_client,
+        connection_manager=mcp_connection_manager,
     )
     mcp_manager_service = MCPManagerService(
         builtin_registry=mcp_registry,
-        integration_catalog_service=integration_catalog_service,
-        provider_registry=mcp_provider_registry,
+        mcp_server_store=mcp_server_store,
         runtime_manager=mcp_runtime_manager,
+        connection_manager=mcp_connection_manager,
     )
     skill_management_service = SkillManagementService(
         skill_registry=skill_registry,
@@ -161,6 +168,7 @@ async def lifespan(app: FastAPI):
         transcript_hygiene_service=transcript_hygiene_service,
         artifact_storage_service=artifact_storage_service,
         api_docs_service=api_docs_service,
+        mcp_connection_manager=mcp_connection_manager,
     )
     graph = build_agent_graph(
         agent_registry=agent_registry,
@@ -204,8 +212,9 @@ async def lifespan(app: FastAPI):
     app.state.upload_security_service = upload_security_service
     app.state.api_docs_service = api_docs_service
     app.state.integration_catalog_service = integration_catalog_service
-    app.state.external_mcp_client = external_mcp_client
-    app.state.mcp_provider_registry = mcp_provider_registry
+    app.state.mcp_server_store = mcp_server_store
+    app.state.mcp_tool_bridge = mcp_tool_bridge
+    app.state.mcp_connection_manager = mcp_connection_manager
     app.state.mcp_runtime_manager = mcp_runtime_manager
     app.state.mcp_manager_service = mcp_manager_service
     app.state.memory_store = memory_store
@@ -266,7 +275,10 @@ async def lifespan(app: FastAPI):
         adapter_registry=adapter_registry,
         oauth_token_service=oauth_token_service,
     )
-    yield
+    try:
+        yield
+    finally:
+        await mcp_connection_manager.shutdown()
 
 
 settings = get_settings()

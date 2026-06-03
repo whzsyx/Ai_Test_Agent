@@ -66,6 +66,16 @@ class RegistryService:
             raise ValueError("Managed MCP service is not configured.")
         return await self._mcp_manager_service.list_server_tools(server_key)
 
+    async def list_managed_mcp_resources(self, server_key: str):
+        if self._mcp_manager_service is None:
+            raise ValueError("Managed MCP service is not configured.")
+        return await self._mcp_manager_service.list_server_resources(server_key)
+
+    async def list_managed_mcp_prompts(self, server_key: str):
+        if self._mcp_manager_service is None:
+            raise ValueError("Managed MCP service is not configured.")
+        return await self._mcp_manager_service.list_server_prompts(server_key)
+
     async def test_managed_mcp_server(self, server_key: str):
         if self._mcp_manager_service is None:
             raise ValueError("Managed MCP service is not configured.")

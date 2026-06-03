@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from src.application.context.mcp_runtime_service import MCPRuntimeService
-from src.application.integrations.integration_catalog_service import IntegrationCatalogService
-from src.application.mcp.client import ExternalMCPClient, ExternalMCPSession
-from src.application.mcp.provider_registry import MCPProviderRegistry
+from src.application.mcp.host.connection_manager import McpConnectionManager
 from src.registry.mcp import MCPRegistry
-from src.schemas.integration import IntegrationRecord
 from src.schemas.mcp_management import (
     ManagedMCPServerDescriptor,
+    ManagedMCPPromptDescriptor,
+    ManagedMCPPromptsResponse,
+    ManagedMCPResourceDescriptor,
+    ManagedMCPResourcesResponse,
     ManagedMCPSourceKind,
     ManagedMCPTestResponse,
     ManagedMCPToolCallResponse,
@@ -24,16 +25,11 @@ class MCPRuntimeManager:
         *,
         builtin_registry: MCPRegistry,
         mcp_runtime_service: MCPRuntimeService,
-        integration_catalog_service: IntegrationCatalogService,
-        provider_registry: MCPProviderRegistry,
-        external_mcp_client: ExternalMCPClient,
+        connection_manager: McpConnectionManager | None = None,
     ) -> None:
         self._builtin_registry = builtin_registry
         self._mcp_runtime_service = mcp_runtime_service
-        self._integration_catalog_service = integration_catalog_service
-        self._provider_registry = provider_registry
-        self._external_mcp_client = external_mcp_client
-        self._session_cache: dict[str, ExternalMCPSession] = {}
+        self._connection_manager = connection_manager
 
     async def list_tools(self, descriptor: ManagedMCPServerDescriptor) -> ManagedMCPToolsResponse:
         if descriptor.source_kind == "builtin":
@@ -45,6 +41,51 @@ class MCPRuntimeManager:
             server_name=descriptor.name,
             source_kind=descriptor.source_kind,
             tools=tools,
+        )
+
+    async def list_resources(self, descriptor: ManagedMCPServerDescriptor) -> ManagedMCPResourcesResponse:
+        resources: list[ManagedMCPResourceDescriptor] = []
+        if descriptor.source_kind == "external" and self._connection_manager is not None:
+            resources = [
+                ManagedMCPResourceDescriptor(
+                    uri=resource.uri,
+                    name=resource.name,
+                    description=resource.description,
+                    mime_type=resource.mime_type,
+                    managed_server_key=descriptor.key,
+                    server_name=descriptor.name,
+                    provider_key=descriptor.provider_key,
+                    tags=[descriptor.transport or "unknown", "resource", "mcp-host"],
+                )
+                for resource in await self._connection_manager.list_resources(descriptor.key)
+            ]
+        return ManagedMCPResourcesResponse(
+            server_key=descriptor.key,
+            server_name=descriptor.name,
+            source_kind=descriptor.source_kind,
+            resources=resources,
+        )
+
+    async def list_prompts(self, descriptor: ManagedMCPServerDescriptor) -> ManagedMCPPromptsResponse:
+        prompts: list[ManagedMCPPromptDescriptor] = []
+        if descriptor.source_kind == "external" and self._connection_manager is not None:
+            prompts = [
+                ManagedMCPPromptDescriptor(
+                    name=prompt.name,
+                    description=prompt.description,
+                    arguments=prompt.arguments,
+                    managed_server_key=descriptor.key,
+                    server_name=descriptor.name,
+                    provider_key=descriptor.provider_key,
+                    tags=[descriptor.transport or "unknown", "prompt", "mcp-host"],
+                )
+                for prompt in await self._connection_manager.list_prompts(descriptor.key)
+            ]
+        return ManagedMCPPromptsResponse(
+            server_key=descriptor.key,
+            server_name=descriptor.name,
+            source_kind=descriptor.source_kind,
+            prompts=prompts,
         )
 
     async def test_server(self, descriptor: ManagedMCPServerDescriptor) -> ManagedMCPTestResponse:
@@ -63,25 +104,19 @@ class MCPRuntimeManager:
                 tool_count=len(descriptor.capabilities),
             )
 
-        if not descriptor.integration_id:
-            return ManagedMCPTestResponse(
-                ok=False,
-                message="External MCP integration id is missing.",
-                server_key=descriptor.key,
-                server_name=descriptor.name,
-                source_kind=descriptor.source_kind,
-            )
-
-        integration_result = await self._integration_catalog_service.test_integration(descriptor.integration_id)
         tools = await self._safe_list_external_tools(descriptor)
+        connection_state = self.get_connection_state(descriptor.key)
+        ok = connection_state is not None and connection_state.status == "connected"
         return ManagedMCPTestResponse(
-            ok=integration_result.ok,
-            message=integration_result.message,
+            ok=ok,
+            message=(
+                connection_state.last_error
+                if connection_state is not None and connection_state.status == "failed" and connection_state.last_error
+                else ("MCP Host server is connected." if ok else "MCP Host server is not connected.")
+            ),
             server_key=descriptor.key,
             server_name=descriptor.name,
             source_kind=descriptor.source_kind,
-            status_code=integration_result.status_code,
-            latency_ms=integration_result.latency_ms,
             tool_count=len(tools),
         )
 
@@ -110,38 +145,29 @@ class MCPRuntimeManager:
                 error=None if ok else str(result.get("error") or "Builtin MCP capability call failed."),
             )
 
-        integration = await self._require_external_integration(descriptor)
-        if integration.transport in {"stdio", "websocket"} and not integration.endpoint_url:
+        if self._connection_manager is not None:
+            result = await self._connection_manager.call_tool(
+                descriptor.key,
+                tool_name,
+                arguments,
+            )
             return ManagedMCPToolCallResponse(
-                ok=False,
+                ok=result.ok,
                 server_key=descriptor.key,
                 server_name=descriptor.name,
                 source_kind=descriptor.source_kind,
                 tool_name=tool_name,
-                error="This external MCP transport is configured but runtime tool calls are only supported for HTTP endpoints right now.",
+                result=result.payload,
+                error=result.error,
             )
 
-        session = await self._open_external_session(integration)
-        result = await self._external_mcp_client.call_tool(
-            session,
-            tool_name=tool_name,
-            arguments=arguments,
-        )
-        error = None
-        if isinstance(result, dict) and "error" in result:
-            error_payload = result.get("error")
-            if isinstance(error_payload, dict):
-                error = str(error_payload.get("message") or error_payload)
-            else:
-                error = str(error_payload)
         return ManagedMCPToolCallResponse(
-            ok=error is None,
+            ok=False,
             server_key=descriptor.key,
             server_name=descriptor.name,
             source_kind=descriptor.source_kind,
             tool_name=tool_name,
-            result=result if isinstance(result, dict) else {"value": result},
-            error=error,
+            error="MCP Host connection manager is not configured.",
         )
 
     def _build_builtin_tools(self, descriptor: ManagedMCPServerDescriptor) -> list[ManagedMCPToolDescriptor]:
@@ -160,69 +186,30 @@ class MCPRuntimeManager:
         ]
 
     async def _build_external_tools(self, descriptor: ManagedMCPServerDescriptor) -> list[ManagedMCPToolDescriptor]:
-        integration = await self._require_external_integration(descriptor)
-        if integration.transport in {"stdio", "websocket"} and not integration.endpoint_url:
+        if self._connection_manager is not None:
+            tools = await self._connection_manager.list_tools(descriptor.key)
             return [
                 ManagedMCPToolDescriptor(
-                    key=capability,
-                    name=capability,
-                    description="Configured external MCP capability. Live runtime discovery is unavailable for this transport.",
-                    input_schema={"type": "object", "additionalProperties": True},
-                    source_kind="external_capability",
+                    key=tool.name,
+                    name=tool.name,
+                    description=tool.description,
+                    input_schema=tool.input_schema,
+                    source_kind="external_tool",
                     managed_server_key=descriptor.key,
                     server_name=descriptor.name,
                     provider_key=descriptor.provider_key,
-                    tags=[integration.transport or "unknown", "configured-capability"],
+                    tags=[descriptor.transport or "unknown", "discovered-tool", "mcp-host"],
                 )
-                for capability in integration.capabilities
+                for tool in tools
             ]
 
-        session = await self._open_external_session(integration)
-        tools = await self._external_mcp_client.list_tools(session)
-        return [
-            ManagedMCPToolDescriptor(
-                key=str(tool.get("name") or ""),
-                name=str(tool.get("name") or ""),
-                description=str(tool.get("description") or ""),
-                input_schema=tool.get("inputSchema") if isinstance(tool.get("inputSchema"), dict) else {},
-                source_kind="external_tool",
-                managed_server_key=descriptor.key,
-                server_name=descriptor.name,
-                provider_key=descriptor.provider_key,
-                tags=[integration.transport or "unknown", "discovered-tool"],
-            )
-            for tool in tools
-            if str(tool.get("name") or "").strip()
-        ]
+        return []
 
     async def _safe_list_external_tools(self, descriptor: ManagedMCPServerDescriptor) -> list[ManagedMCPToolDescriptor]:
         try:
             return (await self.list_tools(descriptor)).tools
         except Exception:
             return []
-
-    async def _require_external_integration(self, descriptor: ManagedMCPServerDescriptor) -> IntegrationRecord:
-        if not descriptor.integration_id:
-            raise ValueError("External MCP integration id is missing.")
-        return await self._integration_catalog_service.get_integration(descriptor.integration_id)
-
-    async def _open_external_session(self, integration: IntegrationRecord) -> ExternalMCPSession:
-        endpoint_url = integration.endpoint_url or integration.document_url
-        if not endpoint_url:
-            raise ValueError("External MCP endpoint URL is missing.")
-
-        cache_key = integration.id
-        cached = self._session_cache.get(cache_key)
-        if cached is not None and cached.endpoint_url == endpoint_url:
-            return cached
-
-        session = await self._external_mcp_client.initialize(
-            endpoint_url=endpoint_url,
-            headers=integration.headers,
-        )
-        await self._external_mcp_client.notify_initialized(session)
-        self._session_cache[cache_key] = session
-        return session
 
     def _builtin_capability_description(self, capability: str) -> str:
         descriptions = {
@@ -240,3 +227,8 @@ class MCPRuntimeManager:
             "query-issue": "Query issues in the external tracking system.",
         }
         return descriptions.get(capability, "Built-in MCP capability.")
+
+    def get_connection_state(self, server_key: str):
+        if self._connection_manager is None:
+            return None
+        return self._connection_manager.get_state(server_key)
