@@ -75,7 +75,6 @@ const infoCards = [
           <i class="fa-solid fa-spider"></i>
         </div>
         <div class="about-title-wrapper">
-          <div class="about-eyebrow">Enterprise AI QA Agent</div>
           <h1 class="about-title">{{ t("about.title") }}</h1>
           <p class="about-desc">
         {{ t("about.desc") }}
@@ -205,8 +204,8 @@ const infoCards = [
   align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 24px;
-  padding-bottom: 32px;
+  gap: 16px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--about-border);
 }
 
@@ -220,15 +219,15 @@ const infoCards = [
 
 .about-logo {
   flex-shrink: 0;
-  width: 56px;
-  height: 56px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--about-bg-muted);
   border: 1px solid var(--about-border);
-  border-radius: 12px;
-  font-size: 24px;
+  border-radius: 8px;
+  font-size: 18px;
   color: var(--about-text-primary);
 }
 
@@ -247,16 +246,16 @@ const infoCards = [
 }
 
 .about-title {
-  margin: 0;
-  font-size: 24px;
+  margin: 0 0 2px 0;
+  font-size: 20px;
   font-weight: 600;
   color: var(--about-text-primary);
   line-height: 1.2;
 }
 
 .about-desc {
-  margin: 4px 0 0;
-  font-size: 14px;
+  margin: 0;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--about-text-secondary);
   max-width: 600px;

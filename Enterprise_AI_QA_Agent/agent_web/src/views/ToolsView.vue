@@ -386,29 +386,40 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px 32px;
+  padding: 16px 24px;
 }
 
 .page-head {
-  margin-bottom: 16px;
-  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
 }
 
 .page-head h2 {
-  font-size: 24px;
-  margin-bottom: 4px;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 2px 0;
 }
 
 .head-desc {
-  font-size: 13px;
+  font-size: 12px;
   margin: 0;
+  color: var(--muted);
+}
+
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .tools-secondary-nav {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .tools-tab-btn {

@@ -868,21 +868,36 @@ function syncFullscreenState() {
 .knowledge-page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 24px 32px;
+  gap: 16px;
+  padding: 16px;
 }
 
 .knowledge-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  margin-bottom: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.knowledge-head h2 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 2px 0;
+}
+
+.knowledge-head .head-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
 }
 
 .knowledge-layout {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
-  gap: 20px;
+  gap: 16px;
   min-height: 0;
   flex: 1;
 }
@@ -895,7 +910,7 @@ function syncFullscreenState() {
 .knowledge-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .sidebar-card,
@@ -909,7 +924,7 @@ function syncFullscreenState() {
 
 .sidebar-card,
 .canvas-card {
-  padding: 16px;
+  padding: 12px 16px;
 }
 
 .canvas-card {

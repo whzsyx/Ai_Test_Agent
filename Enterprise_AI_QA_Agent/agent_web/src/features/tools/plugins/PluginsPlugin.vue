@@ -529,16 +529,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="tools-tab-pane">
-    <div class="pane-header">
-      <div>
-        <h3 class="section-title">{{ t("plugins.title") }}</h3>
-        <p class="head-desc">{{ t("plugins.desc") }}</p>
-      </div>
-      <button class="primary-btn" @click="openCreate(activeTab)">
-        <i class="fa-solid fa-plus"></i>
-        {{ activeTab === "mcp" ? t("tools.add_mcp_integration") : t("tools.add_api_integration") }}
-      </button>
-    </div>
+
 
     <nav class="main-tabs">
       <button :class="{ active: activeTab === 'api' }" @click="activeTab = 'api'">
@@ -570,9 +561,9 @@ onBeforeUnmount(() => {
           </header>
           <p class="card-desc">{{ item.description || t("plugins.no_description") }}</p>
           <div class="integration-meta">
-            <div class="meta-item"><i class="fa-solid fa-link"></i> {{ item.base_url || t("plugins.no_base_url") }}</div>
-            <div class="meta-item"><i class="fa-solid fa-book"></i> {{ item.document_url || t("plugins.no_doc_url") }}</div>
-            <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ item.project_name || t("plugins.no_project") }}</div>
+            <div class="meta-item truncate" :title="item.base_url || ''"><i class="fa-solid fa-link"></i> {{ item.base_url || t("plugins.no_base_url") }}</div>
+            <div class="meta-item truncate" :title="item.document_url || ''"><i class="fa-solid fa-book"></i> {{ item.document_url || t("plugins.no_doc_url") }}</div>
+            <div class="meta-item truncate" :title="item.project_name || ''"><i class="fa-solid fa-folder"></i> {{ item.project_name || t("plugins.no_project") }}</div>
           </div>
           <div class="integration-actions">
             <button class="ghost-btn" @click="openEditApi(item)">{{ t("common.edit") }}</button>
@@ -603,13 +594,15 @@ onBeforeUnmount(() => {
           </header>
           <p class="card-desc">{{ server.summary }}</p>
           <div class="integration-meta">
-            <div class="meta-item"><i class="fa-solid fa-shuffle"></i> {{ server.transport }}</div>
-            <div class="meta-item"><i class="fa-solid fa-signal"></i> {{ server.status }}</div>
-            <div class="meta-item"><i class="fa-solid fa-screwdriver-wrench"></i> tools {{ mcpToolCount(server) }}</div>
-            <div class="meta-item"><i class="fa-solid fa-database"></i> resources {{ mcpResourceCount(server) }}</div>
-            <div class="meta-item"><i class="fa-solid fa-message"></i> prompts {{ mcpPromptCount(server) }}</div>
-            <div class="meta-item"><i class="fa-solid fa-folder"></i> {{ server.project_name || t("plugins.no_project") }}</div>
-            <div class="meta-item"><i class="fa-solid fa-book"></i> {{ server.endpoint_url || server.document_url || t("plugins.no_remote_url") }}</div>
+            <div class="meta-group">
+              <span class="meta-chip"><i class="fa-solid fa-shuffle"></i> {{ server.transport }}</span>
+              <span class="meta-chip" :class="{ connected: server.status === 'connected' }"><i class="fa-solid fa-signal"></i> {{ server.status }}</span>
+              <span class="meta-chip" title="Tools"><i class="fa-solid fa-screwdriver-wrench"></i> {{ mcpToolCount(server) }}</span>
+              <span class="meta-chip" title="Resources"><i class="fa-solid fa-database"></i> {{ mcpResourceCount(server) }}</span>
+              <span class="meta-chip" title="Prompts"><i class="fa-solid fa-message"></i> {{ mcpPromptCount(server) }}</span>
+            </div>
+            <div class="meta-item truncate" :title="server.project_name || ''"><i class="fa-solid fa-folder"></i> {{ server.project_name || t("plugins.no_project") }}</div>
+            <div class="meta-item truncate" :title="server.endpoint_url || server.document_url || ''"><i class="fa-solid fa-link"></i> {{ server.endpoint_url || server.document_url || t("plugins.no_remote_url") }}</div>
           </div>
           <div v-if="mcpCredentialText(server)" class="credential-summary">
             <i class="fa-solid fa-key"></i> {{ mcpCredentialText(server) }}
@@ -754,7 +747,6 @@ onBeforeUnmount(() => {
               <div class="setting-item">
                 <div class="setting-info">
                   <label>{{ t("plugins.form_name") }}</label>
-                  <p>{{ t("plugins.hint_api_name") }}</p>
                 </div>
                 <div class="setting-control">
                   <input v-model="apiName" :placeholder="t('plugins.ph_api_name')" />
@@ -835,10 +827,12 @@ onBeforeUnmount(() => {
                 <label>{{ t("plugins.form_headers_json") }}</label>
                 <textarea v-model="apiHeadersJson" rows="5" spellcheck="false"></textarea>
               </div>
-              <label class="check-row">
-                <input v-model="apiEnabled" type="checkbox">
-                <span>{{ t("plugins.enable_after_create") }}</span>
-              </label>
+              <div class="check-row">
+                <label class="check-label">
+                  <input v-model="apiEnabled" type="checkbox">
+                  <span>{{ t("plugins.enable_after_create") }}</span>
+                </label>
+              </div>
             </div>
           </template>
         </div>
@@ -1057,12 +1051,37 @@ onBeforeUnmount(() => {
 }
 
 .integration-actions {
-  flex-wrap: wrap;
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  overflow-x: auto;
 }
 
+.integration-actions .ghost-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.credential-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .meta-badge,
 .provider-chip,
 .tag-row span,
@@ -1097,13 +1116,15 @@ onBeforeUnmount(() => {
 .primary-btn,
 .icon-btn,
 .mode-switch button {
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-strong);
-  padding: 10px 14px;
+  padding: 8px 14px;
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
 
 .ghost-btn:hover,
@@ -1237,6 +1258,10 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-panel);
 }
 
+.integration-modal {
+  width: min(760px, 100%);
+}
+
 .managed-tools-dialog {
   width: min(560px, 100%);
 }
@@ -1352,11 +1377,20 @@ onBeforeUnmount(() => {
 .setting-control select {
   width: 100%;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 12px 14px;
-  font-size: 14px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
   color: var(--text);
   background: var(--surface-soft);
+  transition: all 0.2s ease;
+}
+
+.field-block input:focus,
+.field-block select:focus,
+.setting-control input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  outline: none;
 }
 
 .field-block textarea,
@@ -1371,38 +1405,98 @@ onBeforeUnmount(() => {
 }
 
 .mcp-json-textarea {
-  min-height: 220px;
+  min-height: 280px;
+  width: 100%;
+  padding: 18px !important;
+  background-color: #0d1117 !important;
+  color: #c9d1d9 !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 12px !important;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  transition: all 0.2s ease !important;
+}
+
+.mcp-json-textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+  outline: none;
+}
+
+.json-import-panel label {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.json-import-panel label::before {
+  content: '\f1c9';
+  font-family: "Font Awesome 6 Free";
+  font-weight: 900;
+  color: var(--text);
+  opacity: 0.7;
 }
 
 .field-hint {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--surface-soft);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.field-hint::before {
+  content: '\f0eb';
+  font-family: "Font Awesome 6 Free";
+  font-weight: 900;
+  color: var(--accent);
 }
 
 .settings-list {
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 20px;
+  align-items: start;
+}
+
+.settings-list > .field-block,
+.settings-list > .check-row {
+  grid-column: 1 / -1;
 }
 
 .setting-item {
-  display: grid;
-  grid-template-columns: minmax(180px, 240px) 1fr;
-  gap: 16px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
 }
 
 .setting-info {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setting-info label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .setting-info p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -1412,11 +1506,58 @@ onBeforeUnmount(() => {
 }
 
 .check-row {
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.check-label {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  color: var(--text);
+  gap: 12px;
+  cursor: pointer;
   font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  user-select: none;
+}
+
+.check-label input[type="checkbox"] {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  width: 40px !important;
+  height: 22px !important;
+  background-color: var(--border-strong) !important;
+  border-radius: 22px !important;
+  position: relative !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+.check-label input[type="checkbox"]::after {
+  content: '' !important;
+  position: absolute !important;
+  top: 2px !important;
+  left: 2px !important;
+  width: 18px !important;
+  height: 18px !important;
+  background-color: white !important;
+  border-radius: 50% !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+  background-image: none !important;
+}
+
+.check-label input[type="checkbox"]:checked {
+  background-color: var(--accent) !important;
+  background-image: none !important;
+}
+
+.check-label input[type="checkbox"]:checked::after {
+  transform: translateX(18px) !important;
 }
 
 @media (max-width: 900px) {
@@ -1428,5 +1569,39 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: stretch;
   }
+}
+
+.meta-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--surface-muted);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.meta-chip.connected {
+  color: var(--green);
+}
+
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  max-width: 100%;
+}
+
+.integration-meta {
+  display: grid;
+  gap: 6px;
 }
 </style>

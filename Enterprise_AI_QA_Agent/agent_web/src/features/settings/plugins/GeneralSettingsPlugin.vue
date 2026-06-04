@@ -336,7 +336,6 @@ async function doCleanupConfirm() {
           <i class="fa-solid fa-sliders"></i>
         </div>
         <div class="general-title-wrapper">
-          <div class="general-eyebrow">Workspace Preferences</div>
           <h1 class="general-title">{{ t("settings.general") }}</h1>
           <p class="general-desc">
             {{ t("settings.system_language_desc") }}
@@ -745,8 +744,8 @@ async function doCleanupConfirm() {
   align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 24px;
-  padding-bottom: 32px;
+  gap: 16px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--general-border);
 }
 
@@ -760,15 +759,15 @@ async function doCleanupConfirm() {
 
 .general-logo {
   flex-shrink: 0;
-  width: 56px;
-  height: 56px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--general-bg-subtle);
+  border: 1px solid var(--general-border);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--general-bg-muted);
-  border: 1px solid var(--general-border);
-  border-radius: 12px;
-  font-size: 24px;
+  font-size: 18px;
   color: var(--general-text-primary);
 }
 
@@ -788,18 +787,18 @@ async function doCleanupConfirm() {
 }
 
 .general-title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 2px 0;
   color: var(--general-text-primary);
-  line-height: 1.2;
 }
 
 .general-desc {
-  margin: 4px 0 0;
-  font-size: 14px;
+  margin: 0;
+  font-size: 12px;
   line-height: 1.6;
-  color: var(--general-text-secondary);
+  color: var(--general-text-tertiary);
   max-width: 600px;
 }
 

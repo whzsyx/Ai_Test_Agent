@@ -3464,8 +3464,6 @@ textarea {
 }
 
 .report-page {
-  max-width: 1400px;
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -3881,8 +3879,8 @@ textarea {
 }
 
 .settings-email-grid {
-  grid-template-columns: repeat(auto-fill, 332px);
-  gap: 24px;
+  grid-template-columns: repeat(auto-fill, 260px);
+  gap: 16px;
 }
 
 .settings-model-card {
@@ -3917,10 +3915,10 @@ textarea {
 }
 
 .settings-email-card {
-  width: 332px;
-  min-height: 320px;
-  height: 320px;
-  padding: 18px 18px 16px;
+  width: 260px;
+  min-height: 310px;
+  height: auto;
+  padding: 16px;
   gap: 10px;
 }
 
@@ -3947,25 +3945,29 @@ textarea {
 }
 
 .settings-email-card .settings-model-card__actions {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 12px;
-  justify-content: flex-start;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
   margin-top: 6px;
 }
 
+.settings-email-card .settings-model-card__actions > * {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+}
+
 .settings-email-card .settings-model-card__action {
-  width: 48px;
-  min-width: 48px;
-  height: 42px;
-  flex: 0 0 48px;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
 }
 
 .settings-email-card-add .settings-model-card-add__icon {
-  width: 54px;
-  height: 54px;
-  font-size: 30px;
+  width: 44px;
+  height: 44px;
+  font-size: 24px;
 }
 
 .settings-email-card-add .settings-model-card-add__body strong {
@@ -4588,14 +4590,14 @@ textarea {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  padding-bottom: 18px;
+  gap: 16px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
 
 .settings-pane-head h3 {
-  margin: 0 0 8px;
-  font-size: 28px;
+  margin: 0 0 4px;
+  font-size: 20px;
   line-height: 1.1;
   font-weight: 700;
   color: var(--text);
@@ -4604,7 +4606,7 @@ textarea {
 .settings-pane-head p {
   margin: 0;
   max-width: 780px;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.7;
   color: var(--muted);
 }

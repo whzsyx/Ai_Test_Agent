@@ -774,7 +774,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px 32px;
+  padding: 16px;
   background: var(--bg);
 }
 
@@ -782,20 +782,20 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
 
 .head-content h2 {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
-  margin: 0 0 6px 0;
+  margin: 0 0 2px 0;
   letter-spacing: -0.02em;
 }
 
 .head-desc {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--muted);
   margin: 0;
 }
@@ -803,7 +803,7 @@ onMounted(() => {
 .report-layout {
   display: flex;
   flex: 1;
-  gap: 24px;
+  gap: 16px;
   min-height: 0;
 }
 
@@ -812,7 +812,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border);
-  padding-right: 24px;
+  padding-right: 16px;
   flex-shrink: 0;
 }
 
@@ -842,7 +842,7 @@ onMounted(() => {
 
 .batch-item {
   padding: 16px;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--surface-soft);
   cursor: pointer;
@@ -950,7 +950,7 @@ onMounted(() => {
 }
 
 .detail-header {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .title-row {
@@ -992,8 +992,8 @@ onMounted(() => {
 .report-kpis {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .kpi-card,

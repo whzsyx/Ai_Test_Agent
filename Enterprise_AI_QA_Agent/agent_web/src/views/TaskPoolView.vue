@@ -246,7 +246,7 @@ onMounted(() => {
                 <div v-if="row.parentSessionId" class="sub-meta">{{ t("taskpool.parent_session") }}={{ row.parentSessionId.slice(0, 8) }}</div>
               </td>
               <td class="col-name">
-                <div class="strong">{{ row.session.title }}</div>
+                <div class="strong task-title" :title="row.session.title">{{ row.session.title }}</div>
                 <div class="sub-meta">{{ formatDateTime(row.session.updated_at) }}</div>
               </td>
               <td class="col-type">
@@ -289,7 +289,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px 32px;
+  padding: 16px;
   background: var(--bg);
 }
 
@@ -297,20 +297,20 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
 
 .head-content h2 {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
-  margin: 0 0 6px 0;
+  margin: 0 0 2px 0;
   letter-spacing: -0.02em;
 }
 
 .head-desc {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--muted);
   margin: 0;
 }
@@ -361,7 +361,7 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-soft);
 }
@@ -381,19 +381,19 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 126px;
-  height: 42px;
+  min-width: 100px;
+  height: 32px;
   box-sizing: border-box;
   border: 1px solid transparent;
   background: transparent;
-  padding: 0 18px;
-  font-size: 13px;
+  padding: 0 12px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
-  border-radius: 9px;
+  border-radius: 8px;
   cursor: pointer;
   transition:
     background-color 0.16s ease,
@@ -512,6 +512,16 @@ onMounted(() => {
 
 .strong {
   font-weight: 600;
+}
+
+.task-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  max-width: 420px;
+  line-height: 1.4;
 }
 
 .sub-meta {
