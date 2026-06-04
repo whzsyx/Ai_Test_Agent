@@ -139,49 +139,61 @@ onMounted(loadProfiles);
     <NDrawer v-model:show="drawerOpen" :width="480" placement="right">
       <div v-if="selectedProfile" class="detail-panel">
         <div class="detail-head">
-          <h4>{{ selectedProfile.tool_name }}</h4>
-          <button class="icon-btn" @click="drawerOpen = false">
+          <div class="detail-head-icon">
+            <i :class="familyIcon(selectedProfile.tool_family)"></i>
+          </div>
+          <div class="detail-head-title">
+            <h4>{{ selectedProfile.tool_name }}</h4>
+            <span class="detail-head-subtitle">{{ t(`scanners.family.${selectedProfile.tool_family}`) }}</span>
+          </div>
+          <button class="icon-btn close-btn" @click="drawerOpen = false">
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
+
         <div class="detail-body">
-          <div class="detail-row">
-            <label>Profile Key</label>
-            <span class="mono">{{ selectedProfile.profile_key }}</span>
+          <div class="detail-grid">
+            <div class="detail-stat">
+              <label>{{ t("scanners.detail.risk_level") }}</label>
+              <span class="risk-badge" :class="riskClass(selectedProfile.risk_level)">
+                {{ t(`scanners.risk.${selectedProfile.risk_level}`) }}
+              </span>
+            </div>
+            <div class="detail-stat">
+              <label>{{ t("scanners.detail.timeout") }}</label>
+              <span><i class="fa-solid fa-stopwatch"></i> {{ selectedProfile.timeout_seconds }}s</span>
+            </div>
+            <div class="detail-stat">
+              <label>{{ t("scanners.detail.approval") }}</label>
+              <span :class="{'text-warning': selectedProfile.requires_approval}">
+                <i :class="selectedProfile.requires_approval ? 'fa-solid fa-lock' : 'fa-solid fa-bolt'"></i>
+                {{ selectedProfile.requires_approval ? t("scanners.detail.approval_required") : t("scanners.detail.approval_auto") }}
+              </span>
+            </div>
           </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.family") }}</label>
-            <span>{{ t(`scanners.family.${selectedProfile.tool_family}`) }}</span>
+
+          <div class="detail-block">
+            <h5 class="block-title">Scanner Information</h5>
+            <div class="detail-row">
+              <label>Profile Key</label>
+              <div class="code-box">{{ selectedProfile.profile_key }}</div>
+            </div>
+            <div class="detail-row">
+              <label>{{ t("scanners.detail.runner") }}</label>
+              <div class="code-box">{{ selectedRunner }}</div>
+            </div>
+            <div class="detail-row">
+              <label>{{ t("scanners.detail.description") }}</label>
+              <p class="detail-desc">{{ selectedProfile.description }}</p>
+            </div>
           </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.runner") }}</label>
-            <span class="mono">{{ selectedRunner }}</span>
-          </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.risk_level") }}</label>
-            <span class="risk-badge" :class="riskClass(selectedProfile.risk_level)">
-              {{ t(`scanners.risk.${selectedProfile.risk_level}`) }}
-            </span>
-          </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.timeout") }}</label>
-            <span>{{ selectedProfile.timeout_seconds }}s</span>
-          </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.approval") }}</label>
-            <span>
-              <i v-if="selectedProfile.requires_approval" class="fa-solid fa-lock" style="color: var(--muted); margin-right: 4px;"></i>
-              {{ selectedProfile.requires_approval ? t("scanners.detail.approval_required") : t("scanners.detail.approval_auto") }}
-            </span>
-          </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.description") }}</label>
-            <p class="detail-desc">{{ selectedProfile.description }}</p>
-          </div>
-          <div class="detail-row">
-            <label>{{ t("scanners.detail.surfaces") }}</label>
+
+          <div class="detail-block">
+            <h5 class="block-title">{{ t("scanners.detail.surfaces") }}</h5>
             <div class="detail-tags">
-              <span v-for="s in selectedProfile.surface_types" :key="s" class="surface-tag">{{ s }}</span>
+              <span v-for="s in selectedProfile.surface_types" :key="s" class="surface-tag detail-surface-tag">
+                <i class="fa-solid fa-bullseye"></i> {{ s }}
+              </span>
             </div>
           </div>
         </div>
@@ -433,81 +445,190 @@ onMounted(loadProfiles);
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--surface);
+  background: var(--surface, #fff);
 }
 
 .detail-head {
-  padding: 20px 24px 16px;
+  padding: 32px 24px 24px;
+  background: linear-gradient(180deg, var(--surface-muted, #f8fafc) 0%, var(--surface, #fff) 100%);
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  position: relative;
 }
 
-.detail-head h4 {
-  margin: 0;
-  font-size: 18px;
-  color: var(--text);
-}
-
-.icon-btn {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 16px;
-  display: inline-flex;
+.detail-head-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #3b82f6;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  transition: background 0.2s, color 0.2s;
+  font-size: 24px;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
 }
 
-.icon-btn:hover {
-  background: var(--surface-muted);
+.detail-head-title {
+  flex: 1;
+}
+
+.detail-head-title h4 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 700;
   color: var(--text);
+  line-height: 1.2;
+}
+
+.detail-head-subtitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.icon-btn.close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
 }
 
 .detail-body {
-  padding: 20px 24px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 28px;
   overflow-y: auto;
   flex: 1;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  background: var(--surface-muted, #f8fafc);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.detail-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-stat label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+}
+
+.detail-stat span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.detail-stat span i {
+  color: var(--muted);
+}
+
+.text-warning {
+  color: #d97706 !important;
+}
+.text-warning i {
+  color: inherit !important;
+}
+
+.detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.block-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.block-title::before {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 14px;
+  background: #3b82f6;
+  border-radius: 2px;
 }
 
 .detail-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .detail-row label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
 }
 
-.detail-row span,
-.detail-row p {
-  font-size: 14px;
+.code-box {
+  background: var(--surface-muted, #f8fafc);
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 13px;
   color: var(--text);
+  word-break: break-all;
 }
 
 .detail-desc {
   margin: 0;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary, #475569);
+  background: var(--surface-muted, #f8fafc);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
 }
 
 .detail-tags {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-surface-tag {
+  padding: 6px 12px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 12px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+}
+.detail-surface-tag i {
+  color: #94a3b8;
 }
 
 .mono {
