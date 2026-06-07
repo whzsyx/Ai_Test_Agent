@@ -1,0 +1,398 @@
+"""Performance Testing Mode Runtime.
+
+Core state machine that drives the full lifecycle:
+intake → plan → script → guard → smoke → execute → analyze → report.
+"""
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any
+
+from src.application.performance.engine_adapter import RawMetrics, RunOptions
+from src.application.performance.k6_engine_adapter import K6EngineAdapter
+from src.application.performance.perf_runner_service import PerfRunnerService
+from src.application.performance.perf_target_guard import PerfTargetGuard
+from src.core.config import Settings
+from src.modes.performance_testing_mode.contracts import (
+    PHASE_ANALYZED,
+    PHASE_FAILED,
+    PHASE_GUARD_PASSED,
+    PHASE_INTAKE,
+    PHASE_INTERRUPTED,
+    PHASE_LOAD_RUNNING,
+    PHASE_PLAN_RESOLVED,
+    PHASE_REPORT_READY,
+    PHASE_RESULT_COLLECTED,
+    PHASE_SCRIPT_BUILT,
+    PHASE_SMOKE_VALIDATED,
+    REQUIRED_SLOTS,
+    STATE_METADATA_KEY,
+    TERMINAL_PHASES,
+)
+from src.modes.performance_testing_mode.intake import (
+    check_slots_ready,
+    generate_next_questions,
+)
+from src.modes.performance_testing_mode.plan_state import (
+    PerfMetrics,
+    PerfPlan,
+    PerfReport,
+    PerfRun,
+    PerfTarget,
+    PerfWorkloadConfig,
+    PerformanceTestingState,
+    SLAConfig,
+    SmokeConfig,
+)
+from src.modes.performance_testing_mode.report_builder import PerfReportBuilder
+from src.modes.performance_testing_mode.request_interpreter import PerfRequestInterpreter
+from src.modes.performance_testing_mode.result_parser import PerfResultParser
+from src.modes.performance_testing_mode.workload_modeler import WorkloadModeler
+
+logger = logging.getLogger(__name__)
+
+
+class PerformanceTestingModeRuntime:
+    """State machine runtime for performance testing mode."""
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        coordinator_runtime_service=None,
+        session_store=None,
+        memory_runtime_service=None,
+    ):
+        self._settings = settings
+        self._coordinator_runtime_service = coordinator_runtime_service
+        self._session_store = session_store
+        self._memory_runtime_service = memory_runtime_service
+        self._interpreter = PerfRequestInterpreter()
+        self._modeler = WorkloadModeler()
+        self._parser = PerfResultParser()
+        self._report_builder = PerfReportBuilder()
+
+        if settings:
+            self._guard = PerfTargetGuard(settings)
+            self._runner = PerfRunnerService(settings)
+            self._engine_adapter = K6EngineAdapter(
+                image=settings.k6_docker_image,
+                rewrite_localhost=settings.performance_rewrite_localhost,
+            )
+        else:
+            self._guard = None
+            self._runner = None
+            self._engine_adapter = None
+
+    def set_coordinator_runtime_service(self, svc) -> None:
+        self._coordinator_runtime_service = svc
+
+    def set_session_store(self, store) -> None:
+        self._session_store = store
+
+    def set_memory_runtime_service(self, svc) -> None:
+        self._memory_runtime_service = svc
+
+    async def handle(self, arguments: dict[str, Any], context: Any) -> dict[str, Any]:
+        """Main entry point — restore state, advance phases, persist, return."""
+        state = self._restore_state(context)
+
+        try:
+            result = await self._advance(state, arguments, context)
+        except Exception as e:
+            logger.exception("Performance testing runtime error")
+            state.record_phase_transition(PHASE_FAILED)
+            state.errors.append(str(e))
+            result = {
+                "status": "error",
+                "ok": False,
+                "phase": PHASE_FAILED,
+                "summary": f"运行时异常: {e}",
+                "errors": state.errors,
+            }
+        finally:
+            self._persist_state(state, context)
+
+        result["performance_testing_state"] = state.model_dump()
+        return result
+
+    async def _advance(
+        self, state: PerformanceTestingState, arguments: dict[str, Any], context: Any
+    ) -> dict[str, Any]:
+        phase = state.phase
+
+        if phase in TERMINAL_PHASES:
+            return {
+                "status": "completed",
+                "ok": True,
+                "phase": phase,
+                "summary": f"性能测试已完成 (phase={phase})",
+            }
+
+        if phase == PHASE_INTAKE:
+            return await self._handle_intake(state, arguments)
+
+        if phase == PHASE_PLAN_RESOLVED:
+            return await self._handle_script_build(state)
+
+        if phase == PHASE_SCRIPT_BUILT:
+            return await self._handle_guard_check(state)
+
+        if phase == PHASE_GUARD_PASSED:
+            return await self._handle_smoke(state)
+
+        if phase == PHASE_SMOKE_VALIDATED:
+            return await self._handle_execution(state)
+
+        if phase == PHASE_LOAD_RUNNING:
+            return await self._handle_result_collection(state)
+
+        if phase == PHASE_RESULT_COLLECTED:
+            return await self._handle_analysis(state)
+
+        if phase == PHASE_ANALYZED:
+            return await self._handle_report(state)
+
+        return {"status": "error", "ok": False, "phase": phase, "summary": f"未知阶段: {phase}"}
+
+    async def _handle_intake(
+        self, state: PerformanceTestingState, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        interpreted = self._interpreter.interpret(arguments.get("objective", ""))
+
+        for slot, value in interpreted.slots.items():
+            state.request.filled_slots[slot] = value
+
+        for key, value in arguments.items():
+            if key == "target_url" and value:
+                state.request.filled_slots["target"] = value
+                state.request.target = value
+            elif key == "target_rate_rps" and value:
+                state.request.filled_slots["workload"] = f"rate={value}rps"
+                state.request.workload_qps = value
+            elif key == "virtual_users" and value:
+                state.request.filled_slots["workload"] = f"vus={value}"
+                state.request.workload_vus = value
+            elif key == "run_intent" and value:
+                state.request.filled_slots["run_intent"] = value
+                state.request.run_intent = value
+            elif key == "confirm_target" and value:
+                state.request.filled_slots["target_confirmed"] = True
+                state.request.target_confirmed = True
+            elif key == "duration_seconds" and value:
+                state.request.duration_seconds = value
+            elif key == "sla_p95_ms" and value:
+                state.request.sla_p95_ms = value
+            elif key == "sla_p99_ms" and value:
+                state.request.sla_p99_ms = value
+            elif key == "sla_error_rate" and value is not None:
+                state.request.sla_error_rate = value
+
+        ready, missing = check_slots_ready(state.request)
+
+        if not ready:
+            questions = generate_next_questions(state.request)
+            return {
+                "status": "awaiting_input",
+                "ok": True,
+                "phase": PHASE_INTAKE,
+                "summary": "需要更多信息以继续",
+                "questions": questions,
+                "filled_slots": state.request.filled_slots,
+                "missing_slots": list(missing),
+            }
+
+        plan = self._build_plan_from_slots(state)
+        state.plan = plan
+        state.record_phase_transition(PHASE_PLAN_RESOLVED)
+
+        return await self._handle_script_build(state)
+
+    def _build_plan_from_slots(self, state: PerformanceTestingState) -> PerfPlan:
+        req = state.request
+        slots = req.filled_slots
+
+        target_url = req.target or slots.get("target", "")
+        method = "GET"
+
+        workload_model = "open"
+        target_rate = req.workload_qps
+        vus = req.workload_vus
+        duration = req.duration_seconds or 60
+
+        if vus and not target_rate:
+            workload_model = "closed"
+
+        wl_config = PerfWorkloadConfig(
+            model=workload_model,
+            mode="constant_arrival_rate" if workload_model == "open" else "constant_vus",
+            target_rate_rps=target_rate,
+            virtual_users=vus or (max((target_rate or 50) * 2, 100) if workload_model == "open" else 50),
+            hold_seconds=duration,
+        )
+
+        sla = SLAConfig(
+            p95_ms=req.sla_p95_ms,
+            p99_ms=req.sla_p99_ms,
+            error_rate=req.sla_error_rate,
+            min_tps=req.sla_min_tps,
+        )
+
+        return PerfPlan(
+            plan_id=f"plan-{uuid.uuid4().hex[:8]}",
+            title=f"压测 {target_url}",
+            engine=req.engine or "k6",
+            run_intent=req.run_intent or "probe",
+            targets=[PerfTarget(name="primary", url=target_url, method=method)],
+            workload=wl_config,
+            smoke=SmokeConfig(),
+            sla=sla,
+        )
+
+    async def _handle_script_build(self, state: PerformanceTestingState) -> dict[str, Any]:
+        if not self._engine_adapter or not state.plan:
+            return self._error("引擎适配器未初始化", state)
+
+        script = self._engine_adapter.build_script(state.plan)
+        state.record_phase_transition(PHASE_SCRIPT_BUILT)
+
+        return await self._handle_guard_check(state)
+
+    async def _handle_guard_check(self, state: PerformanceTestingState) -> dict[str, Any]:
+        if not self._guard or not state.plan:
+            return self._error("安全护栏未初始化", state)
+
+        result = self._guard.validate(state.plan)
+        if not result.ok:
+            state.record_phase_transition(PHASE_FAILED)
+            state.errors.append(result.reason)
+            return {
+                "status": "blocked",
+                "ok": False,
+                "phase": PHASE_FAILED,
+                "summary": f"安全护栏拒绝: {result.reason}",
+                "guard_result": {"ok": False, "reason": result.reason},
+            }
+
+        state.record_phase_transition(PHASE_GUARD_PASSED)
+
+        if self._settings and self._settings.performance_smoke_required:
+            return await self._handle_smoke(state)
+
+        state.record_phase_transition(PHASE_SMOKE_VALIDATED)
+        return await self._handle_execution(state)
+
+    async def _handle_smoke(self, state: PerformanceTestingState) -> dict[str, Any]:
+        if not self._runner or not self._engine_adapter or not state.plan:
+            return self._error("执行器未初始化", state)
+
+        script = self._engine_adapter.build_script(state.plan)
+        smoke_result = await self._runner.run_smoke(state.plan, script, self._engine_adapter)
+
+        if not smoke_result.passed:
+            state.record_phase_transition(PHASE_FAILED)
+            state.errors.append(f"冒烟验证失败: {smoke_result.detail}")
+            return {
+                "status": "blocked",
+                "ok": False,
+                "phase": PHASE_FAILED,
+                "summary": f"冒烟验证未通过: {smoke_result.detail}",
+                "smoke_result": smoke_result.model_dump(),
+            }
+
+        state.record_phase_transition(PHASE_SMOKE_VALIDATED)
+        return await self._handle_execution(state)
+
+    async def _handle_execution(self, state: PerformanceTestingState) -> dict[str, Any]:
+        if not self._runner or not self._engine_adapter or not state.plan:
+            return self._error("执行器未初始化", state)
+
+        state.record_phase_transition(PHASE_LOAD_RUNNING)
+
+        script = self._engine_adapter.build_script(state.plan)
+        run_opts = RunOptions(
+            timeout_seconds=state.plan.workload.hold_seconds + 120,
+        )
+
+        run = await self._runner.execute(state.plan, script, run_opts, self._engine_adapter)
+        state.run = run
+
+        state.record_phase_transition(PHASE_RESULT_COLLECTED)
+        return await self._handle_analysis(state)
+
+    async def _handle_result_collection(self, state: PerformanceTestingState) -> dict[str, Any]:
+        state.record_phase_transition(PHASE_RESULT_COLLECTED)
+        return await self._handle_analysis(state)
+
+    async def _handle_analysis(self, state: PerformanceTestingState) -> dict[str, Any]:
+        if not state.run or not state.plan:
+            return self._error("缺少运行结果", state)
+
+        raw_metrics = RawMetrics()
+        if state.run.result_artifact and state.run.result_artifact.startswith("inline:"):
+            if self._engine_adapter and state.run.stdout_tail:
+                pass
+
+        if state.run.engine_thresholds:
+            raw_metrics.thresholds = state.run.engine_thresholds
+
+        parsed = self._parser.parse(raw_metrics)
+
+        baseline = None
+        target_url = state.plan.targets[0].url if state.plan.targets else ""
+
+        report = self._report_builder.build(parsed, state.plan, state.run, baseline)
+        state.report = report
+
+        state.record_phase_transition(PHASE_ANALYZED)
+        return await self._handle_report(state)
+
+    async def _handle_report(self, state: PerformanceTestingState) -> dict[str, Any]:
+        if not state.report:
+            return self._error("缺少分析报告", state)
+
+        state.record_phase_transition(PHASE_REPORT_READY)
+
+        return {
+            "status": "completed",
+            "ok": True,
+            "phase": PHASE_REPORT_READY,
+            "summary": f"性能测试完成，verdict={state.report.verdict}",
+            "verdict": state.report.verdict,
+            "run_id": state.run.run_id if state.run else "",
+            "run_intent": state.report.run_intent,
+            "metrics": state.report.metrics.model_dump(),
+            "sla_result": state.report.sla_result.model_dump(),
+            "error_breakdown": state.report.error_breakdown.model_dump(),
+            "engine_threshold_crosscheck": state.report.engine_threshold_crosscheck.model_dump(),
+            "load_side_observations": state.report.load_side_observations,
+            "report_markdown": state.report.report_markdown,
+            "report_html": state.report.report_html,
+        }
+
+    def _error(self, message: str, state: PerformanceTestingState) -> dict[str, Any]:
+        state.record_phase_transition(PHASE_FAILED)
+        state.errors.append(message)
+        return {
+            "status": "error",
+            "ok": False,
+            "phase": PHASE_FAILED,
+            "summary": message,
+            "errors": state.errors,
+        }
+
+    def _restore_state(self, context: Any) -> PerformanceTestingState:
+        if hasattr(context, "context_bundle") and isinstance(context.context_bundle, dict):
+            raw = context.context_bundle.get(STATE_METADATA_KEY)
+            if raw and isinstance(raw, dict):
+                try:
+                    return PerformanceTestingState(**raw)
+                except Exception:
+                    pass
+
+        state = PerformanceTestingState(session_id=str(uuid.uuid4())[:8])
+        return state
+
+    def _persist_state(self, state: PerformanceTestingState, context: Any) -> None:
+        if hasattr(context, "context_bundle") and isinstance(context.context_bundle, dict):
+            context.context_bundle[STATE_METADATA_KEY] = state.model_dump()

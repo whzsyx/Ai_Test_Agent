@@ -1,0 +1,334 @@
+"""Performance report builder.
+
+Constructs PerfReport from parsed metrics: SLA judgment, error classification,
+engine threshold crosscheck, load-side observations, and markdown/HTML output.
+"""
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from src.modes.performance_testing_mode.contracts import (
+    RUN_INTENT_PROBE,
+    RUN_INTENT_REGRESSION,
+    VERDICT_BASELINE,
+    VERDICT_FAIL,
+    VERDICT_PASS,
+    Verdict,
+)
+from src.modes.performance_testing_mode.plan_state import (
+    BaselineComparison,
+    EngineThresholdCrosscheck,
+    ErrorBreakdown,
+    PerfMetrics,
+    PerfPlan,
+    PerfReport,
+    PerfRun,
+    SLAConfig,
+    SLAResult,
+    SLAViolation,
+)
+from src.modes.performance_testing_mode.result_parser import ParsedMetrics
+
+
+class PerfReportBuilder:
+    """Builds a complete PerfReport from parsed metrics and plan context."""
+
+    def build(
+        self,
+        parsed: ParsedMetrics,
+        plan: PerfPlan,
+        run: PerfRun,
+        baseline_metrics: PerfMetrics | None = None,
+    ) -> PerfReport:
+        report = PerfReport(
+            report_id=f"rpt-{uuid.uuid4().hex[:8]}",
+            run_id=run.run_id,
+            run_intent=plan.run_intent,
+            metrics=parsed.metrics,
+        )
+
+        report.error_breakdown = self._classify_errors(parsed, run)
+        report.sla_result = self._judge_sla(parsed.metrics, plan.sla, plan.run_intent)
+        report.engine_threshold_crosscheck = self._crosscheck_thresholds(
+            run.engine_thresholds, report.sla_result
+        )
+
+        if baseline_metrics and plan.run_intent == RUN_INTENT_REGRESSION:
+            report.baseline_comparison = self._compare_baseline(
+                parsed.metrics, baseline_metrics
+            )
+
+        report.load_side_observations = self._observe(parsed, plan)
+        report.verdict = self._decide_verdict(report)
+        report.report_markdown = self._render_markdown(report)
+        report.report_html = self._render_html(report)
+
+        return report
+
+    def _classify_errors(self, parsed: ParsedMetrics, run: PerfRun) -> ErrorBreakdown:
+        raw_data = parsed.raw
+        if not raw_data:
+            return ErrorBreakdown()
+
+        metrics = raw_data.get("metrics", {})
+        status_codes = self._extract_status_codes(raw_data)
+
+        protocol_errors = sum(
+            count for code, count in status_codes.items()
+            if code.startswith("5") or code in ("0", "timeout")
+        )
+        throttle_errors = sum(
+            count for code, count in status_codes.items()
+            if code in ("429", "503")
+        )
+        application_errors = sum(
+            count for code, count in status_codes.items()
+            if code.startswith("4") and code not in ("429",)
+        )
+
+        return ErrorBreakdown(
+            protocol_errors=protocol_errors,
+            application_errors=application_errors,
+            expected_throttle=throttle_errors,
+        )
+
+    def _judge_sla(
+        self, metrics: PerfMetrics, sla: SLAConfig, intent: str
+    ) -> SLAResult:
+        if intent == RUN_INTENT_PROBE:
+            return SLAResult(passed=True, violations=[])
+
+        violations: list[SLAViolation] = []
+
+        if sla.p95_ms and metrics.p95_ms > sla.p95_ms:
+            violations.append(SLAViolation(
+                metric="p95_ms", actual=metrics.p95_ms, threshold=sla.p95_ms
+            ))
+
+        if sla.p99_ms and metrics.p99_ms > sla.p99_ms:
+            violations.append(SLAViolation(
+                metric="p99_ms", actual=metrics.p99_ms, threshold=sla.p99_ms
+            ))
+
+        if sla.error_rate is not None and metrics.error_rate > sla.error_rate:
+            violations.append(SLAViolation(
+                metric="error_rate", actual=metrics.error_rate, threshold=sla.error_rate
+            ))
+
+        if sla.min_tps and metrics.throughput_tps < sla.min_tps:
+            violations.append(SLAViolation(
+                metric="throughput_tps",
+                actual=metrics.throughput_tps,
+                threshold=sla.min_tps,
+            ))
+
+        return SLAResult(passed=len(violations) == 0, violations=violations)
+
+    def _crosscheck_thresholds(
+        self, engine_thresholds: dict[str, Any], sla_result: SLAResult
+    ) -> EngineThresholdCrosscheck:
+        if not engine_thresholds:
+            return EngineThresholdCrosscheck(agree=True, detail="引擎未输出 thresholds")
+
+        engine_passed = all(
+            v.get("ok", True) if isinstance(v, dict) else True
+            for v in engine_thresholds.values()
+        )
+        sla_passed = sla_result.passed
+
+        if engine_passed == sla_passed:
+            return EngineThresholdCrosscheck(agree=True, detail="引擎判定与 SLA 判定一致")
+
+        return EngineThresholdCrosscheck(
+            agree=False,
+            detail=(
+                f"引擎判定={'通过' if engine_passed else '未通过'}，"
+                f"SLA 判定={'通过' if sla_passed else '未通过'}，存在分歧需人工确认"
+            ),
+        )
+
+    def _compare_baseline(
+        self, current: PerfMetrics, baseline: PerfMetrics
+    ) -> BaselineComparison:
+        if baseline.p95_ms <= 0:
+            return BaselineComparison()
+
+        delta_pct = ((current.p95_ms - baseline.p95_ms) / baseline.p95_ms) * 100
+        regressed = delta_pct > 10.0
+
+        return BaselineComparison(p95_delta_pct=round(delta_pct, 2), regressed=regressed)
+
+    def _observe(self, parsed: ParsedMetrics, plan: PerfPlan) -> list[str]:
+        observations: list[str] = []
+        m = parsed.metrics
+
+        if m.error_rate > 0.1:
+            observations.append(f"错误率较高 ({m.error_rate*100:.1f}%)，建议检查服务端日志")
+
+        if m.p99_ms > 0 and m.p95_ms > 0:
+            tail_ratio = m.p99_ms / m.p95_ms
+            if tail_ratio > 3.0:
+                observations.append(
+                    f"长尾效应明显 (P99/P95={tail_ratio:.1f}x)，可能存在 GC 或锁竞争"
+                )
+
+        if m.max_ms > m.p99_ms * 5 and m.max_ms > 5000:
+            observations.append(
+                f"极端异常值 (max={m.max_ms:.0f}ms >> P99={m.p99_ms:.0f}ms)，"
+                "建议排查超时/重试"
+            )
+
+        if parsed.inflection_point:
+            observations.append(
+                f"检测到拐点约在 {parsed.inflection_point:.0f} rps/VU 处，"
+                "超过此负载后延迟急剧上升"
+            )
+
+        if m.throughput_tps > 0 and plan.workload.target_rate_rps:
+            achieved_ratio = m.throughput_tps / plan.workload.target_rate_rps
+            if achieved_ratio < 0.8:
+                observations.append(
+                    f"实际吞吐 ({m.throughput_tps:.0f} tps) 未达目标 "
+                    f"({plan.workload.target_rate_rps} rps) 的 80%，系统可能已饱和"
+                )
+
+        return observations
+
+    def _decide_verdict(self, report: PerfReport) -> Verdict:
+        if report.run_intent == RUN_INTENT_PROBE:
+            return VERDICT_BASELINE
+
+        if not report.sla_result.passed:
+            return VERDICT_FAIL
+
+        if report.baseline_comparison and report.baseline_comparison.regressed:
+            return VERDICT_FAIL
+
+        return VERDICT_PASS
+
+    def _render_markdown(self, report: PerfReport) -> str:
+        lines: list[str] = []
+        m = report.metrics
+
+        lines.append(f"# 性能测试报告 ({report.report_id})")
+        lines.append("")
+        lines.append(f"**运行 ID**: {report.run_id}")
+        lines.append(f"**意图**: {report.run_intent}")
+        lines.append(f"**结论**: {report.verdict}")
+        lines.append("")
+
+        lines.append("## 核心指标")
+        lines.append("")
+        lines.append("| 指标 | 值 |")
+        lines.append("|------|-----|")
+        lines.append(f"| 样本数 | {m.samples} |")
+        lines.append(f"| 吞吐量 | {m.throughput_tps:.1f} tps |")
+        lines.append(f"| 平均延迟 | {m.avg_ms:.1f} ms |")
+        lines.append(f"| P50 | {m.p50_ms:.1f} ms |")
+        lines.append(f"| P90 | {m.p90_ms:.1f} ms |")
+        lines.append(f"| P95 | {m.p95_ms:.1f} ms |")
+        lines.append(f"| P99 | {m.p99_ms:.1f} ms |")
+        lines.append(f"| 错误率 | {m.error_rate*100:.2f}% |")
+        lines.append("")
+
+        if report.error_breakdown.protocol_errors or report.error_breakdown.application_errors:
+            lines.append("## 错误分类")
+            lines.append("")
+            eb = report.error_breakdown
+            lines.append(f"- 协议错误 (5xx/timeout): {eb.protocol_errors}")
+            lines.append(f"- 应用错误 (4xx): {eb.application_errors}")
+            lines.append(f"- 预期限流 (429/503): {eb.expected_throttle}")
+            lines.append("")
+
+        if not report.sla_result.passed:
+            lines.append("## SLA 违规")
+            lines.append("")
+            for v in report.sla_result.violations:
+                lines.append(f"- **{v.metric}**: 实际 {v.actual:.2f} > 阈值 {v.threshold:.2f}")
+            lines.append("")
+
+        if not report.engine_threshold_crosscheck.agree:
+            lines.append("## 引擎交叉验证")
+            lines.append("")
+            lines.append(f"> {report.engine_threshold_crosscheck.detail}")
+            lines.append("")
+
+        if report.baseline_comparison:
+            lines.append("## 基线对比")
+            lines.append("")
+            bc = report.baseline_comparison
+            direction = "↑" if (bc.p95_delta_pct or 0) > 0 else "↓"
+            lines.append(f"- P95 变化: {direction} {abs(bc.p95_delta_pct or 0):.1f}%")
+            lines.append(f"- 回归判定: {'是' if bc.regressed else '否'}")
+            lines.append("")
+
+        if report.load_side_observations:
+            lines.append("## 负载侧观测")
+            lines.append("")
+            for obs in report.load_side_observations:
+                lines.append(f"- {obs}")
+            lines.append("")
+            lines.append(f"> {report.bottleneck_note}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _render_html(self, report: PerfReport) -> str:
+        md = report.report_markdown or self._render_markdown(report)
+        lines: list[str] = [
+            "<!DOCTYPE html>",
+            '<html lang="zh-CN"><head><meta charset="utf-8">',
+            f"<title>性能报告 {report.report_id}</title>",
+            "<style>",
+            "body{font-family:system-ui;max-width:800px;margin:2rem auto;padding:0 1rem}",
+            "table{border-collapse:collapse;width:100%}",
+            "th,td{border:1px solid #ddd;padding:8px;text-align:left}",
+            "th{background:#f5f5f5}",
+            ".pass{color:#16a34a}.fail{color:#dc2626}.baseline{color:#2563eb}",
+            "</style></head><body>",
+        ]
+
+        verdict_class = report.verdict
+        lines.append(
+            f'<h1>性能测试报告 <span class="{verdict_class}">[{report.verdict.upper()}]</span></h1>'
+        )
+        lines.append(f"<p>运行 ID: {report.run_id} | 意图: {report.run_intent}</p>")
+
+        m = report.metrics
+        lines.append("<h2>核心指标</h2><table><tr><th>指标</th><th>值</th></tr>")
+        rows = [
+            ("样本数", f"{m.samples}"),
+            ("吞吐量", f"{m.throughput_tps:.1f} tps"),
+            ("P95", f"{m.p95_ms:.1f} ms"),
+            ("P99", f"{m.p99_ms:.1f} ms"),
+            ("错误率", f"{m.error_rate*100:.2f}%"),
+        ]
+        for label, val in rows:
+            lines.append(f"<tr><td>{label}</td><td>{val}</td></tr>")
+        lines.append("</table>")
+
+        if report.load_side_observations:
+            lines.append("<h2>负载侧观测</h2><ul>")
+            for obs in report.load_side_observations:
+                lines.append(f"<li>{obs}</li>")
+            lines.append("</ul>")
+            lines.append(f"<blockquote>{report.bottleneck_note}</blockquote>")
+
+        lines.append("</body></html>")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_status_codes(raw_data: dict[str, Any]) -> dict[str, int]:
+        metrics = raw_data.get("metrics", {})
+        codes: dict[str, int] = {}
+
+        for key, val in metrics.items():
+            if key.startswith("http_req_status{status:"):
+                code = key.split("status:")[1].rstrip("}")
+                count = 0
+                if isinstance(val, dict):
+                    count = int(val.get("values", {}).get("count", 0))
+                codes[code] = count
+
+        return codes

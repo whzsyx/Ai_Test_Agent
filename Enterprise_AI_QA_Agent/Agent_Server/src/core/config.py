@@ -72,6 +72,27 @@ class Settings(BaseSettings):
     security_runner_container_reuse: bool = False
     security_runner_docker_cleanup_after_run: bool | None = None
     security_runner_wrap_timeout: bool = True
+    # Performance runner
+    performance_runner_backend: str = "auto"
+    performance_runner_ephemeral: bool = True
+    performance_default_engine: str = "k6"
+    performance_default_workload_model: str = "open"
+    k6_docker_image: str = "grafana/k6:latest"
+    jmeter_docker_image: str = "justb4/jmeter:5.6.3"
+    perf_engine_pull_policy: str = "missing"
+    performance_runner_docker_cpus: str = ""
+    performance_runner_docker_memory: str = ""
+    performance_max_concurrent_runs: int = 1
+    performance_rewrite_localhost: bool = True
+    performance_smoke_required: bool = True
+    performance_smoke_iterations: int = 3
+    performance_target_allowlist: str = ""
+    performance_max_vus: int = 2000
+    performance_max_rate_rps: int = 1000
+    performance_max_duration_seconds: int = 1800
+    performance_runner_docker_container_prefix: str = "qa-perf"
+    performance_runner_docker_workdir: str = "/work"
+    postgres_perf_runs_table: str = "agent_perf_runs"
     memory_top_k: int = 6
     tool_job_heartbeat_timeout_seconds: int = 90
     mcp_stdio_command_allowlist: list[str] = Field(

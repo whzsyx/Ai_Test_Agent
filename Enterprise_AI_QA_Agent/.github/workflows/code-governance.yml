@@ -1,0 +1,61 @@
+name: Code Governance Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install governance dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e Agent_Server bandit pip-audit semgrep
+
+      - name: Resolve review range
+        id: range
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "commit_range=${{ github.event.pull_request.base.sha }}...${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "commit_range=${{ github.event.before }}..${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run governance gate
+        run: |
+          python scripts/run_code_governance_gate.py \
+            --project . \
+            --commit-range "${{ steps.range.outputs.commit_range }}" \
+            --run-external-scanners \
+            --external-scanners semgrep,gitleaks,bandit,pip-audit,npm-audit \
+            --minimum-score 80 \
+            --max-high-findings 2 \
+            --report-json governance-report.json \
+            --report-markdown governance-report.md
+
+      - name: Upload governance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-governance-report
+          path: |
+            governance-report.json
+            governance-report.md

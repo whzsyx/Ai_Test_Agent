@@ -153,6 +153,7 @@ class AgentRegistry:
                     description="Dedicated mode coordinator for code review workflows. It should launch the code-review-orchestrator first, then supervise reviewer debate progress instead of reading repository files directly.",
                     supported_tools=[
                         "code-review-orchestrator",
+                        "code-governance-runner",
                         "session-history",
                         "observation-search",
                         "message-dispatch",
@@ -612,14 +613,97 @@ class AgentRegistry:
                 descriptor=AgentDescriptor(
                     key="performance-testing-agent",
                     name="Performance Testing Agent",
-                    role="tester",
-                    summary="Reserved agent for future performance testing workflows.",
-                    description="Placeholder agent scaffold for performance testing mode.",
-                    supported_tools=["performance-test-runner", "knowledge-rag", "report-writer", "cli-executor"],
+                    role="coordinator",
+                    summary="主控性能测试智能体，负责意图采集、计划编排、执行调度和报告生成。",
+                    description=(
+                        "性能测试模式主控智能体。通过对话式槽位采集理解用户意图，"
+                        "驱动负载建模、脚本生成、冒烟验证、正式压测、结果分析和报告投递全流程。"
+                        "遵循先澄清后执行原则，目标未确认前不发起压测。"
+                    ),
+                    supported_tools=[
+                        "performance-test-runner",
+                        "perf-plan-compiler",
+                        "subagent-dispatch",
+                        "knowledge-rag",
+                        "api-docs-library",
+                        "report-writer",
+                        "message-dispatch",
+                        "send-email",
+                        "file-artifact-manager",
+                        "observation-search",
+                        "session-history",
+                    ],
+                    supported_skills=["requirements-analysis", "report-synthesis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4", "deepseek-reasoner"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "orchestration"],
+                )
+            ),
+            "perf-planner": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="perf-planner",
+                    name="Perf Planner",
+                    role="planner",
+                    summary="将用户意图和负载模型转化为结构化 PerfPlan。",
+                    description=(
+                        "根据采集到的槽位信息（目标、负载参数、SLA）和负载模型，"
+                        "生成完整的 PerfPlan，包含 target、workload config、smoke config、"
+                        "data params、correlations 和 assertions。"
+                    ),
+                    supported_tools=["perf-plan-compiler", "knowledge-rag", "api-docs-library"],
+                    supported_skills=["requirements-analysis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "planning"],
+                )
+            ),
+            "perf-script-builder": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="perf-script-builder",
+                    name="Perf Script Builder",
+                    role="worker",
+                    summary="将 PerfPlan 编译为引擎可执行脚本。",
+                    description="调用 perf-plan-compiler 工具将计划转为 k6 脚本，处理数据参数和关联提取。",
+                    supported_tools=["perf-plan-compiler", "knowledge-rag"],
                     supported_skills=[],
-                    supported_models=["gpt-5.4", "claude-sonnet-4"],
-                    default_model="gpt-5.4",
-                    tags=["testing", "performance", "placeholder"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "script"],
+                )
+            ),
+            "perf-runner": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="perf-runner",
+                    name="Perf Runner",
+                    role="worker",
+                    summary="执行压测并返回原始指标，不做判定。",
+                    description=(
+                        "负责冒烟验证和正式压测执行。输出仅包含原始数据和引擎退出码，"
+                        "不做 pass/fail 判定（判定由独立的 perf-analyst 完成）。"
+                    ),
+                    supported_tools=["performance-test-runner", "cli-executor"],
+                    supported_skills=[],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "execution"],
+                )
+            ),
+            "perf-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="perf-analyst",
+                    name="Perf Analyst",
+                    role="verifier",
+                    summary="独立分析压测结果并做出 verdict 判定。",
+                    description=(
+                        "接收 runner 的原始指标，独立计算 SLA 达标情况、错误分类、"
+                        "基线对比和拐点检测，输出结构化 PerfReport 含 verdict。"
+                        "与 runner 分离确保判定独立性。"
+                    ),
+                    supported_tools=["perf-result-analyzer", "report-writer", "observation-search"],
+                    supported_skills=["report-synthesis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4", "deepseek-reasoner"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "analysis"],
                 )
             ),
             "smoke-testing-agent": AgentModule(

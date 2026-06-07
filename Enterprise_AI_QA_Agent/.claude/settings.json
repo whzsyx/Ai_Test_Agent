@@ -8,7 +8,26 @@
       "Bash(\"E:/Interpreter/Anaconda/python.exe\" -m pytest tests/modes/security_testing_mode/ tests/application/orchestration/ tests/application/runtime/test_runtime_service_security_mode.py tests/application/security/ --basetemp=/tmp/pytest-secfull -k \"not trio\" --tb=short)",
       "Bash(\"E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe\" -c \"import sys; print\\('python:', sys.version\\); import httpx; print\\('httpx:', httpx.__version__\\)\")",
       "Bash(E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe -c ' *)",
-      "Bash(\"E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe\" -m pytest tests/modes/security_testing_mode/ --basetemp=/tmp/pytest-sec3 -v --tb=short)"
+      "Bash(\"E:/Interpreter/Python_Conda/envs/Ai_Test_Agent/python.exe\" -m pytest tests/modes/security_testing_mode/ --basetemp=/tmp/pytest-sec3 -v --tb=short)",
+      "Bash(ls \"g:/Code/Pyon_selenium_test_Agent/Ai_Test_Agent/Enterprise_AI_QA_Agent/agent_web/src/components/\")",
+      "Read(//g/Code/Pyon_selenium_test_Agent/Ai_Test_Agent/Enterprise_AI_QA_Agent/agent_web/src/**)",
+      "Bash(npx vue-tsc *)",
+      "Bash(npx vite *)",
+      "Bash(python -c \"from src.modes.performance_testing_mode.contracts import *; print\\('contracts OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.plan_state import *; print\\('plan_state OK'\\)\")",
+      "Bash(python -c \"from src.core.config import get_settings; s = get_settings\\(\\); print\\(f'config OK: engine={s.performance_default_engine}, backend={s.performance_runner_backend}'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.result_parser import PerfResultParser, ParsedMetrics; print\\('result_parser OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.report_builder import PerfReportBuilder; print\\('report_builder OK'\\)\")",
+      "Bash(python -c \"from src.registry.tools import ToolRegistry; r = ToolRegistry\\(\\); print\\('perf-plan-compiler' in [t.key for t in r.list\\(\\)]\\); print\\('perf-result-analyzer' in [t.key for t in r.list\\(\\)]\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.tools import PERFORMANCE_TESTING_TOOL_KEYS, COORDINATOR_TOOL_KEYS; print\\('OK', len\\(PERFORMANCE_TESTING_TOOL_KEYS\\), 'tools'\\)\")",
+      "Bash(python -c \"from src.application.runtime.tool_runtime_service import ToolRuntimeService; print\\('tool_runtime_service OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.intake import check_slots_ready, generate_next_questions; print\\('intake OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.request_interpreter import PerfRequestInterpreter; print\\('interpreter OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.workload_modeler import WorkloadModeler; print\\('modeler OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.prompt_contract import PERFORMANCE_TESTING_SYSTEM_CONTRACT; print\\('contract OK'\\)\")",
+      "Bash(python -c \"from src.application.performance.perf_metrics_store import PerfMetricsStore; print\\('store OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.runtime import PerformanceTestingModeRuntime; print\\('runtime OK'\\)\")",
+      "Bash(python -c \"from src.modes.performance_testing_mode.coordinator import PerfCoordinator; print\\('coordinator OK'\\)\")"
     ]
   }
 }

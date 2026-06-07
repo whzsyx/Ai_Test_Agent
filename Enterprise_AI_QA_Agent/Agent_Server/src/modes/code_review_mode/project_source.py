@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -8,18 +9,44 @@ from src.modes.code_review_mode.models import ProjectSource
 
 DEFAULT_IGNORED_NAMES = {
     ".git",
+    ".hg",
+    ".svn",
     ".idea",
     ".vscode",
+    ".vs",
+    ".tmp",
+    ".temp",
+    ".cache",
+    ".parcel-cache",
+    ".turbo",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    ".tox",
     ".venv",
+    ".eggs",
     "venv",
+    "env",
+    "vendor",
     "node_modules",
+    ".pnpm-store",
+    "bower_components",
     "__pycache__",
     "dist",
     "build",
+    "out",
+    "target",
     "coverage",
+    "htmlcov",
+    "site",
+    ".gradle",
+    ".mvn",
+    ".serverless",
+    ".terraform",
+    ".aws-sam",
 }
 
 
@@ -102,6 +129,31 @@ def resolve_local_project_file(project_source: ProjectSource, file_path: str) ->
     return resolved
 
 
+def ignored_names_from_arguments(arguments: dict[str, Any] | None) -> set[str]:
+    ignored = set(DEFAULT_IGNORED_NAMES)
+    if not isinstance(arguments, dict):
+        return ignored
+    for key in ("excluded_paths", "ignored_paths", "ignore_paths", "exclude_paths"):
+        ignored.update(_coerce_ignored_names(arguments.get(key)))
+    raw_source = arguments.get("project_source")
+    if isinstance(raw_source, dict):
+        for key in ("excluded_paths", "ignored_paths", "ignore_paths", "exclude_paths"):
+            ignored.update(_coerce_ignored_names(raw_source.get(key)))
+    return {item for item in ignored if item}
+
+
+def is_ignored_project_path(path: str | Path, ignored_names: Iterable[str] | None = None) -> bool:
+    ignored = {str(item).strip().lower() for item in (ignored_names or DEFAULT_IGNORED_NAMES) if str(item).strip()}
+    if not ignored:
+        return False
+    parts = [
+        item.strip().lower()
+        for item in str(path).replace("\\", "/").split("/")
+        if item.strip() and item.strip() not in {".", ".."}
+    ]
+    return any(part in ignored for part in parts)
+
+
 def _coerce_string(*values: Any) -> str:
     for value in values:
         if value is None:
@@ -110,3 +162,22 @@ def _coerce_string(*values: Any) -> str:
         if text and text.lower() != "none":
             return text
     return ""
+
+
+def _coerce_ignored_names(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    raw_items: list[Any]
+    if isinstance(value, str):
+        raw_items = [item for chunk in value.split(";") for item in chunk.split(",")]
+    elif isinstance(value, Iterable):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+    result: set[str] = set()
+    for raw_item in raw_items:
+        text = str(raw_item or "").strip().replace("\\", "/").strip("/")
+        if not text:
+            continue
+        result.add(PurePosixPath(text).name.lower())
+    return result

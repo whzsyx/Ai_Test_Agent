@@ -57,6 +57,30 @@ SECURITY_SCAN_RUNNER_OUTPUT_SCHEMA = {
 }
 
 
+PERFORMANCE_RUNNER_OUTPUT_SCHEMA = {
+    "status": "string",
+    "ok": "boolean",
+    "phase": "string",
+    "summary": "string",
+    "run_id": "string",
+    "run_intent": "string",
+    "verdict": "string",
+    "metrics": "object",
+    "sla_result": "object",
+    "error_breakdown": "object",
+    "engine_threshold_crosscheck": "object",
+    "baseline_comparison": "object",
+    "load_side_observations": "array",
+    "report_markdown": "string",
+    "report_html": "string",
+    "smoke_result": "object",
+    "guard_result": "object",
+    "plan": "object",
+    "errors": "array",
+    "performance_testing_state": "object",
+}
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolModule] = {
@@ -837,6 +861,101 @@ class ToolRegistry:
                 ),
                 handler_key="project-diff-reader",
             ),
+            "code-governance-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="code-governance-runner",
+                    name="Code Governance Runner",
+                    description=(
+                        "Run deterministic code governance pre-scan for a code review campaign. "
+                        "It analyzes git diff, changed files, built-in security/database/dependency/test rules, "
+                        "optional CI scanner JSON artifacts or installed external scanners, risk score, "
+                        "and merge approval decision."
+                    ),
+                    category="review",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "project_source": {"type": "object"},
+                            "source_type": {"type": "string", "enum": ["local", "ssh"]},
+                            "root_path": {"type": "string"},
+                            "project_path": {"type": "string"},
+                            "project_name": {"type": "string"},
+                            "commit_range": {"type": "string"},
+                            "diff_mode": {
+                                "type": "string",
+                                "description": "One of working_tree, staged, or range.",
+                                "default": "working_tree",
+                            },
+                            "paths": {"type": "array", "items": {"type": "string"}},
+                            "excluded_paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Additional paths or directory names to exclude. Code review always excludes "
+                                    "dependency and build output directories such as node_modules, dist, build, "
+                                    "target, venv, .git, and caches by default."
+                                ),
+                            },
+                            "ignored_paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Alias for excluded_paths.",
+                            },
+                            "diff_text": {"type": "string"},
+                            "scanner_artifacts": {
+                                "type": "object",
+                                "description": "Optional scanner JSON paths, such as semgrep, bandit, pip_audit, npm_audit, or gitleaks.",
+                            },
+                            "run_external_scanners": {
+                                "type": "boolean",
+                                "description": "When true, execute installed scanners and merge their JSON findings.",
+                                "default": False,
+                            },
+                            "external_scanners": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {"type": "array", "items": {"type": "string"}},
+                                ],
+                                "description": "Scanners to execute: semgrep, gitleaks, bandit, pip_audit, npm_audit, or all.",
+                            },
+                            "scanner_timeout_seconds": {
+                                "type": "number",
+                                "description": "Per-scanner timeout in seconds.",
+                                "default": 120,
+                            },
+                            "skip_code_graph": {
+                                "type": "boolean",
+                                "description": "Skip lightweight call-chain and architecture graph construction.",
+                                "default": False,
+                            },
+                            "max_graph_files": {
+                                "type": "integer",
+                                "description": "Maximum source files to include in the lightweight code graph.",
+                                "default": 400,
+                            },
+                            "policy": {
+                                "type": "object",
+                                "description": "Optional governance policy overrides such as minimum_score and block_on_critical.",
+                            },
+                            "max_chars": {"type": "integer", "default": 80000},
+                        },
+                    },
+                    output_schema={
+                        "approval_decision": "string",
+                        "decision": "object",
+                        "risk_score": "object",
+                        "findings": "array",
+                        "changed_files": "array",
+                        "code_graph": "object",
+                        "scanner_runs": "array",
+                        "report_json": "object",
+                        "report_markdown": "string",
+                    },
+                    tags=["code-review", "governance", "ci", "risk-score", "approval"],
+                ),
+                handler_key="code-governance-runner",
+            ),
             "code-review-orchestrator": ToolModule(
                 descriptor=ToolDescriptor(
                     key="code-review-orchestrator",
@@ -878,6 +997,20 @@ class ToolRegistry:
                             "change_summary": {"type": "string"},
                             "diff_text": {"type": "string"},
                             "targets": {"type": "array", "items": {"type": "string"}},
+                            "excluded_paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Additional paths or directory names to exclude from bootstrap, tree scanning, "
+                                    "governance, graph building, and reviewer context. Dependency/build output "
+                                    "directories are excluded by default."
+                                ),
+                            },
+                            "ignored_paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Alias for excluded_paths.",
+                            },
                             "ssh_host": {"type": "string"},
                             "ssh_port": {"type": "integer"},
                             "ssh_username": {"type": "string"},
@@ -1222,14 +1355,93 @@ class ToolRegistry:
                 descriptor=ToolDescriptor(
                     key="performance-test-runner",
                     name="Performance Test Runner",
-                    description="Placeholder mode entry tool for future performance testing workflows.",
+                    description=(
+                        "性能/负载测试主入口工具。接受目标、负载模型、SLA 参数，"
+                        "驱动 k6 引擎生成脚本、冒烟验证、正式压测、结果解析和报告生成。"
+                    ),
                     category="execution",
                     permission_level="ask",
-                    input_schema={"type": "object", "properties": {"objective": {"type": "string"}}},
-                    output_schema={"summary": "string"},
-                    tags=["performance", "testing", "mode", "placeholder"],
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "objective": {"type": "string", "description": "测试目标描述。"},
+                            "target_url": {"type": "string", "description": "压测目标 URL。"},
+                            "method": {"type": "string", "description": "HTTP 方法。", "default": "GET"},
+                            "workload_model": {
+                                "type": "string",
+                                "description": "负载模型: open (到达率) 或 closed (固定VU)。",
+                                "enum": ["open", "closed"],
+                            },
+                            "target_rate_rps": {"type": "integer", "description": "目标到达率 (rps)，open 模型使用。"},
+                            "virtual_users": {"type": "integer", "description": "虚拟用户数，closed 模型使用。"},
+                            "duration_seconds": {"type": "integer", "description": "持续时长（秒）。"},
+                            "run_intent": {
+                                "type": "string",
+                                "description": "运行意图: probe (探测基线) 或 regression (回归验证)。",
+                                "enum": ["probe", "regression"],
+                            },
+                            "sla_p95_ms": {"type": "number", "description": "SLA P95 延迟阈值 (ms)。"},
+                            "sla_p99_ms": {"type": "number", "description": "SLA P99 延迟阈值 (ms)。"},
+                            "sla_error_rate": {"type": "number", "description": "SLA 错误率阈值。"},
+                            "headers": {"type": "object", "description": "自定义请求头。"},
+                            "body_template": {"description": "请求体模板。"},
+                            "confirm_target": {"type": "boolean", "description": "用户已确认目标。"},
+                            "worker_action": {"type": "string", "description": "Worker 模式动作。"},
+                            "arguments": {"type": "object", "description": "透传参数。"},
+                        },
+                    },
+                    output_schema=PERFORMANCE_RUNNER_OUTPUT_SCHEMA,
+                    tags=["performance", "testing", "mode", "k6", "load"],
                 ),
                 handler_key="performance-test-runner",
+            ),
+            "perf-plan-compiler": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="perf-plan-compiler",
+                    name="Perf Plan Compiler",
+                    description="将性能测试计划编译为引擎脚本，纯计算无副作用。",
+                    category="execution",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "plan": {"type": "object", "description": "PerfPlan 序列化对象。"},
+                            "engine": {"type": "string", "description": "引擎 key，默认 k6。", "default": "k6"},
+                        },
+                        "required": ["plan"],
+                    },
+                    output_schema={"script_content": "string", "filename": "string", "data_files": "object"},
+                    tags=["performance", "planning", "script"],
+                ),
+                handler_key="perf-plan-compiler",
+            ),
+            "perf-result-analyzer": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="perf-result-analyzer",
+                    name="Perf Result Analyzer",
+                    description="解析压测 RawMetrics 并生成结构化报告，纯计算无副作用。",
+                    category="reporting",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "raw_metrics": {"type": "object", "description": "RawMetrics 序列化对象。"},
+                            "plan": {"type": "object", "description": "PerfPlan 序列化对象。"},
+                            "run": {"type": "object", "description": "PerfRun 序列化对象。"},
+                            "baseline_metrics": {"type": "object", "description": "可选基线 PerfMetrics。"},
+                        },
+                        "required": ["raw_metrics", "plan", "run"],
+                    },
+                    output_schema={
+                        "verdict": "string",
+                        "metrics": "object",
+                        "sla_result": "object",
+                        "error_breakdown": "object",
+                        "report_markdown": "string",
+                    },
+                    tags=["performance", "analysis", "reporting"],
+                ),
+                handler_key="perf-result-analyzer",
             ),
             "smoke-suite-runner": ToolModule(
                 descriptor=ToolDescriptor(

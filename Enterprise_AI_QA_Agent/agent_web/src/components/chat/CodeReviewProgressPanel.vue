@@ -14,6 +14,43 @@ const reportMeta = computed(() => sessionStore.codeReviewReportMeta);
 const pendingCompletionWorker = computed(() => sessionStore.pendingCompletionWorkerMeta);
 const debateProgress = computed(() => sessionStore.codeReviewDebateProgressMeta);
 
+type GovernanceRecord = Record<string, unknown>;
+
+const governanceEvidence = computed(() => {
+  const metadata = sessionStore.session?.metadata || {};
+  const fromMetadata = readGovernanceRecord(metadata.code_review_governance) || readGovernanceRecord(metadata.governance);
+  if (fromMetadata) {
+    return fromMetadata;
+  }
+
+  const graphState = sessionStore.latestSnapshotGraphState;
+  const fromGraphState = readGovernanceRecord(graphState.governance);
+  if (fromGraphState) {
+    return fromGraphState;
+  }
+
+  for (const result of sessionStore.latestToolResults.slice().reverse()) {
+    const output = result.output || {};
+    const fromOrchestrator = readGovernanceRecord(output.governance);
+    if (fromOrchestrator) {
+      return fromOrchestrator;
+    }
+    if (result.tool_key === "code-governance-runner") {
+      const direct = readGovernanceRecord(output);
+      if (direct) {
+        return direct;
+      }
+    }
+  }
+  return null;
+});
+
+const governanceDecision = computed(() => readRecord(governanceEvidence.value?.decision));
+const governanceRiskScore = computed(() => readRecord(governanceEvidence.value?.risk_score));
+const governanceMetrics = computed(() => readRecord(governanceEvidence.value?.metrics));
+const governanceFindings = computed(() => readArray(governanceEvidence.value?.findings).slice(0, 6));
+const governanceScannerRuns = computed(() => readArray(governanceEvidence.value?.scanner_runs));
+
 const selectedTask = ref<WorkerDispatchRecord | null>(null);
 const selectedTaskSession = ref<SessionDetail | null>(null);
 const isLoadingTaskDetail = ref(false);
@@ -50,6 +87,63 @@ function statusTone(status: string) {
   if (status === "waiting_approval") return "warning";
   if (status === "failed" || status === "denied") return "danger";
   return "neutral";
+}
+
+function readRecord(value: unknown): GovernanceRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as GovernanceRecord;
+}
+
+function readArray(value: unknown): GovernanceRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is GovernanceRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+}
+
+function readGovernanceRecord(value: unknown): GovernanceRecord | null {
+  const record = readRecord(value);
+  const hasGovernanceShape = Boolean(record.decision || record.risk_score || record.findings || record.approval_decision);
+  return hasGovernanceShape ? record : null;
+}
+
+function governanceStatus() {
+  return String(governanceDecision.value.status || governanceEvidence.value?.approval_decision || "pending");
+}
+
+function governanceTone(status: string) {
+  if (status === "pass") return "success";
+  if (status === "warning") return "warning";
+  if (status === "blocked") return "danger";
+  return "neutral";
+}
+
+function severityTone(severity: unknown) {
+  const value = String(severity || "").toLowerCase();
+  if (value === "critical" || value === "high") return "danger";
+  if (value === "medium") return "warning";
+  if (value === "low") return "neutral";
+  return "light";
+}
+
+function governanceDecisionLabel(status: string) {
+  if (status === "pass") return t("reviewProgress.governance_pass");
+  if (status === "warning") return t("reviewProgress.governance_warning");
+  if (status === "blocked") return t("reviewProgress.governance_blocked");
+  return t("reviewProgress.pending");
+}
+
+function metricNumber(value: unknown) {
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function findingLocation(item: GovernanceRecord) {
+  const filePath = String(item.file_path || "").trim();
+  const line = item.line ? `:${item.line}` : "";
+  return filePath ? `${filePath}${line}` : "n/a";
 }
 
 function statusLabel(status: string) {
@@ -163,6 +257,69 @@ function closeTaskDetail() {
       <span>{{ t("reviewProgress.last_update") }}: {{ formatTime(debateProgress?.updated_at) }}</span>
       <span v-if="debateProgress?.peer_review_count">{{ t("reviewProgress.peer_samples") }}: {{ debateProgress.peer_review_count }}</span>
     </div>
+
+    <section class="review-progress-card review-governance-card">
+      <div class="review-progress-section-head">
+        <strong>{{ t("reviewProgress.governance_gate") }}</strong>
+        <span
+          class="registry-tag"
+          :class="governanceTone(governanceStatus())"
+        >
+          {{ governanceDecisionLabel(governanceStatus()) }}
+        </span>
+      </div>
+      <template v-if="governanceEvidence">
+        <div class="review-governance-score-row">
+          <article class="review-governance-score">
+            <span>{{ t("reviewProgress.governance_score") }}</span>
+            <strong>{{ metricNumber(governanceRiskScore.score) }}</strong>
+            <small>{{ governanceRiskScore.level || "LOW" }}</small>
+          </article>
+          <div class="review-governance-metrics">
+            <span>{{ t("reviewProgress.governance_changed_files") }}: {{ metricNumber(governanceMetrics.changed_file_count) }}</span>
+            <span>{{ t("reviewProgress.governance_findings") }}: {{ metricNumber(governanceMetrics.finding_count) }}</span>
+            <span>{{ t("reviewProgress.governance_blockers") }}: {{ metricNumber(governanceDecision.blocking_findings && Array.isArray(governanceDecision.blocking_findings) ? governanceDecision.blocking_findings.length : 0) }}</span>
+            <span>{{ t("reviewProgress.governance_scanners") }}: {{ governanceScannerRuns.length }}</span>
+            <span>{{ t("reviewProgress.governance_graph_nodes") }}: {{ metricNumber(governanceMetrics.code_graph_node_count) }}</span>
+            <span>{{ t("reviewProgress.governance_graph_edges") }}: {{ metricNumber(governanceMetrics.code_graph_edge_count) }}</span>
+            <span>{{ t("reviewProgress.governance_graph_impacted") }}: {{ metricNumber(governanceMetrics.code_graph_impacted_node_count) }}</span>
+          </div>
+        </div>
+        <p v-if="governanceDecision.reason" class="review-progress-reason">{{ governanceDecision.reason }}</p>
+
+        <div v-if="governanceScannerRuns.length" class="review-governance-scanners">
+          <span
+            v-for="scanner in governanceScannerRuns"
+            :key="String(scanner.scanner || scanner.command || scanner.status)"
+            class="registry-tag"
+            :class="statusTone(String(scanner.status || 'pending'))"
+          >
+            {{ scanner.scanner }} · {{ scanner.status }} · {{ metricNumber(scanner.finding_count) }}
+          </span>
+        </div>
+
+        <div v-if="governanceFindings.length" class="review-progress-list review-governance-findings">
+          <article
+            v-for="finding in governanceFindings"
+            :key="String(finding.id || finding.title || findingLocation(finding))"
+            class="review-progress-item review-governance-finding"
+          >
+            <div class="review-progress-item-head">
+              <strong>{{ finding.title }}</strong>
+              <span class="registry-tag" :class="severityTone(finding.severity)">{{ finding.severity }}</span>
+            </div>
+            <div class="review-progress-item-meta">
+              <span>{{ finding.category }}</span>
+              <span>{{ finding.source }}</span>
+              <span>{{ findingLocation(finding) }}</span>
+            </div>
+            <p class="review-progress-reason">{{ finding.summary }}</p>
+          </article>
+        </div>
+        <div v-else class="settings-empty">{{ t("reviewProgress.governance_no_findings") }}</div>
+      </template>
+      <div v-else class="settings-empty">{{ t("reviewProgress.governance_pending") }}</div>
+    </section>
 
     <div class="review-progress-stats">
       <article class="review-progress-stat">
@@ -417,6 +574,61 @@ function closeTaskDetail() {
   min-height: 0;
 }
 
+.review-governance-card {
+  display: grid;
+  gap: 12px;
+}
+
+.review-governance-score-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.review-governance-score {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.76);
+}
+
+.review-governance-score span,
+.review-governance-score small {
+  color: var(--text-soft, #6b7280);
+  font-size: 12px;
+}
+
+.review-governance-score strong {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.review-governance-metrics,
+.review-governance-scanners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-content: center;
+  color: var(--text-soft, #6b7280);
+  font-size: 12px;
+}
+
+.review-governance-metrics span {
+  min-width: 128px;
+}
+
+.review-governance-findings {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.review-governance-finding {
+  background: rgba(248, 250, 252, 0.72);
+}
+
 .review-progress-card--tasks,
 .review-progress-card--approvals {
   display: flex;
@@ -638,6 +850,12 @@ function closeTaskDetail() {
   border-color: var(--border, #1c1c1c);
 }
 
+:root[data-theme="dark"] .review-governance-score,
+:root[data-theme="dark"] .review-governance-finding {
+  background: var(--panel, #0b0b0b);
+  border-color: var(--border, #1c1c1c);
+}
+
 :root[data-theme="dark"] .review-progress-item-button:hover {
   border-color: var(--border-strong, #333333);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
@@ -656,5 +874,11 @@ function closeTaskDetail() {
 
 :root[data-theme="dark"] .review-task-error {
   background: rgba(239, 68, 68, 0.12);
+}
+
+@media (max-width: 760px) {
+  .review-governance-score-row {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

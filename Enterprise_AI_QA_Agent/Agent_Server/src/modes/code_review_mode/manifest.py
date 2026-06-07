@@ -23,6 +23,7 @@ MODE_MANIFEST = {
     "default_skill_keys": ["report-synthesis", "requirements-analysis"],
     "registered_tool_keys": [
         "code-review-orchestrator",
+        "code-governance-runner",
         "project-source-loader",
         "project-tree-scanner",
         "project-file-reader",

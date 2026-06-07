@@ -14,12 +14,10 @@ import type {
   ManagedMCPResourceDescriptor,
   ManagedMCPServerDescriptor,
   ManagedMCPToolDescriptor,
-  MCPServerTransport,
 } from "../../../types";
 
 type PluginTab = "api" | "mcp";
 type ModalKind = "api" | "mcp";
-type MCPPresetMode = "manual" | "json";
 
 const toast = useMessage();
 
@@ -59,20 +57,7 @@ const apiKeyHeader = ref("X-API-Key");
 const apiUsername = ref("");
 const apiPassword = ref("");
 
-const mcpCreateMode = ref<MCPPresetMode>("json");
-const mcpName = ref("");
 const mcpEnabled = ref(true);
-const mcpDescription = ref("");
-const mcpProjectName = ref("");
-const mcpDocumentUrl = ref("");
-const mcpTransport = ref<MCPServerTransport>("streamable_http");
-const mcpEndpointUrl = ref("");
-const mcpCommand = ref("");
-const mcpCwd = ref("");
-const mcpHeadersLines = ref("");
-const mcpEnvJson = ref("{}");
-const mcpCapabilities = ref("");
-const mcpStdioConfirmed = ref(false);
 const mcpJsonText = ref("");
 
 const mcpToolsModalOpen = ref(false);
@@ -127,20 +112,7 @@ function resetApiForm() {
 }
 
 function resetMcpForm() {
-  mcpCreateMode.value = "json";
-  mcpName.value = "";
   mcpEnabled.value = true;
-  mcpDescription.value = "";
-  mcpProjectName.value = "";
-  mcpDocumentUrl.value = "";
-  mcpTransport.value = "streamable_http";
-  mcpEndpointUrl.value = "";
-  mcpCommand.value = "";
-  mcpCwd.value = "";
-  mcpHeadersLines.value = "";
-  mcpEnvJson.value = "{}";
-  mcpCapabilities.value = "";
-  mcpStdioConfirmed.value = false;
   mcpJsonText.value = "";
 }
 
@@ -676,70 +648,6 @@ onBeforeUnmount(() => {
               <p class="field-hint">JSON 解析在后端完成，前端只提交原始配置。</p>
             </div>
 
-            <div v-if="false" class="compact-form form-grid">
-              <div class="field-block">
-                <label>{{ t("plugins.form_name") }}</label>
-                <input v-model="mcpName" :placeholder="t('plugins.ph_mcp_name')" />
-              </div>
-              <div class="field-block">
-                <label>{{ t("plugins.form_transport") }}</label>
-                <select v-model="mcpTransport">
-                  <option value="streamable_http">streamable_http</option>
-                  <option value="sse">sse</option>
-                  <option value="stdio">stdio</option>
-                </select>
-              </div>
-              <div class="field-block">
-                <label>{{ t("plugins.form_description") }}</label>
-                <input v-model="mcpDescription" :placeholder="t('plugins.ph_mcp_desc')" />
-              </div>
-              <div class="field-block">
-                <label>{{ t("plugins.form_project") }}</label>
-                <input v-model="mcpProjectName" :placeholder="t('plugins.ph_project')" />
-              </div>
-              <div v-if="mcpTransport === 'streamable_http' || mcpTransport === 'sse'" class="field-block mcp-field-span">
-                <label>Endpoint URL</label>
-                <input v-model="mcpEndpointUrl" placeholder="https://mcp.example.com/mcp" />
-              </div>
-              <div v-if="mcpTransport === 'stdio'" class="field-block mcp-field-span">
-                <label>{{ t("plugins.form_command") }}</label>
-                <input v-model="mcpCommand" placeholder="npx -y @modelcontextprotocol/server-filesystem ." />
-                <p v-if="editingMcpKey" class="field-hint">Leave blank to keep the existing command.</p>
-              </div>
-              <div v-if="mcpTransport === 'stdio'" class="field-block">
-                <label>cwd</label>
-                <input v-model="mcpCwd" placeholder="G:\\workspace" />
-              </div>
-              <label v-if="mcpTransport === 'stdio'" class="check-row">
-                <input v-model="mcpStdioConfirmed" type="checkbox">
-                <span>确认允许启动该 stdio MCP 进程</span>
-              </label>
-              <div class="field-block mcp-field-span">
-                <label>{{ t("plugins.form_document_url") }}</label>
-                <input v-model="mcpDocumentUrl" :placeholder="t('plugins.ph_doc_url')" />
-              </div>
-              <div v-if="mcpTransport === 'streamable_http' || mcpTransport === 'sse'" class="field-block mcp-field-span">
-                <label>{{ t("plugins.form_headers") }}</label>
-                <textarea v-model="mcpHeadersLines" class="headers-textarea" spellcheck="false" placeholder="Authorization: Bearer token"></textarea>
-                <p class="field-hint">
-                  {{ t("plugins.hint_header_format") }}
-                  <span v-if="editingMcpKey">Leave blank to keep existing headers.</span>
-                </p>
-              </div>
-              <div class="field-block">
-                <label>{{ t("plugins.form_capabilities") }}</label>
-                <input v-model="mcpCapabilities" :placeholder="t('plugins.ph_capabilities')" />
-              </div>
-              <div class="field-block mcp-field-span">
-                <label>{{ t("plugins.label_env") }}</label>
-                <textarea v-model="mcpEnvJson" rows="5" spellcheck="false"></textarea>
-                <p v-if="editingMcpKey" class="field-hint">Leave as {} to keep existing env values.</p>
-              </div>
-              <label class="check-row">
-                <input v-model="mcpEnabled" type="checkbox">
-                <span>{{ t("plugins.enable_after_create") }}</span>
-              </label>
-            </div>
           </template>
 
           <template v-else>
@@ -945,8 +853,7 @@ onBeforeUnmount(() => {
 .card-title-row,
 .integration-actions,
 .tag-row,
-.provider-strip,
-.mode-switch {
+.provider-strip {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1114,8 +1021,7 @@ onBeforeUnmount(() => {
 
 .ghost-btn,
 .primary-btn,
-.icon-btn,
-.mode-switch button {
+.icon-btn {
   border-radius: 8px;
   border: 1px solid var(--border-strong);
   padding: 8px 14px;
@@ -1129,8 +1035,7 @@ onBeforeUnmount(() => {
 
 .ghost-btn:hover,
 .primary-btn:hover,
-.icon-btn:hover,
-.mode-switch button:hover {
+.icon-btn:hover {
   border-color: var(--muted);
 }
 
@@ -1148,8 +1053,7 @@ onBeforeUnmount(() => {
 }
 
 .primary-btn:disabled,
-.ghost-btn:disabled,
-.mode-switch button:disabled {
+.ghost-btn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
@@ -1316,52 +1220,12 @@ onBeforeUnmount(() => {
 }
 
 .settings-list,
-.compact-form,
 .json-import-panel,
 .field-block {
   display: grid;
   gap: 12px;
 }
 
-.mode-switch {
-  width: min(420px, 100%);
-  padding: 5px;
-  border-radius: 14px;
-  background: var(--surface-muted);
-  gap: 4px;
-}
-
-.mode-switch button {
-  flex: 1;
-  min-width: 0;
-  border-color: transparent;
-  background: transparent;
-  color: var(--muted);
-  border-radius: 10px;
-  font-weight: 600;
-}
-
-.mode-switch button.active {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-soft);
-}
-
-.form-grid {
-  align-items: start;
-}
-
-@media (min-width: 640px) {
-  .form-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 20px;
-    row-gap: 14px;
-  }
-
-  .mcp-field-span {
-    grid-column: 1 / -1;
-  }
-}
 
 .field-block label,
 .setting-info label {
@@ -1400,9 +1264,6 @@ onBeforeUnmount(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.headers-textarea {
-  min-height: 88px;
-}
 
 .mcp-json-textarea {
   min-height: 280px;

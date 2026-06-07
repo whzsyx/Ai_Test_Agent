@@ -25,8 +25,11 @@ from src.application.mcp.host.namespace import decode as decode_mcp_tool_key
 from src.application.mcp.host.namespace import is_mcp_tool_key
 from src.application.security.execution_environment_service import SecurityExecutionEnvironmentService
 from src.modes.code_review_mode import build_code_review_campaign
+from src.modes.code_review_mode.governance import CodeGovernanceRuntime
 from src.modes.code_review_mode.project_source import (
     DEFAULT_IGNORED_NAMES,
+    ignored_names_from_arguments,
+    is_ignored_project_path,
     normalize_project_source,
     project_source_root,
     resolve_local_project_file,
@@ -110,6 +113,7 @@ class ToolRuntimeService:
             settings=settings,
             workspace_root=self._workspace_root,
         )
+        self._code_governance_runtime = CodeGovernanceRuntime(workspace_root=self._workspace_root)
         self._ui_graph_store = UIGraphStore(settings) if settings is not None else None
         self._ui_exploration_service = (
             UIExplorationService(
@@ -140,6 +144,15 @@ class ToolRuntimeService:
             runner_executor=self._execute_security_runner,
             report_delivery_executor=self._deliver_security_testing_report,
         )
+        self._performance_testing_mode_runtime = None
+        if settings:
+            from src.modes.performance_testing_mode.runtime import PerformanceTestingModeRuntime
+            self._performance_testing_mode_runtime = PerformanceTestingModeRuntime(
+                settings=settings,
+                coordinator_runtime_service=coordinator_runtime_service,
+                session_store=session_store,
+                memory_runtime_service=memory_runtime_service,
+            )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
             "subagent-dispatch": self._run_subagent_dispatch,
@@ -165,6 +178,7 @@ class ToolRuntimeService:
             "project-tree-scanner": self._run_project_tree_scanner,
             "project-file-reader": self._run_project_file_reader,
             "project-diff-reader": self._run_project_diff_reader,
+            "code-governance-runner": self._run_code_governance_runner,
             "code-review-orchestrator": self._run_code_review_orchestrator,
             "ui-automation-runner": self._run_ui_automation_runner,
             "api-test-runner": self._run_api_test_runner,
@@ -176,6 +190,8 @@ class ToolRuntimeService:
             "traffic-analysis-runner": self._run_traffic_analysis_runner,
             "exploit-workbench-runner": self._run_exploit_workbench_runner,
             "performance-test-runner": self._run_performance_test_runner,
+            "perf-plan-compiler": self._run_perf_plan_compiler,
+            "perf-result-analyzer": self._run_perf_result_analyzer,
             "smoke-suite-runner": self._run_smoke_suite_runner,
         }
 
@@ -323,6 +339,7 @@ class ToolRuntimeService:
                         output_payload=result,
                         artifacts=result.get("artifacts", []) if isinstance(result, dict) else [],
                     )
+            record_output = self._compact_tool_output_for_model(tool.key, result)
             return ToolExecutionRecord(
                 call_id=call.id,
                 tool_key=tool.key,
@@ -332,7 +349,7 @@ class ToolRuntimeService:
                 trace_id=str(result.get("trace_id") or context.trace_id or ""),
                 job_id=job.id if job is not None else None,
                 input=call.arguments,
-                output=result,
+                output=record_output,
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
             )
@@ -1716,14 +1733,26 @@ class ToolRuntimeService:
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
         project_source = normalize_project_source(arguments)
+        ignored_names = ignored_names_from_arguments(arguments)
         max_depth = _clamp_int(arguments.get("max_depth"), minimum=1, maximum=8, default=3)
         max_files = _clamp_int(arguments.get("max_files"), minimum=20, maximum=2000, default=400)
         timeout_seconds = _clamp_float(arguments.get("timeout_seconds"), minimum=5.0, maximum=90.0, default=30.0)
         try:
             tree_summary = (
-                await self._scan_ssh_project_tree(project_source, max_depth=max_depth, max_files=max_files, timeout_seconds=timeout_seconds)
+                await self._scan_ssh_project_tree(
+                    project_source,
+                    max_depth=max_depth,
+                    max_files=max_files,
+                    timeout_seconds=timeout_seconds,
+                    ignored_names=ignored_names,
+                )
                 if project_source.source_type == "ssh"
-                else await self._scan_local_project_tree(project_source, max_depth=max_depth, max_files=max_files)
+                else await self._scan_local_project_tree(
+                    project_source,
+                    max_depth=max_depth,
+                    max_files=max_files,
+                    ignored_names=ignored_names,
+                )
             )
         except Exception as exc:
             return {
@@ -1761,6 +1790,16 @@ class ToolRuntimeService:
                 "ok": False,
                 "summary": "Project file reader requires a path or file_path.",
                 "error": "missing_file_path",
+            }
+        ignored_names = ignored_names_from_arguments(arguments)
+        if is_ignored_project_path(file_path, ignored_names):
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": f"Refused to read ignored code review path '{file_path}'.",
+                "project_source": project_source.model_dump(mode="python"),
+                "error": "ignored_project_path",
+                "ignored_paths": sorted(ignored_names),
             }
         start_line = _clamp_int(arguments.get("start_line"), minimum=1, maximum=500000, default=1)
         end_line = _clamp_int(arguments.get("end_line"), minimum=start_line, maximum=500000, default=start_line + 199)
@@ -1833,20 +1872,40 @@ class ToolRuntimeService:
             **diff_payload,
         }
 
+    async def _run_code_governance_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._code_governance_runtime.handle(arguments, context)
+
     async def _run_code_review_orchestrator(
         self,
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
         bootstrap = await self._build_code_review_bootstrap(arguments, context)
+        governance = await self._run_code_governance_runner(
+            {
+                **arguments,
+                "scanner_artifacts": arguments.get("scanner_artifacts")
+                or context.context_bundle.get("scanner_artifacts"),
+                "policy": arguments.get("policy")
+                or context.context_bundle.get("policy")
+                or context.context_bundle.get("governance_policy"),
+            },
+            context,
+        )
         debate_plan = self._resolve_code_review_debate_plan(arguments, bootstrap, context)
         effective_arguments = {
             **arguments,
             "cross_review_rounds": debate_plan["cross_review_round_count"],
             "debate_time_budget_minutes": debate_plan["debate_time_budget_minutes"],
+            "governance_evidence": governance,
         }
         campaign = build_code_review_campaign(effective_arguments, context)
         campaign["bootstrap"] = bootstrap
+        campaign["governance"] = governance
         campaign["debate_plan"] = debate_plan
         scanned_file_count = int(((bootstrap.get("tree_summary") or {}) if isinstance(bootstrap.get("tree_summary"), dict) else {}).get("scanned_file_count") or 0)
         requested_reviewer_limit = _clamp_int(arguments.get("reviewer_count"), minimum=0, maximum=5, default=0)
@@ -1877,16 +1936,21 @@ class ToolRuntimeService:
             campaign["review_team"] = campaign["review_team"][:reviewer_limit]
             campaign["metrics"]["reviewer_count"] = len(campaign["dispatch_payload"]["workers"])
         bootstrap_brief = self._build_code_review_bootstrap_brief(bootstrap)
+        governance_brief = self._build_code_governance_brief(governance)
         for worker in campaign["dispatch_payload"].get("workers", []):
             if isinstance(worker, dict):
                 prompt = str(worker.get("prompt") or "").strip()
-                if prompt and bootstrap_brief:
+                if prompt and (bootstrap_brief or governance_brief):
                     worker["prompt"] = (
                         f"{prompt}\n\n"
                         "Bootstrap digest:\n"
                         f"{bootstrap_brief}\n\n"
+                        "Governance evidence:\n"
+                        f"{governance_brief}\n\n"
                         "Execution constraints:\n"
                         "- Start with findings from the bootstrap digest before exploring more files.\n"
+                        "- Treat deterministic governance findings as primary evidence; challenge them only with concrete counter-evidence.\n"
+                        "- If the governance decision is blocked, focus on blocking findings and required remediation first.\n"
                         "- Do not rerun project-source-loader or project-tree-scanner unless the bootstrap digest is missing critical evidence.\n"
                         "- During the first pass, read at most 3 targeted files with project-file-reader.\n"
                         "- Avoid shell-style exploration and focus on evidence-backed findings quickly.\n"
@@ -1895,44 +1959,54 @@ class ToolRuntimeService:
                 worker_context = worker.get("context")
                 if isinstance(worker_context, dict):
                     worker_context["project_bootstrap"] = bootstrap
+                    worker_context["governance_evidence"] = governance
                     worker_context["debate_plan"] = debate_plan
         for worker in campaign["dispatch_payload"].get("followup_workers", []):
             if isinstance(worker, dict):
                 prompt = str(worker.get("prompt") or "").strip()
-                if prompt and bootstrap_brief:
+                if prompt and (bootstrap_brief or governance_brief):
                     worker["prompt"] = (
                         f"{prompt}\n\n"
                         "Bootstrap digest:\n"
                         f"{bootstrap_brief}\n\n"
+                        "Governance evidence:\n"
+                        f"{governance_brief}\n\n"
                         "Execution constraints:\n"
                         "- This is the rebuttal round, so begin from peer findings instead of rediscovering the repository.\n"
                         "- Use the bootstrap digest only to validate or challenge claims precisely.\n"
+                        "- Re-check any peer claim against deterministic governance evidence and the risk score.\n"
                         "- Read at most 2 additional targeted files unless a claim is impossible to evaluate otherwise.\n"
                         f"- Stay within the moderator budget of approximately {debate_plan['debate_time_budget_minutes']} minutes for the whole debate.\n"
                     )
                 worker_context = worker.get("context")
                 if isinstance(worker_context, dict):
                     worker_context["project_bootstrap"] = bootstrap
+                    worker_context["governance_evidence"] = governance
                     worker_context["debate_plan"] = debate_plan
         summary_agent = campaign.get("summary_agent", {})
         if isinstance(summary_agent, dict):
             summary_prompt = str(summary_agent.get("prompt") or "").strip()
-            if summary_prompt and bootstrap_brief:
+            if summary_prompt and (bootstrap_brief or governance_brief):
                 summary_agent["prompt"] = (
                     f"{summary_prompt}\n\n"
                     "Bootstrap digest:\n"
                     f"{bootstrap_brief}\n\n"
+                    "Governance evidence:\n"
+                    f"{governance_brief}\n\n"
                     "Debate time budget:\n"
                     f"- moderator_budget_minutes: {debate_plan['debate_time_budget_minutes']}\n"
                     f"- context_window_tokens: {debate_plan['model_context_window_tokens']}\n"
                     f"- context_pressure: {debate_plan['context_pressure']}\n\n"
                     "Execution constraints:\n"
                     "- Synthesize reviewer outputs first; do not restart broad repository exploration unless reviewer evidence is clearly insufficient.\n"
+                    "- The final report must include the governance risk score and approval decision.\n"
+                    "- If governance decision is blocked, preserve blocked status unless reviewers provide explicit evidence for a justified waiver.\n"
                     "- Prefer report generation over additional discovery once proposer/support/challenge relationships are established.\n"
                 )
         summary_context = summary_agent.get("context")
         if isinstance(summary_context, dict):
             summary_context["project_bootstrap"] = bootstrap
+            summary_context["governance_evidence"] = governance
             summary_context["debate_plan"] = debate_plan
         campaign["metrics"]["debate_time_budget_minutes"] = debate_plan["debate_time_budget_minutes"]
         campaign["metrics"]["cross_review_round_count"] = debate_plan["cross_review_round_count"]
@@ -1974,14 +2048,17 @@ class ToolRuntimeService:
                 "workers": [],
             },
             "bootstrap": bootstrap,
+            "governance": governance,
             "next_steps": [
-                "Connect repository-aware project readers for local and SSH sources",
+                "Review deterministic governance findings before broad LLM exploration",
                 "Feed reviewer outputs into cross-review rounds and summary synthesis",
-                "Persist debated findings into the evaluation harness and report center",
+                "Persist debated findings and governance score into the report center",
             ],
             "metrics": {
                 **campaign.get("metrics", {}),
                 "bootstrap_ok": 1 if bootstrap.get("ok", False) else 0,
+                "governance_score": int((governance.get("risk_score") or {}).get("score") or 0) if isinstance(governance, dict) else 0,
+                "governance_finding_count": len(governance.get("findings", [])) if isinstance(governance, dict) else 0,
                 "launched_worker_count": len(workers),
                 "dispatch_started": launch_workers,
                 "dispatch_status": dispatch_status or "not_started",
@@ -2629,12 +2706,90 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        return self._build_placeholder_mode_result(
-            mode_key="performance_testing",
-            summary="Performance testing mode scaffold is ready; benchmark runners are not connected yet.",
-            arguments=arguments,
-            context=context,
-        )
+        if self._performance_testing_mode_runtime is None:
+            return {
+                "status": "error",
+                "ok": False,
+                "summary": "性能测试运行时尚未初始化，请检查系统配置。",
+                "phase": "init_failed",
+                "errors": ["PerformanceTestingModeRuntime not initialized"],
+            }
+        return await self._performance_testing_mode_runtime.handle(arguments, context)
+
+    async def _run_perf_plan_compiler(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        from src.application.performance.k6_engine_adapter import K6EngineAdapter
+        from src.modes.performance_testing_mode.plan_state import PerfPlan
+
+        plan_data = arguments.get("plan", {})
+        engine_key = arguments.get("engine", "k6")
+
+        try:
+            plan = PerfPlan(**plan_data)
+        except Exception as e:
+            return {"status": "error", "ok": False, "summary": f"计划解析失败: {e}"}
+
+        if engine_key == "k6":
+            rewrite = self._settings.performance_rewrite_localhost if self._settings else True
+            adapter = K6EngineAdapter(
+                image=self._settings.k6_docker_image if self._settings else "",
+                rewrite_localhost=rewrite,
+            )
+        else:
+            return {"status": "error", "ok": False, "summary": f"不支持的引擎: {engine_key}"}
+
+        script = adapter.build_script(plan)
+        return {
+            "status": "ok",
+            "ok": True,
+            "script_content": script.script_content,
+            "filename": script.filename,
+            "data_files": script.data_files,
+            "engine": script.engine,
+        }
+
+    async def _run_perf_result_analyzer(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        from src.application.performance.engine_adapter import RawMetrics
+        from src.modes.performance_testing_mode.plan_state import PerfMetrics, PerfPlan, PerfRun
+        from src.modes.performance_testing_mode.report_builder import PerfReportBuilder
+        from src.modes.performance_testing_mode.result_parser import PerfResultParser
+
+        try:
+            raw = RawMetrics(**arguments.get("raw_metrics", {}))
+            plan = PerfPlan(**arguments.get("plan", {}))
+            run = PerfRun(**arguments.get("run", {}))
+        except Exception as e:
+            return {"status": "error", "ok": False, "summary": f"参数解析失败: {e}"}
+
+        baseline_data = arguments.get("baseline_metrics")
+        baseline = PerfMetrics(**baseline_data) if baseline_data else None
+
+        parser = PerfResultParser()
+        parsed = parser.parse(raw)
+
+        builder = PerfReportBuilder()
+        report = builder.build(parsed, plan, run, baseline)
+
+        return {
+            "status": "ok",
+            "ok": True,
+            "verdict": report.verdict,
+            "metrics": report.metrics.model_dump(),
+            "sla_result": report.sla_result.model_dump(),
+            "error_breakdown": report.error_breakdown.model_dump(),
+            "engine_threshold_crosscheck": report.engine_threshold_crosscheck.model_dump(),
+            "baseline_comparison": report.baseline_comparison.model_dump() if report.baseline_comparison else None,
+            "load_side_observations": report.load_side_observations,
+            "report_markdown": report.report_markdown,
+            "report_html": report.report_html,
+        }
 
     async def _run_smoke_suite_runner(
         self,
@@ -2691,6 +2846,7 @@ class ToolRuntimeService:
                 "kind": "directory" if item.is_dir() else "file",
             }
             for item in sorted(root.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:25]
+            if not is_ignored_project_path(item.name)
         ]
         git_root = ""
         branch = project_source.branch
@@ -2801,6 +2957,40 @@ class ToolRuntimeService:
             f"- changed_paths: {', '.join(status_lines) if status_lines else 'none captured'}",
             f"- sampled_files: {', '.join(sample_paths) if sample_paths else 'none captured'}",
         ]
+        return "\n".join(lines)
+
+    def _build_code_governance_brief(self, governance: dict[str, Any]) -> str:
+        if not isinstance(governance, dict):
+            return ""
+        decision = governance.get("decision") if isinstance(governance.get("decision"), dict) else {}
+        risk_score = governance.get("risk_score") if isinstance(governance.get("risk_score"), dict) else {}
+        metrics = governance.get("metrics") if isinstance(governance.get("metrics"), dict) else {}
+        findings = governance.get("findings") if isinstance(governance.get("findings"), list) else []
+        top_findings: list[str] = []
+        for item in findings[:8]:
+            if not isinstance(item, dict):
+                continue
+            finding_id = str(item.get("id") or "").strip()
+            severity = str(item.get("severity") or "").strip()
+            category = str(item.get("category") or "").strip()
+            title = str(item.get("title") or "").strip()
+            location = str(item.get("file_path") or "").strip()
+            top_findings.append(
+                f"{finding_id} [{severity}/{category}] {title}"
+                + (f" @ {location}" if location else "")
+            )
+        lines = [
+            f"- decision: {decision.get('status', governance.get('approval_decision', 'unknown'))}",
+            f"- decision_reason: {decision.get('reason', governance.get('summary', ''))}",
+            f"- risk_score: {risk_score.get('score', 'n/a')}",
+            f"- risk_level: {risk_score.get('level', 'n/a')}",
+            f"- finding_count: {metrics.get('finding_count', len(findings))}",
+            f"- changed_file_count: {metrics.get('changed_file_count', 'n/a')}",
+            f"- blocking_findings: {', '.join(decision.get('blocking_findings', []) or []) or 'none'}",
+        ]
+        if top_findings:
+            lines.append("- top_findings:")
+            lines.extend(f"  - {item}" for item in top_findings)
         return "\n".join(lines)
 
     def _resolve_code_review_debate_plan(
@@ -2984,6 +3174,8 @@ class ToolRuntimeService:
             if line.startswith("__ERROR__:"):
                 raise RuntimeError(line.removeprefix("__ERROR__:"))
             if section == "top":
+                if is_ignored_project_path(PurePosixPath(line).name):
+                    continue
                 top_entries.append(
                     {
                         "name": PurePosixPath(line).name,
@@ -3016,10 +3208,12 @@ class ToolRuntimeService:
         project_source,
         max_depth: int,
         max_files: int,
+        ignored_names: set[str] | None = None,
     ) -> dict[str, Any]:
         root = resolve_local_project_root(project_source)
         if not root.exists():
             raise FileNotFoundError(f"Project root was not found: {root}")
+        ignored_names = set(ignored_names or DEFAULT_IGNORED_NAMES)
 
         sample_files: list[dict[str, Any]] = []
         extension_counter: Counter[str] = Counter()
@@ -3036,7 +3230,9 @@ class ToolRuntimeService:
             dirnames[:] = [
                 item
                 for item in dirnames
-                if item not in DEFAULT_IGNORED_NAMES and depth < max_depth
+                if item.lower() not in ignored_names
+                and not is_ignored_project_path(current_path.joinpath(item), ignored_names)
+                and depth < max_depth
             ]
             directories_seen.add(relative_dir)
             if relative_dir != ".":
@@ -3046,6 +3242,12 @@ class ToolRuntimeService:
             for filename in sorted(filenames):
                 full_path = current_path / filename
                 relative_path = full_path.relative_to(root).as_posix()
+                if is_ignored_project_path(relative_path, ignored_names):
+                    continue
+                try:
+                    size_bytes = full_path.stat().st_size
+                except OSError:
+                    continue
                 extension = full_path.suffix.lower() or "<none>"
                 extension_counter[extension] += 1
                 language_counter[_language_from_extension(extension)] += 1
@@ -3055,7 +3257,7 @@ class ToolRuntimeService:
                         {
                             "path": relative_path,
                             "extension": extension,
-                            "size_bytes": full_path.stat().st_size,
+                            "size_bytes": size_bytes,
                         }
                     )
                 if scanned_files >= max_files:
@@ -3070,6 +3272,7 @@ class ToolRuntimeService:
                 "kind": "directory" if item.is_dir() else "file",
             }
             for item in sorted(root.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:25]
+            if not is_ignored_project_path(item.name, ignored_names)
         ]
         return {
             "access_mode": "local",
@@ -3083,6 +3286,7 @@ class ToolRuntimeService:
             "extensions": dict(extension_counter.most_common(20)),
             "languages": dict(language_counter.most_common(15)),
             "sample_files": sample_files,
+            "ignored_paths": sorted(ignored_names),
         }
 
     async def _scan_ssh_project_tree(
@@ -3091,9 +3295,11 @@ class ToolRuntimeService:
         max_depth: int,
         max_files: int,
         timeout_seconds: float,
+        ignored_names: set[str] | None = None,
     ) -> dict[str, Any]:
         root_value = project_source_root(project_source).replace("\\", "/")
-        prune_clause = " -o ".join(f"-name {shlex.quote(item)}" for item in sorted(DEFAULT_IGNORED_NAMES))
+        ignored_names = set(ignored_names or DEFAULT_IGNORED_NAMES)
+        prune_clause = " -o ".join(f"-name {shlex.quote(item)}" for item in sorted(ignored_names))
         script = (
             f"ROOT={shlex.quote(root_value)}; "
             'if [ ! -d "$ROOT" ]; then echo "__ERROR__:missing_root"; exit 4; fi; '
@@ -3133,6 +3339,8 @@ class ToolRuntimeService:
             if line.startswith("__ERROR__:"):
                 raise RuntimeError(line.removeprefix("__ERROR__:"))
             if section == "top":
+                if PurePosixPath(line).name.lower() in ignored_names:
+                    continue
                 top_entries.append(
                     {
                         "name": PurePosixPath(line).name,
@@ -3162,6 +3370,7 @@ class ToolRuntimeService:
             "languages": dict(language_counter.most_common(15)),
             "sample_files": sample_files[:50],
             "ssh_target": self._build_ssh_target(project_source),
+            "ignored_paths": sorted(ignored_names),
         }
 
     def _read_local_project_file(
@@ -3656,6 +3865,174 @@ class ToolRuntimeService:
             normalized["error"] = normalized.get("summary")
         normalized.setdefault("trace_id", context.trace_id)
         return normalized
+
+    def _compact_tool_output_for_model(self, tool_key: str, result: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(result, dict):
+            return result
+        if tool_key == "code-governance-runner":
+            return self._compact_governance_output(result)
+        if tool_key == "code-review-orchestrator":
+            compact = {
+                key: result.get(key)
+                for key in (
+                    "status",
+                    "ok",
+                    "summary",
+                    "approval_decision",
+                    "review_plan",
+                    "targets",
+                    "change_summary",
+                    "next_steps",
+                    "metrics",
+                    "trace_id",
+                )
+                if key in result
+            }
+            governance = result.get("governance")
+            if isinstance(governance, dict):
+                compact["governance"] = self._compact_governance_output(governance)
+            bootstrap = result.get("bootstrap")
+            if isinstance(bootstrap, dict):
+                compact["bootstrap"] = self._compact_code_review_bootstrap_output(bootstrap)
+            campaign = result.get("campaign")
+            if isinstance(campaign, dict):
+                compact["campaign"] = self._compact_code_review_campaign_output(campaign)
+            dispatch = result.get("dispatch")
+            if isinstance(dispatch, dict):
+                compact["dispatch"] = {
+                    "status": dispatch.get("status"),
+                    "summary": dispatch.get("summary"),
+                    "worker_count": len(dispatch.get("workers", [])) if isinstance(dispatch.get("workers"), list) else 0,
+                }
+            return compact
+        return result
+
+    def _compact_governance_output(self, result: dict[str, Any]) -> dict[str, Any]:
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        code_graph = result.get("code_graph") if isinstance(result.get("code_graph"), dict) else {}
+        graph_metrics = code_graph.get("metrics") if isinstance(code_graph.get("metrics"), dict) else {}
+        report_json = result.get("report_json") if isinstance(result.get("report_json"), dict) else {}
+        report_diff = report_json.get("diff") if isinstance(report_json.get("diff"), dict) else {}
+        report_project = report_json.get("project") if isinstance(report_json.get("project"), dict) else {}
+        return {
+            "status": result.get("status"),
+            "ok": result.get("ok"),
+            "summary": result.get("summary"),
+            "approval_decision": result.get("approval_decision"),
+            "decision": result.get("decision"),
+            "risk_score": result.get("risk_score"),
+            "metrics": metrics,
+            "changed_files": self._limit_dict_list(result.get("changed_files"), limit=80),
+            "findings": self._limit_dict_list(result.get("findings"), limit=20),
+            "scanner_runs": self._limit_dict_list(result.get("scanner_runs"), limit=20),
+            "code_graph": {
+                "status": code_graph.get("status"),
+                "summary": code_graph.get("summary"),
+                "metrics": graph_metrics,
+                "impacted_node_ids": self._limit_list(code_graph.get("impacted_node_ids"), limit=40),
+            },
+            "report_json": {
+                "project": report_project,
+                "decision": result.get("decision"),
+                "risk_score": result.get("risk_score"),
+                "metrics": metrics,
+                "diff": {
+                    "mode": report_diff.get("mode"),
+                    "stat": self._truncate_text(report_diff.get("stat"), max_chars=3000),
+                    "truncated": report_diff.get("truncated"),
+                },
+            },
+            "report_markdown": self._truncate_text(result.get("report_markdown"), max_chars=5000),
+            "artifacts": self._strip_artifact_content(result.get("artifacts")),
+            "model_output_compacted": True,
+            "full_output_available_in_tool_job": True,
+        }
+
+    def _compact_code_review_bootstrap_output(self, bootstrap: dict[str, Any]) -> dict[str, Any]:
+        source_info = bootstrap.get("source_info") if isinstance(bootstrap.get("source_info"), dict) else {}
+        diff_summary = bootstrap.get("diff_summary") if isinstance(bootstrap.get("diff_summary"), dict) else {}
+        tree_summary = bootstrap.get("tree_summary") if isinstance(bootstrap.get("tree_summary"), dict) else {}
+        return {
+            "ok": bootstrap.get("ok"),
+            "errors": bootstrap.get("errors"),
+            "source_info": {
+                "access_mode": source_info.get("access_mode"),
+                "root_path": source_info.get("root_path"),
+                "git_root": source_info.get("git_root"),
+                "branch": source_info.get("branch"),
+                "is_git_repo": source_info.get("is_git_repo"),
+                "top_entries": self._limit_dict_list(source_info.get("top_entries"), limit=20),
+            },
+            "diff_summary": {
+                "ok": diff_summary.get("ok"),
+                "diff_mode": diff_summary.get("diff_mode"),
+                "diff_stat": self._truncate_text(diff_summary.get("diff_stat"), max_chars=3000),
+                "changed_file_count": len(diff_summary.get("changed_files", [])) if isinstance(diff_summary.get("changed_files"), list) else 0,
+                "changed_files": self._limit_dict_list(diff_summary.get("changed_files"), limit=80),
+                "truncated": diff_summary.get("truncated"),
+                "error": diff_summary.get("error"),
+            },
+            "tree_summary": {
+                "ok": tree_summary.get("ok"),
+                "scanned_file_count": tree_summary.get("scanned_file_count"),
+                "directory_count": tree_summary.get("directory_count"),
+                "file_count": tree_summary.get("file_count"),
+                "language_counts": tree_summary.get("language_counts"),
+                "ignored_count": tree_summary.get("ignored_count"),
+            },
+        }
+
+    def _compact_code_review_campaign_output(self, campaign: dict[str, Any]) -> dict[str, Any]:
+        summary_agent = campaign.get("summary_agent") if isinstance(campaign.get("summary_agent"), dict) else {}
+        dispatch_payload = campaign.get("dispatch_payload") if isinstance(campaign.get("dispatch_payload"), dict) else {}
+        return {
+            "summary": campaign.get("summary"),
+            "project_source": campaign.get("project_source"),
+            "review_points": self._limit_dict_list(campaign.get("review_points"), limit=20),
+            "review_team": self._limit_dict_list(campaign.get("review_team"), limit=10),
+            "metrics": campaign.get("metrics"),
+            "debate_plan": campaign.get("debate_plan"),
+            "launch_workers": campaign.get("launch_workers"),
+            "dispatch_payload": {
+                "worker_count": len(dispatch_payload.get("workers", [])) if isinstance(dispatch_payload.get("workers"), list) else 0,
+                "followup_worker_count": len(dispatch_payload.get("followup_workers", [])) if isinstance(dispatch_payload.get("followup_workers"), list) else 0,
+            },
+            "summary_agent": {
+                "agent_key": summary_agent.get("agent_key"),
+                "model_key": summary_agent.get("model_key"),
+                "description": summary_agent.get("description"),
+            },
+        }
+
+    def _strip_artifact_content(self, artifacts: Any) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        if not isinstance(artifacts, list):
+            return result
+        for item in artifacts[:20]:
+            if not isinstance(item, dict):
+                continue
+            compact = {key: value for key, value in item.items() if key != "content"}
+            if "content" in item:
+                compact["content_omitted"] = True
+                compact["content_chars"] = len(str(item.get("content") or ""))
+            result.append(compact)
+        return result
+
+    def _limit_dict_list(self, value: Any, *, limit: int) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [item for item in value[:limit] if isinstance(item, dict)]
+
+    def _limit_list(self, value: Any, *, limit: int) -> list[Any]:
+        if not isinstance(value, list):
+            return []
+        return value[:limit]
+
+    def _truncate_text(self, value: Any, *, max_chars: int) -> str:
+        text = str(value or "")
+        if len(text) <= max_chars:
+            return text
+        return f"{text[:max_chars]}\n...[truncated {len(text) - max_chars} chars]"
 
     def _collect_available_attachments(self, context: ToolExecutionContext, session) -> list[dict[str, Any]]:
         attachments: list[dict[str, Any]] = []
