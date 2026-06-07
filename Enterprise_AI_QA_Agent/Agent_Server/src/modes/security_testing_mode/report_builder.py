@@ -53,7 +53,7 @@ class SecurityReportBuilder:
 
         return SecurityReport(
             campaign_id=campaign.campaign_id,
-            title=f"Security Test Report - {target_summary[:80] or campaign.campaign_id[:8]}",
+            title=f"安全测试报告 - {target_summary[:80] or campaign.campaign_id[:8]}",
             target_summary=target_summary,
             scope_description=campaign.scope_notes or campaign.objective,
             executive_summary=self._build_executive_summary(
@@ -91,46 +91,46 @@ class SecurityReportBuilder:
         lines: list[str] = [
             f"# {report.title}",
             "",
-            f"**Name**: {report.title}",
-            f"**Date**: {self._date_part(report.generated_at)}",
-            f"**Time**: {self._time_part(report.generated_at)}",
-            f"**Target**: {report.target_summary}",
-            f"**Duration**: {report.duration_seconds:.0f}s",
+            f"**报告名称**：{report.title}",
+            f"**生成日期**：{self._date_part(report.generated_at)}",
+            f"**生成时间**：{self._time_part(report.generated_at)}",
+            f"**测试目标**：{report.target_summary}",
+            f"**执行耗时**：{report.duration_seconds:.0f} 秒",
             "",
-            "## Executive Summary",
+            "## 执行摘要",
             "",
-            report.executive_summary or "No summary was generated.",
+            report.executive_summary or "本次运行未生成摘要。",
             "",
-            "## Test Result",
+            "## 测试结果",
             "",
-            f"- Total tasks: {report.total_tasks}",
-            f"- Completed: {report.completed_tasks}",
-            f"- Failed: {report.failed_tasks}",
-            f"- Skipped: {report.skipped_tasks}",
-            f"- Assets discovered: {report.assets_discovered}",
-            f"- Services discovered: {report.services_discovered}",
-            f"- Execution records: {report.execution_record_count}",
-            f"- Evidence artifacts: {report.evidence_count}",
+            f"- 任务总数：{report.total_tasks}",
+            f"- 已完成：{report.completed_tasks}",
+            f"- 失败：{report.failed_tasks}",
+            f"- 跳过：{report.skipped_tasks}",
+            f"- 发现资产：{report.assets_discovered}",
+            f"- 发现服务：{report.services_discovered}",
+            f"- 执行记录：{report.execution_record_count}",
+            f"- 证据产物：{report.evidence_count}",
             "",
-            "## Severity Overview",
+            "## 风险等级概览",
             "",
-            "| Severity | Count |",
+            "| 风险等级 | 数量 |",
             "|---|---:|",
-            f"| Critical | {report.critical_count} |",
-            f"| High | {report.high_count} |",
-            f"| Medium | {report.medium_count} |",
-            f"| Low | {report.low_count} |",
-            f"| Info | {report.info_count} |",
+            f"| 严重 | {report.critical_count} |",
+            f"| 高危 | {report.high_count} |",
+            f"| 中危 | {report.medium_count} |",
+            f"| 低危 | {report.low_count} |",
+            f"| 信息 | {report.info_count} |",
             "",
-            "## Agents Used",
+            "## Agent 执行情况",
             "",
         ]
 
         if report.activities:
             lines.extend([
-                f"Execution strategy: {self._execution_strategy(report.activities)}",
+                f"执行策略：{self._execution_strategy(report.activities)}",
                 "",
-                "| Agent | Task | Action | Mode | What it did |",
+                "| Agent | 任务 | 动作 | 执行模式 | 执行内容 |",
                 "|---|---|---|---|---|",
             ])
             for activity in report.activities:
@@ -141,30 +141,30 @@ class SecurityReportBuilder:
                     f"{self._table_text(activity.summary or activity.notes)} |"
                 )
         else:
-            lines.append("No worker activity was recorded.")
+            lines.append("未记录到 worker 执行活动。")
 
-        lines.extend(["", "## Findings, Risks, And Errors", ""])
+        lines.extend(["", "## 发现、风险与错误", ""])
         if report.findings:
             for index, finding in enumerate(self._sort_findings(report.findings), start=1):
                 lines.extend(self._render_finding_markdown(index, finding))
                 lines.append("")
         else:
-            lines.append("No verified security findings were produced by this run.")
+            lines.append("本次运行未产生已验证的安全发现。")
             lines.append("")
 
-        lines.extend(["## Recommendations", ""])
+        lines.extend(["## 修复建议", ""])
         if report.recommendations:
             for index, recommendation in enumerate(report.recommendations, start=1):
                 lines.append(f"{index}. {recommendation}")
         else:
-            lines.append("No additional remediation recommendations were generated.")
+            lines.append("本次运行未生成额外修复建议。")
 
         if report.limitations:
-            lines.extend(["", "## Limitations", ""])
+            lines.extend(["", "## 测试限制", ""])
             for limitation in report.limitations:
                 lines.append(f"- {limitation}")
 
-        lines.extend(["", "---", "Generated by Security Testing Mode."])
+        lines.extend(["", "---", "由安全测试模式生成。"])
         return "\n".join(lines)
 
     def build_json_payload(self, report: SecurityReport) -> dict[str, Any]:
@@ -180,14 +180,14 @@ class SecurityReportBuilder:
             {
                 "type": "report_markdown",
                 "filename": f"security_report_{report.campaign_id[:8]}.md",
-                "label": "Security report (Markdown)",
+                "label": "安全测试报告（Markdown）",
                 "content_type": "text/markdown",
                 "content": markdown_report,
             },
             {
                 "type": "report_json",
                 "filename": f"security_report_{report.campaign_id[:8]}.json",
-                "label": "Security report (JSON)",
+                "label": "安全测试报告（JSON）",
                 "content_type": "application/json",
                 "content": json.dumps(self.build_json_payload(report), ensure_ascii=False, indent=2),
             },
@@ -197,7 +197,7 @@ class SecurityReportBuilder:
                 {
                     "type": "report_html",
                     "filename": f"security_report_{report.campaign_id[:8]}.html",
-                    "label": "Security report (HTML)",
+                    "label": "安全测试报告（HTML）",
                     "content_type": "text/html",
                     "content": html_report,
                 }
@@ -216,21 +216,21 @@ class SecurityReportBuilder:
     ) -> str:
         if not findings:
             return (
-                f"The campaign completed {completed} task(s) and did not produce verified findings. "
-                "Review the limitations section before treating this as a clean bill of health."
+                f"本次安全测试完成 {completed} 个任务，未产生已验证的安全发现。"
+                "在将目标视为无风险前，请先查看测试限制部分。"
             )
 
         summary = [
-            f"The campaign completed {completed} task(s) and produced {len(findings)} finding(s).",
+            f"本次安全测试完成 {completed} 个任务，产生 {len(findings)} 个发现。",
         ]
         if critical:
-            summary.append(f"{critical} finding(s) are critical and should be handled immediately.")
+            summary.append(f"其中 {critical} 个为严重风险，应立即处理。")
         elif high:
-            summary.append(f"{high} finding(s) are high severity and should be prioritized.")
+            summary.append(f"其中 {high} 个为高危风险，应优先处理。")
         elif medium:
-            summary.append(f"{medium} finding(s) are medium severity and should be scheduled for remediation.")
+            summary.append(f"其中 {medium} 个为中危风险，应纳入修复计划。")
         if failed:
-            summary.append(f"{failed} task(s) failed, so coverage may be incomplete.")
+            summary.append(f"有 {failed} 个任务执行失败，因此覆盖范围可能不完整。")
         return " ".join(summary)
 
     def _build_recommendations(self, findings: list[FindingRecord]) -> list[str]:
@@ -242,7 +242,7 @@ class SecurityReportBuilder:
                 recommendations.append(recommendation)
                 seen.add(recommendation)
         if findings and not recommendations:
-            recommendations.append("Review each finding, validate exposure, and remediate the affected service or control.")
+            recommendations.append("逐项复核发现、验证暴露面，并修复受影响的服务或安全控制。")
         return recommendations[:10]
 
     def _build_limitations(
@@ -258,44 +258,44 @@ class SecurityReportBuilder:
             if value and value not in limitations:
                 limitations.append(value)
         if failed:
-            limitations.append(f"{failed} task(s) failed; related coverage may be incomplete.")
+            limitations.append(f"{failed} 个任务执行失败，相关覆盖范围可能不完整。")
         if skipped:
-            limitations.append(f"{skipped} task(s) were skipped because dependencies did not complete.")
+            limitations.append(f"{skipped} 个任务因依赖条件未满足而被跳过。")
         return limitations
 
     def _render_finding_markdown(self, index: int, finding: FindingRecord) -> list[str]:
         lines = [
-            f"### {index}. {finding.title or 'Untitled finding'}",
+            f"### {index}. {finding.title or '未命名发现'}",
             "",
-            f"- **Severity**: {finding.severity.upper()}",
-            f"- **Category**: {finding.category or 'unknown'}",
-            f"- **Affected target**: {finding.affected_target or 'unknown'}",
+            f"- **风险等级**：{self._severity_label(finding.severity)}",
+            f"- **类别**：{finding.category or '未知'}",
+            f"- **受影响目标**：{finding.affected_target or '未知'}",
         ]
         if finding.affected_port:
-            lines.append(f"- **Affected port**: {finding.affected_port}")
+            lines.append(f"- **受影响端口**：{finding.affected_port}")
         if finding.affected_service:
-            lines.append(f"- **Affected service**: {finding.affected_service}")
+            lines.append(f"- **受影响服务**：{finding.affected_service}")
         if finding.cve_id:
             lines.append(f"- **CVE**: {finding.cve_id}")
         if finding.cvss_score:
             lines.append(f"- **CVSS**: {finding.cvss_score}")
         lines.extend([
-            f"- **Confidence**: {finding.confidence}",
-            f"- **Verified**: {'yes' if finding.verified else 'no'}",
+            f"- **置信度**：{finding.confidence}",
+            f"- **是否验证**：{'是' if finding.verified else '否'}",
             "",
         ])
         if finding.description:
-            lines.extend(["**Description**", "", finding.description, ""])
+            lines.extend(["**描述**", "", finding.description, ""])
         if finding.evidence_summary:
-            lines.extend(["**Evidence**", "", f"```text\n{finding.evidence_summary[:1200]}\n```", ""])
-        lines.extend(["**How To Reproduce**", ""])
+            lines.extend(["**证据**", "", f"```text\n{finding.evidence_summary[:1200]}\n```", ""])
+        lines.extend(["**复现方式**", ""])
         if finding.reproduction_steps:
             for step_index, step in enumerate(finding.reproduction_steps, start=1):
                 lines.append(f"{step_index}. {step}")
         else:
-            lines.append("No reproduction steps were captured.")
+            lines.append("未记录复现步骤。")
         if finding.recommendation:
-            lines.extend(["", "**Recommendation**", "", finding.recommendation])
+            lines.extend(["", "**修复建议**", "", finding.recommendation])
         return lines
 
     def _target_summary(self, campaign: SecurityCampaign) -> str:
@@ -345,6 +345,15 @@ class SecurityReportBuilder:
         if len(modes) == 1:
             return modes[0]
         return ", ".join(modes)
+
+    def _severity_label(self, severity: str) -> str:
+        return {
+            RISK_CRITICAL: "严重",
+            RISK_HIGH: "高危",
+            RISK_MEDIUM: "中危",
+            RISK_LOW: "低危",
+            RISK_INFO: "信息",
+        }.get(str(severity or "").lower(), str(severity or "未知").upper())
 
 
 __all__ = ["SecurityReportBuilder"]

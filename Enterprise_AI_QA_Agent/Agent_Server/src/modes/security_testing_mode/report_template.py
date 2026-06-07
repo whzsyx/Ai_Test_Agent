@@ -24,7 +24,7 @@ class SecurityReportTemplate:
     ) -> str:
         """Return a complete HTML report for the given security report."""
         return self._template_service.render_report_html(
-            title=report.title or "Security Testing Report",
+            title=report.title or "安全测试报告",
             time_label=report.generated_at or report.tested_at,
             sender=sender,
             markdown_content=markdown_content,

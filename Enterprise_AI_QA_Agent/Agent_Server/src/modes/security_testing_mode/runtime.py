@@ -607,7 +607,7 @@ class SecurityTestingModeRuntime:
         if len(target_label) > 80:
             target_label = f"{target_label[:77]}..."
         date_label = generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-        subject = f"Security Test Report - {target_label} - {date_label}"
+        subject = f"安全测试报告 - {target_label} - {date_label}"
         return {
             "to": recipients,
             "subject": subject,
