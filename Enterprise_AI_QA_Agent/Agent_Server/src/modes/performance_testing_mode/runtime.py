@@ -328,10 +328,7 @@ class PerformanceTestingModeRuntime:
         if not state.run or not state.plan:
             return self._error("缺少运行结果", state)
 
-        raw_metrics = RawMetrics()
-        if state.run.result_artifact and state.run.result_artifact.startswith("inline:"):
-            if self._engine_adapter and state.run.stdout_tail:
-                pass
+        raw_metrics = RawMetrics(**state.run.raw_metrics) if state.run.raw_metrics else RawMetrics()
 
         if state.run.engine_thresholds:
             raw_metrics.thresholds = state.run.engine_thresholds

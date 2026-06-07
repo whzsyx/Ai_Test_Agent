@@ -211,6 +211,7 @@ class PerfRun(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     result_artifact: str = ""
+    raw_metrics: dict[str, Any] = Field(default_factory=dict)
     engine_thresholds: dict[str, Any] = Field(default_factory=dict)
     html_report_artifact: str = ""
     stdout_tail: str = ""

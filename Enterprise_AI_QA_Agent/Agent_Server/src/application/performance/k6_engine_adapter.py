@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from src.modes.performance_testing_mode.plan_state import PerfPlan, PerfTarget, RampStage
 from .engine_adapter import EngineCommand, PerfEngineAdapter, RawMetrics, RunOptions, ScriptArtifact
@@ -19,9 +21,17 @@ class K6EngineAdapter:
     engine_key: str = "k6"
     default_image: str = "grafana/k6:latest"
 
-    def __init__(self, image: str = "", rewrite_localhost: bool = True):
+    def __init__(
+        self,
+        image: str = "",
+        rewrite_localhost: bool = True,
+        docker_host_alias: str = "host.docker.internal",
+        local_host_ips: set[str] | None = None,
+    ):
         self._image = image or self.default_image
         self._rewrite_localhost = rewrite_localhost
+        self._docker_host_alias = docker_host_alias
+        self._local_host_ips = local_host_ips if local_host_ips is not None else self._detect_local_host_ips()
 
     def build_script(self, plan: PerfPlan) -> ScriptArtifact:
         lines: list[str] = []
@@ -42,10 +52,19 @@ class K6EngineAdapter:
             lines.append("});")
             lines.append("")
 
-        # Options block
-        lines.append("export const options = {")
+        # Options block. Smoke uses a tiny closed model so k6 does not combine
+        # --vus/--iterations with a load scenario from the generated script.
+        lines.append("const __smoke = __ENV.QA_PERF_SMOKE === \"true\";")
+        lines.append("const __smokeVus = Number(__ENV.QA_PERF_SMOKE_VUS || 1);")
+        lines.append("const __smokeIterations = Number(__ENV.QA_PERF_SMOKE_ITERATIONS || 3);")
+        lines.append("")
+        lines.append("const __loadOptions = {")
         lines.extend(self._build_options_block(plan))
         lines.append("};")
+        lines.append("")
+        lines.append("export const options = __smoke")
+        lines.append("  ? { vus: __smokeVus, iterations: __smokeIterations }")
+        lines.append("  : __loadOptions;")
         lines.append("")
 
         # Default function
@@ -68,8 +87,11 @@ class K6EngineAdapter:
 
     def run_command(self, script: ScriptArtifact, run_opts: RunOptions) -> EngineCommand:
         cmd = ["k6", "run", "--summary-export", run_opts.summary_export_path]
+        env = dict(run_opts.environment)
         if run_opts.is_smoke:
-            cmd.extend(["--vus", str(run_opts.smoke_vus), "--iterations", str(run_opts.smoke_iterations)])
+            env["QA_PERF_SMOKE"] = "true"
+            env["QA_PERF_SMOKE_VUS"] = str(run_opts.smoke_vus)
+            env["QA_PERF_SMOKE_ITERATIONS"] = str(run_opts.smoke_iterations)
         cmd.extend(run_opts.extra_args)
         cmd.append(f"/work/{script.filename}")
 
@@ -77,7 +99,7 @@ class K6EngineAdapter:
             image=self._image,
             command=cmd,
             workdir="/work",
-            env=run_opts.environment,
+            env=env,
         )
 
     def parse_results(self, summary_json: str) -> RawMetrics:
@@ -88,17 +110,13 @@ class K6EngineAdapter:
 
         metrics = data.get("metrics", {})
 
-        http_reqs = metrics.get("http_reqs", {})
-        http_req_duration = metrics.get("http_req_duration", {})
-        http_req_failed = metrics.get("http_req_failed", {})
+        http_reqs = self._metric_values(metrics.get("http_reqs", {}))
+        duration_values = self._metric_values(metrics.get("http_req_duration", {}))
+        failed_values = self._metric_values(metrics.get("http_req_failed", {}))
 
-        samples = int(http_reqs.get("values", {}).get("count", 0) if isinstance(http_reqs.get("values"), dict) else 0)
-        duration_values = http_req_duration.get("values", {}) if isinstance(http_req_duration.get("values"), dict) else {}
-
-        rate = http_reqs.get("values", {}).get("rate", 0) if isinstance(http_reqs.get("values"), dict) else 0
-
-        failed_values = http_req_failed.get("values", {}) if isinstance(http_req_failed.get("values"), dict) else {}
-        error_rate = float(failed_values.get("rate", 0))
+        samples = int(http_reqs.get("count", 0))
+        rate = http_reqs.get("rate", 0)
+        error_rate = float(failed_values.get("rate", failed_values.get("value", 0)))
 
         thresholds = {}
         root_thresholds = data.get("root_group", {}).get("checks", [])
@@ -122,6 +140,15 @@ class K6EngineAdapter:
             raw_data=data,
         )
 
+    @staticmethod
+    def _metric_values(metric: Any) -> dict[str, Any]:
+        if not isinstance(metric, dict):
+            return {}
+        values = metric.get("values")
+        if isinstance(values, dict):
+            return values
+        return metric
+
     def build_smoke_options(self, plan: PerfPlan) -> RunOptions:
         return RunOptions(
             timeout_seconds=60,
@@ -133,11 +160,15 @@ class K6EngineAdapter:
     def rewrite_target_url(self, url: str) -> str:
         if not self._rewrite_localhost:
             return url
-        return re.sub(
-            r"(https?://)(localhost|127\.0\.0\.1)",
-            r"\1host.docker.internal",
-            url,
-        )
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if host.lower() not in {"localhost", "127.0.0.1", "::1"} and host not in self._local_host_ips:
+            return url
+
+        netloc = self._docker_host_alias
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunparse(parsed._replace(netloc=netloc))
 
     # -----------------------------------------------------------------------
     # Private helpers
@@ -259,3 +290,23 @@ class K6EngineAdapter:
         if isinstance(target.body_template, str):
             return f"`{target.body_template}`"
         return f"JSON.stringify({json.dumps(target.body_template)})"
+
+    @staticmethod
+    def _detect_local_host_ips() -> set[str]:
+        ips = {"127.0.0.1", "::1"}
+        hostnames = {"localhost"}
+        try:
+            hostnames.add(socket.gethostname())
+            hostnames.add(socket.getfqdn())
+        except OSError:
+            pass
+
+        for hostname in hostnames:
+            try:
+                for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+                    if family in {socket.AF_INET, socket.AF_INET6} and sockaddr:
+                        ips.add(str(sockaddr[0]))
+            except OSError:
+                continue
+
+        return ips

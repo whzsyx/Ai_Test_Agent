@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -93,6 +93,7 @@ class PerfRunnerService:
                 if result.summary_json:
                     run.result_artifact = f"inline:summary.json"
                     raw_metrics = engine_adapter.parse_results(result.summary_json)
+                    run.raw_metrics = asdict(raw_metrics)
                     run.engine_thresholds = raw_metrics.thresholds
 
             except Exception as e:
@@ -146,16 +147,17 @@ class PerfRunnerService:
             try:
                 data = json.loads(result.summary_json)
                 metrics = data.get("metrics", {})
-                http_reqs = metrics.get("http_reqs", {})
-                values = http_reqs.get("values", {}) if isinstance(http_reqs.get("values"), dict) else {}
+                values = self._metric_values(metrics.get("http_reqs", {}))
                 count = int(values.get("count", 0))
-                failed_rate = float(
-                    metrics.get("http_req_failed", {}).get("values", {}).get("rate", 1)
-                    if isinstance(metrics.get("http_req_failed", {}).get("values"), dict) else 1
-                )
+                failed_values = self._metric_values(metrics.get("http_req_failed", {}))
+                failed_rate = float(failed_values.get("rate", failed_values.get("value", 1)))
 
                 if count == 0:
-                    return SmokeResult(passed=False, detail="冒烟验证无请求完成")
+                    diagnostics = self._format_execution_diagnostics(result)
+                    detail = "冒烟验证无请求完成"
+                    if diagnostics:
+                        detail = f"{detail}: {diagnostics}"
+                    return SmokeResult(passed=False, detail=detail)
 
                 if failed_rate > 0.5:
                     return SmokeResult(
@@ -178,6 +180,25 @@ class PerfRunnerService:
 
         return SmokeResult(passed=True, checked_status=checked_status, extracted=extracted, detail="冒烟验证通过")
 
+    def _format_execution_diagnostics(self, result: ExecutionResult) -> str:
+        parts: list[str] = []
+        if result.exit_code:
+            parts.append(f"exit_code={result.exit_code}")
+        if result.stderr:
+            parts.append(f"stderr={result.stderr.strip()[-500:]}")
+        if result.stdout:
+            parts.append(f"stdout={result.stdout.strip()[-500:]}")
+        return "; ".join(parts)
+
+    @staticmethod
+    def _metric_values(metric: Any) -> dict[str, Any]:
+        if not isinstance(metric, dict):
+            return {}
+        values = metric.get("values")
+        if isinstance(values, dict):
+            return values
+        return metric
+
     async def _run_in_docker(
         self,
         cmd: EngineCommand,
@@ -193,7 +214,9 @@ class PerfRunnerService:
 
             docker_cmd = [
                 "docker", "run", "--rm",
+                "--entrypoint=",
                 "--name", container_name,
+                "--add-host", "host.docker.internal:host-gateway",
                 "-v", f"{tmpdir}:{cmd.workdir}",
             ]
 
@@ -214,6 +237,8 @@ class PerfRunnerService:
                     docker_cmd,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=timeout_seconds,
                 )
                 summary_json = ""
@@ -254,6 +279,8 @@ class PerfRunnerService:
                     local_cmd,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=timeout_seconds,
                     cwd=tmpdir,
                     env=None,
