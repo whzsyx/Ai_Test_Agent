@@ -9,6 +9,7 @@ from src.modes.api_testing_mode.prompt_contract import (
     API_EXECUTOR_WORKER_PROMPT_CONTRACT,
     API_TESTING_PROMPT_CONTRACT,
 )
+from src.modes.smoke_testing_mode.prompt_contract import SMOKE_TESTING_PROMPT_CONTRACT
 from src.modes.ui_automation_mode.prompt_contract import UI_AUTOMATION_PROMPT_CONTRACT
 from src.schemas.prompting import PromptAssemblyResult, PromptSection
 
@@ -232,6 +233,17 @@ class PromptAssemblyService:
                     cache_scope="dynamic",
                     priority=50,
                     content=API_EXECUTOR_WORKER_PROMPT_CONTRACT,
+                )
+            )
+        elif mode_key == "smoke_testing" or selected_agent_key.startswith("smoke-"):
+            sections.append(
+                PromptSection(
+                    key="smoke_testing_contract",
+                    title="Smoke Testing Contract",
+                    source="prompt_assembly.smoke_testing",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=SMOKE_TESTING_PROMPT_CONTRACT,
                 )
             )
 

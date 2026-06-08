@@ -135,6 +135,15 @@ class ToolRuntimeService:
             coordinator_runtime_service=coordinator_runtime_service,
             session_store=session_store,
         )
+        self._smoke_testing_mode_runtime = None
+        if settings:
+            from src.modes.smoke_testing_mode.runtime import SmokeTestingModeRuntime
+            self._smoke_testing_mode_runtime = SmokeTestingModeRuntime(
+                settings=settings,
+                api_docs_service=api_docs_service,
+                memory_runtime_service=memory_runtime_service,
+                artifact_storage_service=artifact_storage_service,
+            )
         self._security_testing_mode_runtime = SecurityTestingModeRuntime(
             settings=settings,
             coordinator_runtime_service=coordinator_runtime_service,
@@ -207,6 +216,8 @@ class ToolRuntimeService:
         self._memory_runtime_service = memory_runtime_service
         self._security_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         self._ui_automation_mode_runtime.set_memory_runtime_service(memory_runtime_service)
+        if self._smoke_testing_mode_runtime is not None:
+            self._smoke_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         if self._ui_exploration_service is not None:
             self._ui_exploration_service._memory_runtime_service = memory_runtime_service
 
@@ -2796,12 +2807,14 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        return self._build_placeholder_mode_result(
-            mode_key="smoke_testing",
-            summary="Smoke testing mode scaffold is ready; critical-path suites are not connected yet.",
-            arguments=arguments,
-            context=context,
-        )
+        if self._smoke_testing_mode_runtime is None:
+            return {
+                "status": "failed",
+                "ok": False,
+                "summary": "Smoke testing runtime is not configured.",
+                "error": "smoke_runtime_not_configured",
+            }
+        return await self._smoke_testing_mode_runtime.handle(arguments, context)
 
     def _build_placeholder_mode_result(
         self,

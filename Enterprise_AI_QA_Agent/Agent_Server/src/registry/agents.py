@@ -710,14 +710,84 @@ class AgentRegistry:
                 descriptor=AgentDescriptor(
                     key="smoke-testing-agent",
                     name="Smoke Testing Agent",
-                    role="tester",
-                    summary="Reserved agent for future smoke testing workflows.",
-                    description="Placeholder agent scaffold for smoke testing mode.",
-                    supported_tools=["smoke-suite-runner", "knowledge-rag", "report-writer"],
-                    supported_skills=[],
+                    role="coordinator",
+                    summary="Coordinate smoke plan drafting, user confirmation, selected-case execution, and regression candidate capture.",
+                    description="Main smoke testing coordinator. It must draft a detailed executable plan first, wait for user confirmation or revisions, and only execute the frozen approved plan.",
+                    supported_tools=["smoke-suite-runner", "knowledge-rag", "report-writer", "subagent-dispatch"],
+                    supported_skills=["requirements-analysis", "risk-scoping", "report-synthesis"],
                     supported_models=["gpt-5.4", "claude-sonnet-4"],
                     default_model="gpt-5.4",
-                    tags=["testing", "smoke", "placeholder"],
+                    tags=["testing", "smoke", "orchestration"],
+                )
+            ),
+            "smoke-source-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="smoke-source-analyst",
+                    name="Smoke Source Analyst",
+                    role="analyst",
+                    summary="Analyze uploaded documents, API docs, UI graph knowledge, and project credentials for smoke planning.",
+                    description="Collects smoke test sources from chat attachments, MinIO API documents, UI graph knowledge, memory credentials, and future project case providers.",
+                    supported_tools=["smoke-suite-runner", "knowledge-rag", "api-docs-library", "attachment-reader", "observation-search"],
+                    supported_skills=["requirements-analysis"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "smoke", "source-analysis"],
+                )
+            ),
+            "smoke-plan-designer": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="smoke-plan-designer",
+                    name="Smoke Plan Designer",
+                    role="planner",
+                    summary="Design detailed API/UI/health smoke execution plans for user approval.",
+                    description="Produces reviewable smoke plans with methods, URLs, parameters, expected responses, UI actions, assertions, evidence requirements, and risk labels.",
+                    supported_tools=["smoke-suite-runner", "knowledge-rag", "api-docs-library", "report-writer"],
+                    supported_skills=["requirements-analysis", "case-design", "assertion-design"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4", "deepseek-reasoner"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "smoke", "planning"],
+                )
+            ),
+            "smoke-plan-reviewer": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="smoke-plan-reviewer",
+                    name="Smoke Plan Reviewer",
+                    role="reviewer",
+                    summary="Review smoke plans for risk, executable assertions, credential safety, and destructive operations.",
+                    description="Checks generated smoke plans before execution and flags missing assertions, unclear expectations, write-operation risk, and credential leakage.",
+                    supported_tools=["smoke-suite-runner", "knowledge-rag", "report-writer"],
+                    supported_skills=["risk-scoping", "assertion-design"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "smoke", "review"],
+                )
+            ),
+            "smoke-executor": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="smoke-executor",
+                    name="Smoke Executor",
+                    role="worker",
+                    summary="Execute only user-approved selected smoke cases and collect evidence.",
+                    description="Runs the deterministic smoke runner against the frozen approved plan; it must not add unapproved steps or expose plaintext credentials.",
+                    supported_tools=["smoke-suite-runner", "report-writer"],
+                    supported_skills=["artifact-collection"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "smoke", "execution"],
+                )
+            ),
+            "smoke-result-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="smoke-result-analyst",
+                    name="Smoke Result Analyst",
+                    role="summarizer",
+                    summary="Classify smoke failures, produce the readiness verdict, and promote stable cases to regression candidates.",
+                    description="Analyzes smoke run outputs, writes delivery-ready summaries, and marks stable passing cases for future regression suites.",
+                    supported_tools=["smoke-suite-runner", "knowledge-rag", "report-writer"],
+                    supported_skills=["report-synthesis", "risk-scoping"],
+                    supported_models=["gpt-5.4", "claude-sonnet-4"],
+                    default_model="gpt-5.4",
+                    tags=["testing", "smoke", "analysis", "regression"],
                 )
             ),
         }

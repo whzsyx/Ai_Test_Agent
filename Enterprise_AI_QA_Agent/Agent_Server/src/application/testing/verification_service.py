@@ -30,6 +30,9 @@ class VerificationService:
             if tool_key == "browser-automation":
                 results.append(self._from_browser_automation(session_id, turn_id, trace_id, item, output))
                 continue
+            if tool_key == "smoke-suite-runner":
+                results.append(self._from_smoke_suite_runner(session_id, turn_id, trace_id, item, output))
+                continue
         return results
 
     def _from_api_tester(
@@ -144,5 +147,89 @@ class VerificationService:
             failed_count=0 if status == VerificationStatus.passed else max(0, len(steps) - 1),
             evidence=evidence,
             metadata={"tool_key": "browser-automation", "artifact_count": len(artifacts)},
+            created_at=datetime.utcnow(),
+        )
+
+    def _from_smoke_suite_runner(
+        self,
+        session_id: str,
+        turn_id: str,
+        trace_id: str,
+        tool_result: dict[str, Any],
+        output: dict[str, Any],
+    ) -> VerificationResult:
+        run_result = output.get("run_result") if isinstance(output.get("run_result"), dict) else {}
+        plan = output.get("plan") if isinstance(output.get("plan"), dict) else {}
+        case_results = run_result.get("case_results") if isinstance(run_result.get("case_results"), list) else []
+        assertion_count = sum(int(item.get("assertion_count") or 0) for item in case_results if isinstance(item, dict))
+        passed_count = int(run_result.get("passed_cases") or 0)
+        failed_count = int(run_result.get("failed_cases") or 0)
+        blocked_count = int(run_result.get("blocked_cases") or 0)
+        verdict = str(run_result.get("verdict") or output.get("phase") or "").strip()
+        if verdict == "ready":
+            status = VerificationStatus.passed
+        elif verdict == "blocked" or failed_count > 0:
+            status = VerificationStatus.failed
+        elif verdict == "partial":
+            status = VerificationStatus.partial
+        else:
+            status = VerificationStatus.not_run
+
+        evidence: list[VerificationEvidence] = []
+        for label, uri in [
+            ("smoke_plan", output.get("plan_uri")),
+            ("approved_plan", output.get("approved_plan_uri")),
+            ("run_result", output.get("run_result_uri")),
+            ("run_report", output.get("report_uri")),
+        ]:
+            if uri:
+                evidence.append(
+                    VerificationEvidence(
+                        source_type="artifact",
+                        source_id=str(uri),
+                        label=label,
+                        detail=str(uri),
+                        metadata={"tool_key": "smoke-suite-runner"},
+                    )
+                )
+        for case in case_results[:8]:
+            if not isinstance(case, dict):
+                continue
+            evidence.append(
+                VerificationEvidence(
+                    source_type="tool_result",
+                    source_id=str(case.get("case_id") or uuid4()),
+                    label=str(case.get("status") or "smoke_case"),
+                    detail=str(case.get("summary") or case.get("title") or ""),
+                    metadata={
+                        "case_type": case.get("case_type"),
+                        "failure_category": case.get("failure_category"),
+                    },
+                )
+            )
+
+        return VerificationResult(
+            id=str(uuid4()),
+            session_id=session_id,
+            turn_id=turn_id,
+            trace_id=trace_id,
+            verifier="冒烟测试结果",
+            status=status,
+            summary=str(run_result.get("summary") or output.get("summary") or tool_result.get("summary") or "冒烟测试方案已生成，等待确认。"),
+            assertion_count=assertion_count,
+            passed_count=passed_count,
+            failed_count=failed_count,
+            evidence=evidence,
+            metadata={
+                "tool_key": "smoke-suite-runner",
+                "plan_id": output.get("plan_id") or plan.get("plan_id"),
+                "plan_version": output.get("plan_version") or plan.get("version"),
+                "verdict": verdict,
+                "blocked_count": blocked_count,
+                "selected_case_count": run_result.get("selected_case_count") or len(output.get("selected_case_ids") or []),
+                "total_cases": run_result.get("total_cases") or len(plan.get("cases") or []),
+                "report_uri": output.get("report_uri"),
+                "approved_plan_uri": output.get("approved_plan_uri"),
+            },
             created_at=datetime.utcnow(),
         )

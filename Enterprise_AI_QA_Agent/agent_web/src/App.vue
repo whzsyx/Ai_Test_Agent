@@ -7,6 +7,7 @@ import type { GlobalThemeOverrides } from "naive-ui";
 import CodeReviewProgressPanel from "./components/chat/CodeReviewProgressPanel.vue";
 import EventConsolePanel from "./components/chat/EventConsolePanel.vue";
 import SnapshotTracePanel from "./components/chat/SnapshotTracePanel.vue";
+import SmokeTestingResultPanel from "./components/chat/SmokeTestingResultPanel.vue";
 import ToolActivityPanel from "./components/chat/ToolActivityPanel.vue";
 import ToolJobPanel from "./components/chat/ToolJobPanel.vue";
 import VerificationPanel from "./components/chat/VerificationPanel.vue";
@@ -74,6 +75,7 @@ const runtimeConsoleTabs = computed(() => [
   { key: "tools", label: t("console.tools") },
   { key: "snapshot", label: t("console.snapshots") },
   { key: "jobs", label: t("console.jobs") },
+  { key: "smoke_results", label: "冒烟测试结果" },
   { key: "verification", label: t("console.verification") },
   { key: "review_progress", label: t("console.review_progress") },
 ] as const);
@@ -210,6 +212,7 @@ onBeforeUnmount(() => {
                   <CodeReviewProgressPanel v-else-if="runtimeConsoleTab === 'review_progress'" />
                   <SnapshotTracePanel v-else-if="runtimeConsoleTab === 'snapshot'" />
                   <ToolJobPanel v-else-if="runtimeConsoleTab === 'jobs'" />
+                  <SmokeTestingResultPanel v-else-if="runtimeConsoleTab === 'smoke_results'" />
                   <VerificationPanel v-else-if="runtimeConsoleTab === 'verification'" />
                 </div>
               </template>
