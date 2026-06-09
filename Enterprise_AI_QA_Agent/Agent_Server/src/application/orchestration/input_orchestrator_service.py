@@ -378,6 +378,85 @@ class InputOrchestratorService:
                 "suite_focus": str(parameters.get("suite_focus") or "").strip(),
                 "target_url": target_url,
             }
+        elif mode_key == "compatibility_testing":
+            compatibility_action = str(parameters.get("compatibility_action") or "draft_plan").strip() or "draft_plan"
+            product_type = str(parameters.get("product_type") or "unknown").strip() or "unknown"
+            entrypoint = str(parameters.get("entrypoint") or target_url).strip()
+            context["compatibility_action"] = compatibility_action
+            context["product_type"] = product_type
+            if entrypoint:
+                context["entrypoint"] = entrypoint
+            for key in (
+                "plan",
+                "approved_plan",
+                "confirm_risks",
+                "selected_case_ids",
+                "selected_environment_ids",
+                "priority_flows",
+                "test_scope",
+                "forbidden_actions",
+                "product_access_manifest",
+                "access_manifest",
+                "product_name",
+                "product_version",
+                "artifact",
+                "artifact_type",
+                "auth_strategy",
+                "username_ref",
+                "password_ref",
+                "token_ref",
+                "manual_steps",
+                "package_name",
+                "activity",
+                "bundle_id",
+                "mini_program_path",
+                "command",
+                "base_api",
+                "proxy",
+                "requires_vpn",
+                "exclude",
+            ):
+                if parameters.get(key) is not None:
+                    context[key] = parameters.get(key)
+            context["compatibility_testing_request"] = {
+                "objective": objective,
+                "action": compatibility_action,
+                "product_type": product_type,
+                "target_url": target_url,
+                "entrypoint": entrypoint,
+                "confirm_risks": bool(parameters.get("confirm_risks")),
+            }
+            for key in (
+                "plan",
+                "approved_plan",
+                "selected_case_ids",
+                "selected_environment_ids",
+                "priority_flows",
+                "test_scope",
+                "forbidden_actions",
+                "product_access_manifest",
+                "access_manifest",
+                "product_name",
+                "product_version",
+                "artifact",
+                "artifact_type",
+                "auth_strategy",
+                "username_ref",
+                "password_ref",
+                "token_ref",
+                "manual_steps",
+                "package_name",
+                "activity",
+                "bundle_id",
+                "mini_program_path",
+                "command",
+                "base_api",
+                "proxy",
+                "requires_vpn",
+                "exclude",
+            ):
+                if parameters.get(key) is not None:
+                    context["compatibility_testing_request"][key] = parameters.get(key)
         elif mode_key == "code_review":
             project_scope = str(parameters.get("project_scope") or "").strip()
             if project_scope:

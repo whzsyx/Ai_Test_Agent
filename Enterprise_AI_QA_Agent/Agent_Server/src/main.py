@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.api.routes.attachments import router as attachments_router
 from src.api.routes.api_docs import router as api_docs_router
+from src.api.routes.compatibility import router as compatibility_router
 from src.api.routes.health import router as health_router
 from src.api.routes.integrations import router as integrations_router
 from src.api.routes.knowledge import router as knowledge_router
@@ -26,6 +27,7 @@ from src.api.routes.settings import router as settings_router
 from src.application.model_adapters import build_default_adapter_registry
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
+from src.application.compatibility import CompatibilityRunnerService
 from src.application.documents.api_docs_service import ApiDocsService
 from src.application.integrations.integration_catalog_service import IntegrationCatalogService
 from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
@@ -141,6 +143,10 @@ async def lifespan(app: FastAPI):
     )
     await tool_job_service.initialize()
     permission_service = PermissionService()
+    compatibility_runner_service = CompatibilityRunnerService(
+        settings=settings,
+        artifact_storage_service=artifact_storage_service,
+    )
     input_orchestrator_service = InputOrchestratorService(mode_registry=mode_registry)
     prompt_service = PromptSubmissionService(input_orchestrator=input_orchestrator_service)
     prompt_assembly_service = PromptAssemblyService()
@@ -169,6 +175,7 @@ async def lifespan(app: FastAPI):
         artifact_storage_service=artifact_storage_service,
         api_docs_service=api_docs_service,
         mcp_connection_manager=mcp_connection_manager,
+        compatibility_runner_service=compatibility_runner_service,
     )
     graph = build_agent_graph(
         agent_registry=agent_registry,
@@ -237,6 +244,7 @@ async def lifespan(app: FastAPI):
     app.state.model_runtime_service = model_runtime_service
     app.state.model_adapter_registry = adapter_registry
     app.state.tool_runtime_service = tool_runtime_service
+    app.state.compatibility_runner_service = compatibility_runner_service
     app.state.runtime_service = runtime_service
     session_service = SessionService(
         store=store,
@@ -301,6 +309,7 @@ app.include_router(knowledge_router, prefix=settings.api_v1_prefix)
 app.include_router(registry_router, prefix=settings.api_v1_prefix)
 app.include_router(attachments_router, prefix=settings.api_v1_prefix)
 app.include_router(api_docs_router, prefix=settings.api_v1_prefix)
+app.include_router(compatibility_router, prefix=settings.api_v1_prefix)
 app.include_router(integrations_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)

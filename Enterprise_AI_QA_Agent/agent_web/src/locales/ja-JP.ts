@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "UI自動化モード",
   "mode.api_testing": "APIテストモード",
   "mode.security_testing": "セキュリティテストモード",
+  "mode.compatibility_testing": "互換性テストモード",
   "mode.performance_testing": "パフォーマンステストモード",
   "mode.smoke_testing": "スモークテストモード",
   "mode.select": "現在のセッションの実行モードを選択",

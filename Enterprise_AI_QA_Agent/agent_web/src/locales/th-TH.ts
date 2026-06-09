@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "โหมดอัตโนมัติ UI",
   "mode.api_testing": "โหมดทดสอบ API",
   "mode.security_testing": "โหมดทดสอบความปลอดภัย",
+  "mode.compatibility_testing": "โหมดทดสอบความเข้ากันได้",
   "mode.performance_testing": "โหมดทดสอบประสิทธิภาพ",
   "mode.smoke_testing": "โหมดทดสอบเบื้องต้น",
   "mode.select": "เลือกโหมดการทำงานสำหรับเซสชันปัจจุบัน",

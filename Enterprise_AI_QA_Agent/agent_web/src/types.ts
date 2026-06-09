@@ -22,6 +22,7 @@ export type ModeKey =
   | "ui_automation"
   | "api_testing"
   | "security_testing"
+  | "compatibility_testing"
   | "performance_testing"
   | "smoke_testing";
 

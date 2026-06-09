@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "Chế độ tự động hóa UI",
   "mode.api_testing": "Chế độ kiểm thử API",
   "mode.security_testing": "Chế độ kiểm thử bảo mật",
+  "mode.compatibility_testing": "Chế độ kiểm thử tương thích",
   "mode.performance_testing": "Chế độ kiểm thử hiệu năng",
   "mode.smoke_testing": "Chế độ kiểm thử khói",
   "mode.select": "Chọn chế độ thực thi cho phiên hiện tại",

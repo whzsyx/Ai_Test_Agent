@@ -143,6 +143,35 @@ class TestModeIntentService:
         "可测试": "testability",
         "可维护": "maintainability",
     }
+    COMPATIBILITY_PRODUCT_TOKENS = {
+        "web": "web",
+        "网页": "web",
+        "网站": "web",
+        "h5": "h5",
+        "android": "android_app",
+        "安卓": "android_app",
+        "apk": "android_app",
+        "ios": "ios_app",
+        "iphone": "ios_app",
+        "ipa": "ios_app",
+        "微信小程序": "wechat_mini_program",
+        "wechat": "wechat_mini_program",
+        "miniprogram": "wechat_mini_program",
+        "支付宝小程序": "alipay_mini_program",
+        "alipay": "alipay_mini_program",
+        "linux": "linux_app",
+        "桌面": "linux_app",
+    }
+    COMPATIBILITY_ACTION_TOKENS = {
+        "确认": "execute_approved_plan",
+        "执行": "execute_approved_plan",
+        "生成调度": "execute_approved_plan",
+        "runner": "execute_approved_plan",
+        "计划": "draft_plan",
+        "矩阵": "draft_plan",
+        "用例": "draft_plan",
+        "兼容": "draft_plan",
+    }
     HTTP_METHOD_PATTERN = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\b", flags=re.IGNORECASE)
     URL_PATTERN = re.compile(r"https?://[^\s]+", flags=re.IGNORECASE)
     API_PATH_PATTERN = re.compile(r"(/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+)")
@@ -168,6 +197,8 @@ class TestModeIntentService:
             base_state = self._classify_performance_testing(mode.key, normalized_message, combined, context)
         elif mode.key == "smoke_testing":
             base_state = self._classify_smoke_testing(mode.key, normalized_message, combined, context)
+        elif mode.key == "compatibility_testing":
+            base_state = self._classify_compatibility_testing(mode.key, normalized_message, combined, context)
         elif mode.key == "code_review":
             base_state = self._classify_code_review(mode.key, normalized_message, combined, context)
         else:
@@ -362,6 +393,67 @@ class TestModeIntentService:
                 "review_focus": review_focus,
                 "project_scope": self._first_text(context.get("project_scope")),
             },
+        )
+
+    def _classify_compatibility_testing(
+        self,
+        mode_key: str,
+        message: str,
+        combined: str,
+        context: dict[str, Any],
+    ) -> TestModeIntentState:
+        product_type = self._first_text(
+            context.get("product_type"),
+            self._first_match(combined, self.COMPATIBILITY_PRODUCT_TOKENS, default=""),
+        )
+        compatibility_action = self._first_text(
+            context.get("compatibility_action"),
+            self._first_match(combined, self.COMPATIBILITY_ACTION_TOKENS, default="draft_plan"),
+        )
+        target_url = self._first_text(context.get("target_url"), context.get("entrypoint"), self._extract_url(message))
+        intent_key = "reporting" if self._contains_any(combined, self.REPORT_TOKENS) else compatibility_action
+        confidence = 0.62
+        reasons = ["Resolved compatibility-testing request."]
+        if product_type:
+            reasons.append(f"Detected product type '{product_type}'.")
+            confidence += 0.12
+        if target_url:
+            reasons.append("Extracted target URL or entrypoint.")
+            confidence += 0.08
+        if compatibility_action == "execute_approved_plan":
+            confidence += 0.08
+        parameters = {
+            "objective": message,
+            "compatibility_action": compatibility_action,
+            "product_type": product_type or "unknown",
+            "target_url": target_url,
+            "entrypoint": self._first_text(context.get("entrypoint"), target_url),
+            "priority_flows": context.get("priority_flows") if isinstance(context.get("priority_flows"), list) else [],
+            "plan": context.get("plan") if isinstance(context.get("plan"), dict) else None,
+            "confirm_risks": bool(context.get("confirm_risks")),
+            "product_access_manifest": context.get("product_access_manifest") if isinstance(context.get("product_access_manifest"), dict) else None,
+            "access_manifest": context.get("access_manifest") if isinstance(context.get("access_manifest"), dict) else None,
+            "product_name": self._first_text(context.get("product_name")),
+            "product_version": self._first_text(context.get("product_version")),
+            "artifact": self._first_text(context.get("artifact")),
+            "auth_strategy": self._first_text(context.get("auth_strategy")),
+            "test_scope": context.get("test_scope") if isinstance(context.get("test_scope"), list) else [],
+            "forbidden_actions": context.get("forbidden_actions") if isinstance(context.get("forbidden_actions"), list) else [],
+        }
+        if "selected_case_ids" in context:
+            parameters["selected_case_ids"] = (
+                context.get("selected_case_ids") if isinstance(context.get("selected_case_ids"), list) else []
+            )
+        if "selected_environment_ids" in context:
+            parameters["selected_environment_ids"] = (
+                context.get("selected_environment_ids") if isinstance(context.get("selected_environment_ids"), list) else []
+            )
+        return TestModeIntentState(
+            mode_key=mode_key,
+            intent_key=intent_key,
+            confidence=min(confidence, 0.95),
+            reasons=reasons,
+            parameters=parameters,
         )
 
     def _suggest_agent(

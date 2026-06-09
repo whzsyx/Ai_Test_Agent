@@ -43,6 +43,7 @@ from src.core.config import Settings
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.modes.ui_automation_mode.runtime import UIAutomationModeRuntime
 from src.modes.api_testing_mode.runtime import ApiTestingModeRuntime
+from src.modes.compatibility_testing_mode.runtime import CompatibilityTestingModeRuntime
 from src.modes.security_testing_mode.runtime import SecurityTestingModeRuntime
 from src.runtime.store import SessionStore
 from src.schemas.agent import ToolDescriptor
@@ -92,6 +93,7 @@ class ToolRuntimeService:
         api_docs_service: ApiDocsService | None = None,
         coordinator_runtime_service=None,
         mcp_connection_manager: McpConnectionManager | None = None,
+        compatibility_runner_service=None,
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
         self._settings = settings
@@ -106,6 +108,7 @@ class ToolRuntimeService:
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._coordinator_runtime_service = coordinator_runtime_service
         self._mcp_connection_manager = mcp_connection_manager
+        self._compatibility_runner_service = compatibility_runner_service
         self._model_registry = None
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
         self._report_template_service = ReportTemplateService()
@@ -134,6 +137,14 @@ class ToolRuntimeService:
             settings=settings,
             coordinator_runtime_service=coordinator_runtime_service,
             session_store=session_store,
+        )
+        self._compatibility_testing_mode_runtime = CompatibilityTestingModeRuntime(
+            settings=settings,
+            coordinator_runtime_service=coordinator_runtime_service,
+            session_store=session_store,
+            memory_runtime_service=memory_runtime_service,
+            runner_service=compatibility_runner_service,
+            mode_call_bridge_enabled=True,
         )
         self._smoke_testing_mode_runtime = None
         if settings:
@@ -201,12 +212,14 @@ class ToolRuntimeService:
             "performance-test-runner": self._run_performance_test_runner,
             "perf-plan-compiler": self._run_perf_plan_compiler,
             "perf-result-analyzer": self._run_perf_result_analyzer,
+            "compatibility-test-runner": self._run_compatibility_test_runner,
             "smoke-suite-runner": self._run_smoke_suite_runner,
         }
 
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
         self._coordinator_runtime_service = coordinator_runtime_service
         self._api_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
+        self._compatibility_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
         self._security_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
 
     def set_model_registry(self, model_registry) -> None:
@@ -215,6 +228,7 @@ class ToolRuntimeService:
     def set_memory_runtime_service(self, memory_runtime_service: MemoryRuntimeService) -> None:
         self._memory_runtime_service = memory_runtime_service
         self._security_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
+        self._compatibility_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         self._ui_automation_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         if self._smoke_testing_mode_runtime is not None:
             self._smoke_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
@@ -227,6 +241,7 @@ class ToolRuntimeService:
     def set_session_store(self, session_store: SessionStore) -> None:
         self._session_store = session_store
         self._api_testing_mode_runtime.set_session_store(session_store)
+        self._compatibility_testing_mode_runtime.set_session_store(session_store)
         self._security_testing_mode_runtime.set_session_store(session_store)
 
     def set_mcp_connection_manager(self, mcp_connection_manager: McpConnectionManager) -> None:
@@ -2089,6 +2104,13 @@ class ToolRuntimeService:
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
         return await self._api_testing_mode_runtime.handle(arguments, context)
+
+    async def _run_compatibility_test_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._compatibility_testing_mode_runtime.handle(arguments, context)
 
     async def _run_security_scan_runner(
         self,

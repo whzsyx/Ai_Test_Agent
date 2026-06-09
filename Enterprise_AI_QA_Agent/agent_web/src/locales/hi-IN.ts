@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "यूआई ऑटोमेशन मोड",
   "mode.api_testing": "एपीआई परीक्षण मोड",
   "mode.security_testing": "सुरक्षा परीक्षण मोड",
+  "mode.compatibility_testing": "संगतता परीक्षण मोड",
   "mode.performance_testing": "प्रदर्शन परीक्षण मोड",
   "mode.smoke_testing": "स्मोक टेस्टिंग मोड",
   "mode.select": "वर्तमान सत्र के लिए निष्पादन मोड चुनें",

@@ -349,6 +349,37 @@ class AgentRegistry:
                     tags=["testing", "api"],
                 )
             ),
+            "compatibility-testing-agent": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="compatibility-testing-agent",
+                    name="Compatibility Testing Agent",
+                    role="coordinator",
+                    summary="编排多产品、多环境、多平台兼容性测试计划与执行。",
+                    description=(
+                        "兼容性测试模式主控智能体。负责产品接入信息整理、可测性探测、"
+                        "环境矩阵规划、用例生成、风险审批、Runner/Provider 调度、"
+                        "调用已有测试模式并汇总图片、日志、视频和 trace 证据。"
+                    ),
+                    supported_tools=[
+                        "compatibility-test-runner",
+                        "smoke-suite-runner",
+                        "ui-automation-runner",
+                        "api-test-runner",
+                        "performance-test-runner",
+                        "subagent-dispatch",
+                        "knowledge-rag",
+                        "api-docs-library",
+                        "report-writer",
+                        "file-artifact-manager",
+                        "observation-search",
+                        "session-history",
+                    ],
+                    supported_skills=["requirements-analysis", "case-design", "report-synthesis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4", "deepseek-reasoner"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "compatibility", "orchestration", "runner"],
+                )
+            ),
             "api-executor-worker": AgentModule(
                 descriptor=AgentDescriptor(
                     key="api-executor-worker",

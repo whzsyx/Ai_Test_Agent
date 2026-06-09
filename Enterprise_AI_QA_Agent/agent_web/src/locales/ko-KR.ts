@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "UI 자동화 모드",
   "mode.api_testing": "API 인터페이스 테스트 모드",
   "mode.security_testing": "보안 테스트 모드",
+  "mode.compatibility_testing": "호환성 테스트 모드",
   "mode.performance_testing": "성능 테스트 모드",
   "mode.smoke_testing": "스모크 테스트 모드",
   "mode.select": "현재 세션의 실행 모드 선택",

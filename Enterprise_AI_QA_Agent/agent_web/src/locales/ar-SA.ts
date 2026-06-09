@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "وضع أتمتة واجهة المستخدم",
   "mode.api_testing": "وضع اختبار واجهة برمجة التطبيقات",
   "mode.security_testing": "وضع اختبار الأمان",
+  "mode.compatibility_testing": "وضع اختبار التوافق",
   "mode.performance_testing": "وضع اختبار الأداء",
   "mode.smoke_testing": "وضع اختبار التدخين",
   "mode.select": "اختر وضع التنفيذ للجلسة الحالية",

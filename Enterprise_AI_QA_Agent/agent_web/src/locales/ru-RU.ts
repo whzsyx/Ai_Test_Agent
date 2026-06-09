@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "Режим автоматизации UI",
   "mode.api_testing": "Режим тестирования API",
   "mode.security_testing": "Режим тестирования безопасности",
+  "mode.compatibility_testing": "Режим тестирования совместимости",
   "mode.performance_testing": "Режим тестирования производительности",
   "mode.smoke_testing": "Режим дымового тестирования",
   "mode.select": "Выберите режим выполнения для текущего сеанса",

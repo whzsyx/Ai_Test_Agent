@@ -1,0 +1,369 @@
+from __future__ import annotations
+
+from urllib.parse import quote
+from types import SimpleNamespace
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
+
+from src.application.compatibility.runner_service import CompatibilityRunnerNotFound
+from src.application.runtime.tool_runtime_service import ToolExecutionContext
+from src.modes.compatibility_testing_mode.runtime import CompatibilityTestingModeRuntime
+from src.schemas.tool_runtime import ModelToolCall
+from src.schemas.compatibility_runner import (
+    CompatibilityArtifactRecord,
+    CompatibilityArtifactUploadRequest,
+    CompatibilityExecutionReport,
+    CompatibilityPlanActionRequest,
+    CompatibilityRunnerCleanupRequest,
+    CompatibilityRunnerCleanupResponse,
+    CompatibilityRunnerHeartbeatRequest,
+    CompatibilityRunnerPollResponse,
+    CompatibilityRunnerRecord,
+    CompatibilityRunnerRegistrationRequest,
+    CompatibilityRunnerTaskReportRequest,
+    CompatibilityRunnerTaskSummary,
+    CompatibilityTaskRequeueRequest,
+    CompatibilityTaskRequeueResponse,
+    CompatibilityQueuedTask,
+)
+
+
+router = APIRouter(prefix="/compatibility", tags=["compatibility"])
+
+
+def _content_disposition_inline(filename: str) -> str:
+    safe_filename = "".join(
+        ch if 32 <= ord(ch) < 127 and ch not in {'"', "\\", ";"} else "_"
+        for ch in str(filename or "artifact")
+    ).strip(" ._")
+    safe_filename = safe_filename or "artifact"
+    encoded = quote(str(filename or safe_filename), safe="")
+    return f'inline; filename="{safe_filename}"; filename*=UTF-8\'\'{encoded}'
+
+
+def _runtime_for_request(request: Request) -> CompatibilityTestingModeRuntime:
+    return CompatibilityTestingModeRuntime(
+        settings=getattr(request.app.state, "settings", None),
+        runner_service=request.app.state.compatibility_runner_service,
+        mode_call_bridge_enabled=(
+            getattr(request.app.state, "tool_runtime_service", None) is not None
+            and getattr(request.app.state, "tool_registry", None) is not None
+        ),
+    )
+
+
+async def _handle_plan_action(
+    request: Request,
+    payload: CompatibilityPlanActionRequest,
+    *,
+    default_action: str,
+) -> dict[str, Any]:
+    arguments = payload.model_dump(
+        mode="python",
+        exclude={"context_bundle"},
+        exclude_none=True,
+    )
+    arguments["action"] = str(arguments.get("action") or default_action)
+    context = SimpleNamespace(
+        session_id="",
+        user_message=str(arguments.get("objective") or ""),
+        context_bundle=payload.context_bundle,
+    )
+    result = await _runtime_for_request(request).handle(arguments, context)
+    if result.get("ok") is False:
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("summary") or result.get("error") or "Compatibility plan request failed.",
+        )
+    return result
+
+
+@router.post("/plans/draft", response_model=dict[str, Any])
+async def draft_plan(payload: CompatibilityPlanActionRequest, request: Request):
+    return await _handle_plan_action(request, payload, default_action="draft_plan")
+
+
+@router.post("/plans/dispatch", response_model=dict[str, Any])
+async def dispatch_plan(payload: CompatibilityPlanActionRequest, request: Request):
+    return await _handle_plan_action(request, payload, default_action="execute_approved_plan")
+
+
+@router.get("/runners", response_model=list[CompatibilityRunnerRecord])
+async def list_runners(request: Request):
+    return await request.app.state.compatibility_runner_service.list_runners()
+
+
+@router.post("/runners/register", response_model=CompatibilityRunnerRecord)
+async def register_runner(payload: CompatibilityRunnerRegistrationRequest, request: Request):
+    return await request.app.state.compatibility_runner_service.register_runner(payload)
+
+
+@router.post("/runners/cleanup", response_model=CompatibilityRunnerCleanupResponse)
+async def cleanup_runners(payload: CompatibilityRunnerCleanupRequest, request: Request):
+    return await request.app.state.compatibility_runner_service.cleanup_offline_runners(payload)
+
+
+@router.post("/runners/{runner_id}/heartbeat", response_model=CompatibilityRunnerRecord)
+async def heartbeat_runner(
+    runner_id: str,
+    payload: CompatibilityRunnerHeartbeatRequest,
+    request: Request,
+):
+    try:
+        return await request.app.state.compatibility_runner_service.heartbeat(runner_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Runner not found") from exc
+
+
+@router.post("/runners/{runner_id}/tasks/poll", response_model=CompatibilityRunnerPollResponse)
+async def poll_runner_tasks(
+    runner_id: str,
+    request: Request,
+    limit: int = Query(1, ge=1, le=20),
+):
+    try:
+        return await request.app.state.compatibility_runner_service.poll_tasks(runner_id, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Runner not found") from exc
+
+
+@router.post("/runners/{runner_id}/tasks/{task_id}/report", response_model=CompatibilityQueuedTask)
+async def report_runner_task(
+    runner_id: str,
+    task_id: str,
+    payload: CompatibilityRunnerTaskReportRequest,
+    request: Request,
+):
+    try:
+        return await request.app.state.compatibility_runner_service.report_task(runner_id, task_id, payload)
+    except CompatibilityRunnerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Runner not found") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/runners/{runner_id}/tasks/{task_id}/artifacts/upload", response_model=CompatibilityArtifactRecord)
+async def upload_runner_task_artifact(
+    runner_id: str,
+    task_id: str,
+    payload: CompatibilityArtifactUploadRequest,
+    request: Request,
+):
+    try:
+        return await request.app.state.compatibility_runner_service.upload_task_artifact(
+            runner_id,
+            task_id,
+            payload,
+        )
+    except CompatibilityRunnerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Runner not found") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/runners/{runner_id}/tasks/{task_id}/mode-calls/execute", response_model=dict[str, Any])
+async def execute_runner_task_mode_calls(
+    runner_id: str,
+    task_id: str,
+    request: Request,
+):
+    tool_runtime_service = getattr(request.app.state, "tool_runtime_service", None)
+    tool_registry = getattr(request.app.state, "tool_registry", None)
+    if tool_runtime_service is None or tool_registry is None:
+        raise HTTPException(status_code=503, detail="Mode invocation runtime is not configured.")
+
+    try:
+        task = await request.app.state.compatibility_runner_service.begin_mode_call_execution(runner_id, task_id)
+    except CompatibilityRunnerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Runner not found") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Task not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    mode_calls = [item for item in task.mode_calls if isinstance(item, dict)]
+    results: list[dict[str, Any]] = []
+    try:
+        for index, mode_call in enumerate(mode_calls):
+            tool_key = str(mode_call.get("tool_key") or "").strip()
+            arguments = mode_call.get("arguments") if isinstance(mode_call.get("arguments"), dict) else {}
+            if not tool_key:
+                results.append(
+                    {
+                        "call_index": index,
+                        "tool_key": "",
+                        "status": "failed",
+                        "summary": "Compatibility mode call is missing a tool_key.",
+                        "input": arguments,
+                        "output": {"error": "missing_tool_key"},
+                    }
+                )
+                continue
+            try:
+                tool = tool_registry.get(tool_key)
+            except KeyError:
+                results.append(
+                    {
+                        "call_index": index,
+                        "tool_key": tool_key,
+                        "status": "failed",
+                        "summary": f"No registered tool descriptor found for compatibility mode call '{tool_key}'.",
+                        "input": arguments,
+                        "output": {"error": "unknown_tool"},
+                    }
+                )
+                continue
+            context = ToolExecutionContext(
+                session_id=str(task.metadata.get("session_id") or ""),
+                turn_id=str(task.metadata.get("turn_id") or task.dispatch_id),
+                trace_id=str(task.metadata.get("trace_id") or task.task_id),
+                user_message=str(task.metadata.get("objective") or f"Execute compatibility task {task.task_id}."),
+                normalized_input=str(task.metadata.get("objective") or ""),
+                context_bundle={
+                    "compatibility_task": task.model_dump(mode="python"),
+                    "compatibility_runner_id": runner_id,
+                    "compatibility_mode_call_index": index,
+                },
+                selected_agent_key="compatibility-testing-agent",
+                tool_key=tool_key,
+            )
+            record = await tool_runtime_service.execute(
+                tool,
+                ModelToolCall(
+                    id=f"{task.task_id}-mode-call-{index + 1}",
+                    name=tool_key,
+                    arguments=arguments,
+                ),
+                context,
+            )
+            result = record.model_dump(mode="json")
+            result["call_index"] = index
+            results.append(result)
+    except Exception as exc:
+        try:
+            await request.app.state.compatibility_runner_service.finish_mode_call_execution(
+                runner_id,
+                task_id,
+                status="failed",
+                result_count=len(results),
+            )
+        except (CompatibilityRunnerNotFound, KeyError, PermissionError):
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"Mode call execution failed unexpectedly: {exc}",
+        ) from exc
+
+    completed = sum(1 for item in results if item.get("status") == "completed")
+    failed = sum(1 for item in results if item.get("status") in {"failed", "denied"})
+    partial = sum(1 for item in results if item.get("status") in {"partial", "waiting_approval"})
+    status = "failed" if results and failed == len(results) else ("partial" if failed or partial else "completed")
+    try:
+        await request.app.state.compatibility_runner_service.finish_mode_call_execution(
+            runner_id,
+            task_id,
+            status=status,
+            result_count=len(results),
+        )
+    except (CompatibilityRunnerNotFound, KeyError, PermissionError):
+        pass
+    return {
+        "status": status,
+        "ok": status == "completed",
+        "task_id": task.task_id,
+        "runner_id": runner_id,
+        "mode_call_count": len(mode_calls),
+        "summary": (
+            f"Executed {len(mode_calls)} compatibility mode call(s): "
+            f"{completed} completed, {partial} partial, {failed} failed."
+        ),
+        "mode_call_results": results,
+    }
+
+
+@router.get("/tasks", response_model=list[CompatibilityQueuedTask])
+async def list_runner_tasks(
+    request: Request,
+    dispatch_id: str | None = None,
+    runner_id: str | None = None,
+):
+    return await request.app.state.compatibility_runner_service.list_tasks(
+        dispatch_id=dispatch_id,
+        runner_id=runner_id,
+    )
+
+
+@router.post("/tasks/requeue", response_model=CompatibilityTaskRequeueResponse)
+async def requeue_tasks(payload: CompatibilityTaskRequeueRequest, request: Request):
+    return await request.app.state.compatibility_runner_service.requeue_tasks(payload)
+
+
+@router.get("/artifacts", response_model=list[CompatibilityArtifactRecord])
+async def list_artifacts(
+    request: Request,
+    task_id: str | None = None,
+    dispatch_id: str | None = None,
+    runner_id: str | None = None,
+    artifact_type: str | None = None,
+):
+    return await request.app.state.compatibility_runner_service.list_artifacts(
+        task_id=task_id,
+        dispatch_id=dispatch_id,
+        runner_id=runner_id,
+        artifact_type=artifact_type,
+    )
+
+
+@router.get("/artifacts/{artifact_id}/content")
+async def get_artifact_content(artifact_id: str, request: Request):
+    try:
+        content = await request.app.state.compatibility_runner_service.read_artifact_content(artifact_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if content.get("path"):
+        return FileResponse(
+            path=content["path"],
+            media_type=content.get("content_type") or "application/octet-stream",
+            filename=str(content.get("filename") or artifact_id),
+        )
+    return Response(
+        content=content.get("content") or b"",
+        media_type=content.get("content_type") or "application/octet-stream",
+        headers={"Content-Disposition": _content_disposition_inline(str(content.get("filename") or artifact_id))},
+    )
+
+
+@router.get("/summary", response_model=CompatibilityRunnerTaskSummary)
+async def get_summary(
+    request: Request,
+    dispatch_id: str | None = None,
+    runner_id: str | None = None,
+):
+    return await request.app.state.compatibility_runner_service.summarize_tasks(
+        dispatch_id=dispatch_id,
+        runner_id=runner_id,
+    )
+
+
+@router.get("/report", response_model=CompatibilityExecutionReport)
+async def get_report(
+    request: Request,
+    dispatch_id: str | None = None,
+    runner_id: str | None = None,
+):
+    return await request.app.state.compatibility_runner_service.build_report(
+        dispatch_id=dispatch_id,
+        runner_id=runner_id,
+    )

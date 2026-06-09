@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "UI-Automatisierungsmodus",
   "mode.api_testing": "API-Testmodus",
   "mode.security_testing": "Sicherheitstestmodus",
+  "mode.compatibility_testing": "Kompatibilitätstestmodus",
   "mode.performance_testing": "Leistungstestmodus",
   "mode.smoke_testing": "Rauchtests Modus",
   "mode.select": "Ausführungsmodus für die aktuelle Sitzung auswählen",

@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "Mode Otomatisasi UI",
   "mode.api_testing": "Mode Pengujian API",
   "mode.security_testing": "Mode Pengujian Keamanan",
+  "mode.compatibility_testing": "Mode Pengujian Kompatibilitas",
   "mode.performance_testing": "Mode Pengujian Kinerja",
   "mode.smoke_testing": "Mode Pengujian Smoke",
   "mode.select": "Pilih mode eksekusi untuk sesi saat ini",

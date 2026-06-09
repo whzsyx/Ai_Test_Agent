@@ -80,6 +80,24 @@ PERFORMANCE_RUNNER_OUTPUT_SCHEMA = {
     "performance_testing_state": "object",
 }
 
+COMPATIBILITY_RUNNER_OUTPUT_SCHEMA = {
+    "status": "string",
+    "ok": "boolean",
+    "phase": "string",
+    "summary": "string",
+    "action": "string",
+    "compatibility_run": "object",
+    "plan": "object",
+    "dispatch_plan": "object",
+    "runner_queue": "object",
+    "runner_summary": "object",
+    "recoverable_tasks": "array",
+    "risks": "array",
+    "report_markdown": "string",
+    "next_steps": "array",
+    "missing_components": "array",
+}
+
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -1442,6 +1460,98 @@ class ToolRegistry:
                     tags=["performance", "analysis", "reporting"],
                 ),
                 handler_key="perf-result-analyzer",
+            ),
+            "compatibility-test-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="compatibility-test-runner",
+                    name="Compatibility Test Runner",
+                    description=(
+                        "兼容性测试模式主入口。负责产品接入、环境矩阵生成、用例生成、"
+                        "风险审批计划、Runner/Provider 调度规划和兼容性报告结构化输出。"
+                    ),
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["draft_plan", "get_capabilities", "execute_approved_plan"],
+                                "description": "兼容性模式动作：生成计划、查看能力或执行已确认计划。",
+                            },
+                            "objective": {"type": "string", "description": "兼容性测试目标。"},
+                            "product": {"type": "object", "description": "结构化产品接入信息。"},
+                            "product_name": {"type": "string", "description": "产品名称。"},
+                            "product_type": {
+                                "type": "string",
+                                "enum": [
+                                    "web",
+                                    "h5",
+                                    "android_app",
+                                    "ios_app",
+                                    "wechat_mini_program",
+                                    "alipay_mini_program",
+                                    "linux_app",
+                                    "unknown",
+                                ],
+                                "description": "被测产品类型。",
+                            },
+                            "target_url": {"type": "string", "description": "Web/H5 入口 URL。"},
+                            "entrypoint": {"type": "string", "description": "产品入口 URL/AppID/启动命令。"},
+                            "product_access_manifest": {
+                                "type": "object",
+                                "description": "完整产品接入清单，包含 entrypoint/auth/network/test_scope 等结构化字段。",
+                            },
+                            "access_manifest": {
+                                "type": "object",
+                                "description": "product_access_manifest 的别名。",
+                            },
+                            "product_version": {"type": "string", "description": "产品版本号或构建版本。"},
+                            "artifact": {"type": "string", "description": "APK/IPA/安装包等构建产物 URI。"},
+                            "artifact_type": {
+                                "type": "string",
+                                "description": "artifact 的类型，如 entrypoint/build_artifact/apk/ipa/package。",
+                            },
+                            "auth_strategy": {"type": "string", "description": "认证策略，如 test_account/manual_login/no_auth。"},
+                            "username_ref": {"type": "string", "description": "用户名 secret 引用。"},
+                            "password_ref": {"type": "string", "description": "密码 secret 引用。"},
+                            "token_ref": {"type": "string", "description": "Token secret 引用。"},
+                            "manual_steps": {"type": "array", "items": {"type": "string"}, "description": "验证码、2FA、扫码等人工接管节点。"},
+                            "package_name": {"type": "string", "description": "Android App 包名。"},
+                            "activity": {"type": "string", "description": "Android App 启动 Activity。"},
+                            "bundle_id": {"type": "string", "description": "iOS App Bundle ID。"},
+                            "mini_program_path": {"type": "string", "description": "小程序入口路径。"},
+                            "command": {"type": "string", "description": "Linux/Desktop App 启动命令。"},
+                            "base_api": {"type": "string", "description": "被测产品后端基础 API 地址。"},
+                            "proxy": {"type": "string", "description": "执行测试所需代理地址。"},
+                            "requires_vpn": {"type": "boolean", "description": "测试网络是否需要 VPN 或专线。"},
+                            "priority_flows": {"type": "array", "items": {"type": "string"}, "description": "核心业务流程。"},
+                            "test_scope": {"type": "array", "items": {"type": "string"}, "description": "测试范围。"},
+                            "exclude": {"type": "array", "items": {"type": "string"}, "description": "排除的模块、页面或流程。"},
+                            "forbidden_actions": {"type": "array", "items": {"type": "string"}, "description": "禁测或需审批动作。"},
+                            "data_policy": {"type": "string", "description": "测试数据策略，如 read_only/sandbox_write。"},
+                            "environments": {"type": "array", "items": {"type": "object"}, "description": "可选自定义环境矩阵。"},
+                            "plan_id": {"type": "string", "description": "执行已确认计划时的计划 ID。"},
+                            "plan": {"type": "object", "description": "执行已确认计划时的内联 CompatibilityPlan 对象。"},
+                            "approved_plan": {"type": "object", "description": "plan 的别名，用于传入已确认的兼容性计划。"},
+                            "confirm_risks": {"type": "boolean", "description": "计划包含风险/人工接管项时，是否已由用户确认。"},
+                            "selected_case_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "用户勾选执行的兼容性用例 ID；未提供时默认全选，显式空数组会被视为未选择用例。",
+                            },
+                            "selected_environment_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "用户勾选执行的环境 ID；未提供时默认使用计划内环境，显式空数组会被视为未选择环境。",
+                            },
+                        },
+                        "required": ["action"],
+                    },
+                    output_schema=COMPATIBILITY_RUNNER_OUTPUT_SCHEMA,
+                    tags=["compatibility", "testing", "mode", "matrix", "runner", "approval"],
+                ),
+                handler_key="compatibility-test-runner",
             ),
             "smoke-suite-runner": ToolModule(
                 descriptor=ToolDescriptor(

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from src.modes.api_testing_mode import MODE_MANIFEST as API_TESTING_MODE_MANIFEST
 from src.modes.code_review_mode import MODE_MANIFEST as CODE_REVIEW_MODE_MANIFEST
+from src.modes.compatibility_testing_mode import MODE_MANIFEST as COMPATIBILITY_TESTING_MODE_MANIFEST
 from src.modes.default_mode import MODE_MANIFEST as DEFAULT_MODE_MANIFEST
 from src.modes.performance_testing_mode import MODE_MANIFEST as PERFORMANCE_TESTING_MODE_MANIFEST
 from src.modes.security_testing_mode import MODE_MANIFEST as SECURITY_TESTING_MODE_MANIFEST
@@ -24,6 +25,7 @@ class ModeRegistry:
             CODE_REVIEW_MODE_MANIFEST,
             UI_AUTOMATION_MODE_MANIFEST,
             API_TESTING_MODE_MANIFEST,
+            COMPATIBILITY_TESTING_MODE_MANIFEST,
             SECURITY_TESTING_MODE_MANIFEST,
             PERFORMANCE_TESTING_MODE_MANIFEST,
             SMOKE_TESTING_MODE_MANIFEST,

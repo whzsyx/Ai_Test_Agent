@@ -70,6 +70,7 @@ export default {
   "mode.ui_automation": "UI自动化模式",
   "mode.api_testing": "API接口测试模式",
   "mode.security_testing": "安全测试模式",
+  "mode.compatibility_testing": "兼容性测试模式",
   "mode.performance_testing": "性能测试模式",
   "mode.smoke_testing": "冒烟测试模式",
   "mode.select": "选择当前会话的执行模式",
