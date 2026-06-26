@@ -21,6 +21,7 @@ PLANNER_TOOL_KEYS = [
 # Worker: execution
 RUNNER_TOOL_KEYS = [
     "performance-test-runner",
+    "perf-container-manager",
     "cli-executor",
 ]
 

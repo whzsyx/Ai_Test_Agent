@@ -15,10 +15,10 @@ from .engine_adapter import EngineCommand, RawMetrics, RunOptions, ScriptArtifac
 
 
 class JMeterEngineAdapter:
-    """Adapter using justb4/jmeter (JMeter 5.6.3) in non-GUI mode."""
+    """Adapter using a Dockerized JMeter runtime in non-GUI mode."""
 
     engine_key: str = "jmeter"
-    default_image: str = "justb4/jmeter:5.6.3"
+    default_image: str = "alpine/jmeter:5.6.3"
 
     def __init__(
         self,

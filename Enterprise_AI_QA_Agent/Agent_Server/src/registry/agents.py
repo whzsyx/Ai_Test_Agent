@@ -719,6 +719,23 @@ class AgentRegistry:
                     tags=["testing", "performance", "execution"],
                 )
             ),
+            "perf-container-operator": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="perf-container-operator",
+                    name="Perf Container Operator",
+                    role="worker",
+                    summary="启动、检查和销毁 k6/JMeter 压测引擎容器。",
+                    description=(
+                        "在性能测试编排完成后负责压测引擎容器生命周期："
+                        "启动 k6/JMeter Docker 容器、确认状态、测试完成后销毁或清理容器。"
+                    ),
+                    supported_tools=["perf-container-manager", "cli-executor"],
+                    supported_skills=[],
+                    supported_models=["claude-sonnet-4", "gpt-5.4"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "container", "docker"],
+                )
+            ),
             "perf-analyst": AgentModule(
                 descriptor=AgentDescriptor(
                     key="perf-analyst",

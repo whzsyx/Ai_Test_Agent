@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -40,12 +41,13 @@ class PerfRunnerService:
         self._workdir = settings.performance_runner_docker_workdir
         self._ephemeral = settings.performance_runner_ephemeral
 
-    def detect_backend(self) -> str:
+    def detect_backend(self, engine_key: str = "k6") -> str:
         configured = self._settings.performance_runner_backend
         if configured != "auto":
             return configured
 
-        if shutil.which("k6"):
+        executable = "jmeter" if engine_key == "jmeter" else "k6"
+        if shutil.which(executable):
             return "local"
         if shutil.which("docker"):
             return "docker"
@@ -64,7 +66,7 @@ class PerfRunnerService:
         run_opts: RunOptions,
         engine_adapter: PerfEngineAdapter,
     ) -> PerfRun:
-        backend = self.detect_backend()
+        backend = self.detect_backend(plan.engine)
         run_id = f"perf-run-{uuid.uuid4().hex[:8]}"
         container_name = f"{self._container_prefix}-{run_id}"
 
@@ -113,7 +115,7 @@ class PerfRunnerService:
         engine_adapter: PerfEngineAdapter,
     ) -> SmokeResult:
         smoke_opts = engine_adapter.build_smoke_options(plan)
-        backend = self.detect_backend()
+        backend = self.detect_backend(plan.engine)
         container_name = f"{self._container_prefix}-smoke-{uuid.uuid4().hex[:6]}"
 
         try:
@@ -146,11 +148,7 @@ class PerfRunnerService:
         if result.summary_json:
             try:
                 data = json.loads(result.summary_json)
-                metrics = data.get("metrics", {})
-                values = self._metric_values(metrics.get("http_reqs", {}))
-                count = int(values.get("count", 0))
-                failed_values = self._metric_values(metrics.get("http_req_failed", {}))
-                failed_rate = float(failed_values.get("rate", failed_values.get("value", 1)))
+                count, failed_rate = self._extract_smoke_counts(data)
 
                 if count == 0:
                     diagnostics = self._format_execution_diagnostics(result)
@@ -198,6 +196,24 @@ class PerfRunnerService:
         if isinstance(values, dict):
             return values
         return metric
+
+    def _extract_smoke_counts(self, data: dict[str, Any]) -> tuple[int, float]:
+        """Return completed request count and failed rate for k6 or JMeter summaries."""
+        metrics = data.get("metrics", {})
+        if isinstance(metrics, dict) and metrics:
+            values = self._metric_values(metrics.get("http_reqs", {}))
+            count = int(values.get("count", 0))
+            failed_values = self._metric_values(metrics.get("http_req_failed", {}))
+            failed_rate = float(failed_values.get("rate", failed_values.get("value", 1)))
+            return count, failed_rate
+
+        total = data.get("Total", {})
+        if isinstance(total, dict):
+            count = int(total.get("sampleCount", 0))
+            error_pct = float(total.get("errorPct", 100.0))
+            return count, error_pct / 100.0
+
+        return 0, 1.0
 
     async def _run_in_docker(
         self,
@@ -283,7 +299,7 @@ class PerfRunnerService:
                     errors="replace",
                     timeout=timeout_seconds,
                     cwd=tmpdir,
-                    env=None,
+                    env={**os.environ, **env},
                 )
                 summary_json = self._read_summary_artifact(Path(tmpdir), summary_path)
 

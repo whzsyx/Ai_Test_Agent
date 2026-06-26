@@ -10,6 +10,7 @@ from src.modes.api_testing_mode.prompt_contract import (
     API_TESTING_PROMPT_CONTRACT,
 )
 from src.modes.performance_testing_mode.prompt_contract import (
+    PERF_CONTAINER_OPERATOR_CONTRACT,
     PERF_FAILURE_ANALYST_CONTRACT,
     PERFORMANCE_TESTING_SYSTEM_CONTRACT,
     PERF_PLANNER_CONTRACT,
@@ -283,6 +284,17 @@ class PromptAssemblyService:
                     cache_scope="dynamic",
                     priority=50,
                     content=PERF_ANALYST_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "perf-container-operator":
+            sections.append(
+                PromptSection(
+                    key="perf_container_operator_contract",
+                    title="Perf Container Operator Contract",
+                    source="prompt_assembly.perf_container_operator",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=PERF_CONTAINER_OPERATOR_CONTRACT,
                 )
             )
         elif selected_agent_key == "perf-failure-analyst":

@@ -15,6 +15,7 @@ MODE_MANIFEST = {
         "performance-testing-agent",
         "perf-planner",
         "perf-script-builder",
+        "perf-container-operator",
         "perf-runner",
         "perf-analyst",
         "perf-failure-analyst",
@@ -23,6 +24,7 @@ MODE_MANIFEST = {
     "default_skill_keys": [],
     "registered_tool_keys": [
         "performance-test-runner",
+        "perf-container-manager",
         "perf-plan-compiler",
         "perf-result-analyzer",
         "knowledge-rag",
@@ -38,5 +40,5 @@ MODE_MANIFEST = {
     ],
     "harness_key": "performance_testing_harness",
     "placeholder": False,
-    "tags": ["testing", "performance", "k6", "load"],
+    "tags": ["testing", "performance", "k6", "jmeter", "load"],
 }

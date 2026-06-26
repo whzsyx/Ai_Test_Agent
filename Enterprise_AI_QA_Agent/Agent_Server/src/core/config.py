@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     performance_default_engine: str = "k6"
     performance_default_workload_model: str = "open"
     k6_docker_image: str = "grafana/k6:latest"
-    jmeter_docker_image: str = "justb4/jmeter:5.6.3"
+    jmeter_docker_image: str = "alpine/jmeter:5.6.3"
     perf_engine_pull_policy: str = "missing"
     performance_runner_docker_cpus: str = ""
     performance_runner_docker_memory: str = ""

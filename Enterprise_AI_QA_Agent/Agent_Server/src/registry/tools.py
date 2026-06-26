@@ -1433,6 +1433,46 @@ class ToolRegistry:
                 ),
                 handler_key="perf-plan-compiler",
             ),
+            "perf-container-manager": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="perf-container-manager",
+                    name="Perf Container Manager",
+                    description=(
+                        "管理 k6/JMeter 压测引擎 Docker 容器生命周期。"
+                        "在编排完成后启动容器，测试完成后销毁容器。"
+                    ),
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "description": "容器动作: start, stop/destroy, status, cleanup。",
+                                "enum": ["start", "stop", "destroy", "status", "cleanup"],
+                            },
+                            "engine": {
+                                "type": "string",
+                                "description": "性能引擎: k6 或 jmeter。",
+                                "enum": ["k6", "jmeter"],
+                                "default": "k6",
+                            },
+                            "container_name": {"type": "string", "description": "容器名称，start 可选，stop/status 必填。"},
+                        },
+                        "required": ["action", "engine"],
+                    },
+                    output_schema={
+                        "ok": "boolean",
+                        "action": "string",
+                        "engine": "string",
+                        "container_name": "string",
+                        "status": "string",
+                        "summary": "string",
+                    },
+                    tags=["performance", "docker", "container", "lifecycle"],
+                ),
+                handler_key="perf-container-manager",
+            ),
             "perf-result-analyzer": ToolModule(
                 descriptor=ToolDescriptor(
                     key="perf-result-analyzer",

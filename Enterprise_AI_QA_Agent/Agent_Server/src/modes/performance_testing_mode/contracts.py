@@ -173,6 +173,7 @@ REQUEST_CONTEXT_KEY = "performance_testing_request"
 AGENT_COORDINATOR = "performance-testing-agent"
 AGENT_PLANNER = "perf-planner"
 AGENT_SCRIPT_BUILDER = "perf-script-builder"
+AGENT_CONTAINER_OPERATOR = "perf-container-operator"
 AGENT_RUNNER = "perf-runner"
 AGENT_ANALYST = "perf-analyst"
 AGENT_FAILURE_ANALYST = "perf-failure-analyst"
@@ -268,6 +269,7 @@ __all__ = [
     "AGENT_COORDINATOR",
     "AGENT_PLANNER",
     "AGENT_SCRIPT_BUILDER",
+    "AGENT_CONTAINER_OPERATOR",
     "AGENT_RUNNER",
     "AGENT_ANALYST",
     "AGENT_FAILURE_ANALYST",

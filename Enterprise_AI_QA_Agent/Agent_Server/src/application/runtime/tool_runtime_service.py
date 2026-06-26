@@ -210,6 +210,7 @@ class ToolRuntimeService:
             "traffic-analysis-runner": self._run_traffic_analysis_runner,
             "exploit-workbench-runner": self._run_exploit_workbench_runner,
             "performance-test-runner": self._run_performance_test_runner,
+            "perf-container-manager": self._run_perf_container_manager,
             "perf-plan-compiler": self._run_perf_plan_compiler,
             "perf-result-analyzer": self._run_perf_result_analyzer,
             "compatibility-test-runner": self._run_compatibility_test_runner,
@@ -221,6 +222,8 @@ class ToolRuntimeService:
         self._api_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
         self._compatibility_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
         self._security_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
+        if self._performance_testing_mode_runtime is not None:
+            self._performance_testing_mode_runtime.set_coordinator_runtime_service(coordinator_runtime_service)
 
     def set_model_registry(self, model_registry) -> None:
         self._model_registry = model_registry
@@ -232,6 +235,8 @@ class ToolRuntimeService:
         self._ui_automation_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         if self._smoke_testing_mode_runtime is not None:
             self._smoke_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
+        if self._performance_testing_mode_runtime is not None:
+            self._performance_testing_mode_runtime.set_memory_runtime_service(memory_runtime_service)
         if self._ui_exploration_service is not None:
             self._ui_exploration_service._memory_runtime_service = memory_runtime_service
 
@@ -243,6 +248,8 @@ class ToolRuntimeService:
         self._api_testing_mode_runtime.set_session_store(session_store)
         self._compatibility_testing_mode_runtime.set_session_store(session_store)
         self._security_testing_mode_runtime.set_session_store(session_store)
+        if self._performance_testing_mode_runtime is not None:
+            self._performance_testing_mode_runtime.set_session_store(session_store)
 
     def set_mcp_connection_manager(self, mcp_connection_manager: McpConnectionManager) -> None:
         self._mcp_connection_manager = mcp_connection_manager
@@ -2789,6 +2796,43 @@ class ToolRuntimeService:
             "data_files": script.data_files,
             "engine": script.engine,
         }
+
+    async def _run_perf_container_manager(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        if self._settings is None:
+            return {"status": "error", "ok": False, "summary": "系统配置未初始化"}
+
+        from src.application.performance.perf_container_manager import PerfContainerManager
+
+        action = str(arguments.get("action") or "status").lower().strip()
+        engine = str(arguments.get("engine") or "k6").lower().strip()
+        container_name = str(arguments.get("container_name") or "").strip()
+
+        manager = PerfContainerManager(self._settings)
+        try:
+            if action == "start":
+                result = await manager.start(engine, container_name)
+            elif action in {"stop", "destroy"}:
+                if not container_name:
+                    return {"status": "error", "ok": False, "summary": "stop/destroy 需要 container_name"}
+                result = await manager.stop(engine, container_name)
+            elif action == "status":
+                if not container_name:
+                    return {"status": "error", "ok": False, "summary": "status 需要 container_name"}
+                result = await manager.status(engine, container_name)
+            elif action == "cleanup":
+                result = await manager.cleanup(engine if engine in {"k6", "jmeter"} else "")
+            else:
+                return {"status": "error", "ok": False, "summary": f"不支持的容器动作: {action}"}
+        except Exception as e:
+            return {"status": "error", "ok": False, "summary": f"容器管理失败: {e}"}
+
+        payload = result.model_dump()
+        payload["status"] = "ok" if result.ok else "error"
+        return payload
 
     async def _run_perf_result_analyzer(
         self,
