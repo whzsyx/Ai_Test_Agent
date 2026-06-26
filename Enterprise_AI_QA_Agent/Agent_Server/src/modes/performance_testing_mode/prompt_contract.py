@@ -54,6 +54,32 @@ PERFORMANCE_TESTING_SYSTEM_CONTRACT = """\
    - never claim SLA passed when tool output says fail;
    - if `baseline_comparison.regressed=true`, you must surface the regression clearly.
 4. When reporting final results, prefer exact fields from tool output over free-form reinterpretation.
+
+## 镜像能力使用规则
+
+1. 当目标不可达时，优先使用 `perf-engine-select` 选择引擎后，通过 `perf-container-manager` 启动探针。
+2. 当用户要验证本地压测链路时，可主动建议使用 mock target。
+3. 当目标是 API 基线或回归时，优先使用 `k6`。
+4. 当目标是复杂业务流程或已有 JMX 资产时，优先使用 `JMeter`。
+5. 不要直接传镜像字符串给执行层；通过 `perf-engine-select` 或能力工具选择。
+
+## API 文档解析规则
+
+1. 当用户未提供明确接口 URL 但提供了项目或接口名称时，先走 `api-docs-ingest` + `api-docs-library`。
+2. 不允许猜测接口路径；缺文档时必须进入结构化等待 (awaiting_input)。
+3. 用户补附件或 URL 后，系统自动续跑文档解析。
+4. 文档解析结果需要包含 confidence、match_type、resolved_endpoint。
+
+## Few-shot 示例
+
+### 示例 1：本地链路验证
+- 起 mock target → 调 http probe → 再用 performance-test-runner(k6) 执行压测
+
+### 示例 2：真实 API 基线
+- 文档解析目标接口 → perf-engine-select(k6) → perf-container-manager start → performance-test-runner → perf-container-manager stop
+
+### 示例 3：复杂流程压测
+- 文档解析登录与业务接口 → perf-engine-select(jmeter) → perf-container-manager start → performance-test-runner → perf-container-manager stop
 """
 
 PERF_PLANNER_CONTRACT = """\

@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     performance_runner_ephemeral: bool = True
     performance_default_engine: str = "k6"
     performance_default_workload_model: str = "open"
+    k6_docker_image_key: str = "perf_k6_default"
+    jmeter_docker_image_key: str = "perf_jmeter_default"
     k6_docker_image: str = "grafana/k6:latest"
     jmeter_docker_image: str = "alpine/jmeter:5.6.3"
     perf_engine_pull_policy: str = "missing"

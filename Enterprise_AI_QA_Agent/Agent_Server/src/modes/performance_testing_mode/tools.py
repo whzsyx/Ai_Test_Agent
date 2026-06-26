@@ -4,6 +4,8 @@ from __future__ import annotations
 COORDINATOR_TOOL_KEYS = [
     "performance-test-runner",
     "knowledge-rag",
+    "api-docs-library",
+    "api-docs-ingest",
     "report-writer",
     "message-dispatch",
     "send-email",
@@ -14,14 +16,19 @@ COORDINATOR_TOOL_KEYS = [
 # Worker: plan compilation + script generation
 PLANNER_TOOL_KEYS = [
     "perf-plan-compiler",
+    "perf-engine-select",
     "knowledge-rag",
     "api-docs-library",
+    "api-docs-ingest",
 ]
 
 # Worker: execution
 RUNNER_TOOL_KEYS = [
     "performance-test-runner",
     "perf-container-manager",
+    "http-probe-runner",
+    "mock-target-runner",
+    "performance-engine-runner",
     "cli-executor",
 ]
 

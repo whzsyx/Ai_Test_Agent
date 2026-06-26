@@ -306,6 +306,9 @@ class PerformanceTestingState(BaseModel):
     report: PerfReport | None = None
     failure_analysis: dict[str, Any] = Field(default_factory=dict)
     intake_complete: bool = False
+    doc_resolution_status: dict[str, Any] = Field(default_factory=dict)
+    resolved_endpoint: dict[str, Any] = Field(default_factory=dict)
+    missing_doc_reason: str = ""
     errors: list[str] = Field(default_factory=list)
     phase_history: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())

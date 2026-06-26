@@ -1473,6 +1473,44 @@ class ToolRegistry:
                 ),
                 handler_key="perf-container-manager",
             ),
+            "api-docs-ingest": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="api-docs-ingest",
+                    name="API Docs Ingest",
+                    description=(
+                        "将附件或 URL 导入 API 文档库，支持 OpenAPI/Swagger 自动识别和转换。"
+                        "用于性能测试等模式在缺少接口文档时补充文档后自动续跑。"
+                    ),
+                    category="knowledge",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "description": "导入动作: import_attachment 或 import_url。",
+                                "enum": ["import_attachment", "import_url"],
+                            },
+                            "attachment_id": {"type": "string", "description": "附件 ID，import_attachment 时使用。"},
+                            "url": {"type": "string", "description": "OpenAPI/Swagger/Markdown 文档 URL，import_url 时使用。"},
+                            "filename": {"type": "string", "description": "文件名，import_attachment 时使用。"},
+                            "content_base64": {"type": "string", "description": "Base64 编码的文件内容，import_attachment 时使用。"},
+                            "project_name": {"type": "string", "description": "项目名称。"},
+                            "project_url": {"type": "string", "description": "项目 URL。"},
+                            "title": {"type": "string", "description": "文档标题。"},
+                        },
+                        "required": ["action"],
+                    },
+                    output_schema={
+                        "ok": "boolean",
+                        "action": "string",
+                        "summary": "string",
+                        "document": "object",
+                    },
+                    tags=["api", "docs", "import", "performance"],
+                ),
+                handler_key="api-docs-ingest",
+            ),
             "perf-result-analyzer": ToolModule(
                 descriptor=ToolDescriptor(
                     key="perf-result-analyzer",
@@ -1500,6 +1538,147 @@ class ToolRegistry:
                     tags=["performance", "analysis", "reporting"],
                 ),
                 handler_key="perf-result-analyzer",
+            ),
+            "perf-engine-select": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="perf-engine-select",
+                    name="Perf Engine Select",
+                    description=(
+                        "根据场景、目标类型和用户偏好选择 k6 或 jmeter 引擎。"
+                        "模型不直接选镜像，而是通过此工具选择能力链路。"
+                    ),
+                    category="execution",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "scenario": {
+                                "type": "string",
+                                "description": "测试场景: api_baseline, api_regression, complex_flow, ci_load 等。",
+                                "enum": ["api_baseline", "api_regression", "complex_flow", "ci_load", "smoke", "probe"],
+                            },
+                            "target_kind": {
+                                "type": "string",
+                                "description": "目标类型: http_api, complex_flow, jmx_reuse。",
+                                "default": "http_api",
+                            },
+                            "user_requested_engine": {
+                                "type": "string",
+                                "description": "用户指定的引擎偏好: k6, jmeter, 或留空由系统选择。",
+                            },
+                            "needs_complex_flow": {"type": "boolean", "default": False},
+                            "has_existing_jmx": {"type": "boolean", "default": False},
+                        },
+                        "required": ["scenario"],
+                    },
+                    output_schema={
+                        "ok": "boolean",
+                        "engine": "string",
+                        "reason": "string",
+                        "selected_image_key": "string",
+                        "selected_image": "string",
+                    },
+                    tags=["performance", "engine", "selection"],
+                ),
+                handler_key="perf-engine-select",
+            ),
+            "http-probe-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="http-probe-runner",
+                    name="HTTP Probe Runner",
+                    description=(
+                        "使用 helper 镜像对目标发起连通性探针，验证目标可达性、"
+                        "响应状态码和响应时间。适合压测前的前置检查。"
+                    ),
+                    category="execution",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "target_url": {"type": "string", "description": "探针目标 URL。"},
+                            "method": {"type": "string", "default": "GET"},
+                            "headers": {"type": "object"},
+                            "timeout_seconds": {"type": "integer", "default": 10},
+                        },
+                        "required": ["target_url"],
+                    },
+                    output_schema={
+                        "ok": "boolean",
+                        "status_code": "integer",
+                        "response_time_ms": "number",
+                        "selected_image_key": "string",
+                        "reason": "string",
+                        "next_recommendation": "string",
+                    },
+                    tags=["performance", "helper", "probe", "connectivity"],
+                ),
+                handler_key="http-probe-runner",
+            ),
+            "mock-target-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mock-target-runner",
+                    name="Mock Target Runner",
+                    description=(
+                        "启动和停止本地 mock HTTP 回显靶机，用于压测链路验证。"
+                        "启动后返回容器名和端口，停止时需提供容器名。"
+                    ),
+                    category="execution",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["start", "stop"],
+                            },
+                            "port": {"type": "integer", "default": 18080},
+                            "response_text": {"type": "string", "default": "ok"},
+                            "container_name": {"type": "string", "description": "stop 时必填。"},
+                        },
+                        "required": ["action"],
+                    },
+                    output_schema={
+                        "ok": "boolean",
+                        "action": "string",
+                        "container_name": "string",
+                        "port": "integer",
+                        "selected_image_key": "string",
+                        "reason": "string",
+                    },
+                    tags=["performance", "helper", "mock", "local"],
+                ),
+                handler_key="mock-target-runner",
+            ),
+            "performance-engine-runner": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="performance-engine-runner",
+                    name="Performance Engine Runner",
+                    description=(
+                        "统一的性能引擎执行入口。内部通过 image resolver 解析为"
+                        "k6 或 jmeter 镜像，验证镜像可用性后委托执行。"
+                    ),
+                    category="execution",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "engine": {"type": "string", "enum": ["k6", "jmeter"]},
+                            "scenario": {"type": "string", "default": "api_baseline"},
+                            "plan": {"type": "object"},
+                        },
+                        "required": ["engine"],
+                    },
+                    output_schema={
+                        "ok": "boolean",
+                        "engine": "string",
+                        "selected_image_key": "string",
+                        "selected_image": "string",
+                        "reason": "string",
+                        "fallback_used": "boolean",
+                    },
+                    tags=["performance", "engine", "runner"],
+                ),
+                handler_key="performance-engine-runner",
             ),
             "compatibility-test-runner": ToolModule(
                 descriptor=ToolDescriptor(

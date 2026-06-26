@@ -13,6 +13,8 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 
 PHASE_INTAKE = "intake"
+PHASE_DOC_RESOLUTION = "doc_resolution"
+PHASE_ENDPOINT_RESOLUTION = "endpoint_resolution"
 PHASE_PLAN_RESOLVED = "plan_resolved"
 PHASE_SCRIPT_BUILT = "script_built"
 PHASE_SMOKE_VALIDATED = "smoke_validated"
@@ -28,6 +30,8 @@ PHASE_INTERRUPTED = "interrupted"
 
 PerformanceTestingPhase = Literal[
     "intake",
+    "doc_resolution",
+    "endpoint_resolution",
     "plan_resolved",
     "script_built",
     "smoke_validated",
@@ -204,6 +208,8 @@ Verdict = Literal["pass", "fail", "baseline"]
 
 __all__ = [
     "PHASE_INTAKE",
+    "PHASE_DOC_RESOLUTION",
+    "PHASE_ENDPOINT_RESOLUTION",
     "PHASE_PLAN_RESOLVED",
     "PHASE_SCRIPT_BUILT",
     "PHASE_SMOKE_VALIDATED",

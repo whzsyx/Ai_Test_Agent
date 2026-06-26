@@ -172,6 +172,7 @@ class ToolRuntimeService:
                 coordinator_runtime_service=coordinator_runtime_service,
                 session_store=session_store,
                 memory_runtime_service=memory_runtime_service,
+                api_docs_service=api_docs_service,
             )
         self._handlers = {
             "workflow-router": self._run_workflow_router,
@@ -211,6 +212,11 @@ class ToolRuntimeService:
             "exploit-workbench-runner": self._run_exploit_workbench_runner,
             "performance-test-runner": self._run_performance_test_runner,
             "perf-container-manager": self._run_perf_container_manager,
+            "api-docs-ingest": self._run_api_docs_ingest,
+            "perf-engine-select": self._run_perf_engine_select,
+            "http-probe-runner": self._run_http_probe_runner,
+            "mock-target-runner": self._run_mock_target_runner,
+            "performance-engine-runner": self._run_performance_engine_runner,
             "perf-plan-compiler": self._run_perf_plan_compiler,
             "perf-result-analyzer": self._run_perf_result_analyzer,
             "compatibility-test-runner": self._run_compatibility_test_runner,
@@ -2774,14 +2780,15 @@ class ToolRuntimeService:
             return {"status": "error", "ok": False, "summary": f"计划解析失败: {e}"}
 
         rewrite = self._settings.performance_rewrite_localhost if self._settings else True
+        image = self._resolve_perf_engine_image(engine_key) if self._settings else ""
         if engine_key == "k6":
             adapter = K6EngineAdapter(
-                image=self._settings.k6_docker_image if self._settings else "",
+                image=image,
                 rewrite_localhost=rewrite,
             )
         elif engine_key == "jmeter":
             adapter = JMeterEngineAdapter(
-                image=self._settings.jmeter_docker_image if self._settings else "",
+                image=image,
                 rewrite_localhost=rewrite,
             )
         else:
@@ -2796,6 +2803,21 @@ class ToolRuntimeService:
             "data_files": script.data_files,
             "engine": script.engine,
         }
+
+    def _resolve_perf_engine_image(self, engine: str) -> str:
+        from src.application.images.image_resolver import ImageResolver
+
+        normalized = (engine or "k6").lower().strip()
+        resolver = ImageResolver()
+        image_key = (
+            self._settings.jmeter_docker_image_key
+            if normalized == "jmeter"
+            else self._settings.k6_docker_image_key
+        )
+        resolution = resolver.resolve_by_key(image_key) if image_key else resolver.resolve_for_engine(normalized)
+        if resolution.ok:
+            return resolution.selected_image
+        return self._settings.jmeter_docker_image if normalized == "jmeter" else self._settings.k6_docker_image
 
     async def _run_perf_container_manager(
         self,
@@ -2829,6 +2851,169 @@ class ToolRuntimeService:
                 return {"status": "error", "ok": False, "summary": f"不支持的容器动作: {action}"}
         except Exception as e:
             return {"status": "error", "ok": False, "summary": f"容器管理失败: {e}"}
+
+        payload = result.model_dump()
+        payload["status"] = "ok" if result.ok else "error"
+        return payload
+
+    async def _run_api_docs_ingest(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        if self._api_docs_service is None:
+            return {"status": "error", "ok": False, "summary": "API 文档服务未初始化"}
+
+        from src.application.api_doc_resolution.service import ApiDocResolutionService
+
+        action = str(arguments.get("action") or "").lower().strip()
+        resolution = ApiDocResolutionService(api_docs_service=self._api_docs_service)
+
+        try:
+            if action == "import_url":
+                url = str(arguments.get("url") or "").strip()
+                if not url:
+                    return {"status": "error", "ok": False, "summary": "import_url 需要 url 参数"}
+                result = await resolution.ingest_doc_from_url(
+                    url=url,
+                    title=arguments.get("title"),
+                    project_name=arguments.get("project_name"),
+                    project_url=arguments.get("project_url"),
+                )
+                return result
+            elif action == "import_attachment":
+                filename = str(arguments.get("filename") or "api_doc.json").strip()
+                content_base64 = str(arguments.get("content_base64") or "").strip()
+                if not content_base64:
+                    return {"status": "error", "ok": False, "summary": "import_attachment 需要 content_base64 参数"}
+                result = await resolution.ingest_doc_from_attachment(
+                    filename=filename,
+                    content_base64=content_base64,
+                    title=arguments.get("title"),
+                    project_name=arguments.get("project_name"),
+                    project_url=arguments.get("project_url"),
+                    content_type=arguments.get("content_type"),
+                )
+                return result
+            else:
+                return {"status": "error", "ok": False, "summary": f"不支持的导入动作: {action}"}
+        except Exception as e:
+            return {"status": "error", "ok": False, "summary": f"API 文档导入失败: {e}"}
+
+    async def _run_perf_engine_select(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        from src.application.images.image_resolver import ImageResolver
+
+        scenario = str(arguments.get("scenario") or "api_baseline").lower().strip()
+        user_engine = str(arguments.get("user_requested_engine") or "").lower().strip() or None
+        needs_complex_flow = bool(arguments.get("needs_complex_flow"))
+        has_existing_jmx = bool(arguments.get("has_existing_jmx"))
+
+        if user_engine:
+            engine = user_engine
+            reason = f"用户指定引擎: {engine}"
+        elif has_existing_jmx:
+            engine = "jmeter"
+            reason = "已有 JMX 资产，优先使用 JMeter"
+        elif needs_complex_flow or scenario in ("complex_flow",):
+            engine = "jmeter"
+            reason = f"复杂流程场景 ({scenario}) 优先使用 JMeter"
+        else:
+            engine = "k6"
+            reason = f"API 场景 ({scenario}) 默认使用 k6"
+
+        resolver = ImageResolver()
+        resolution = resolver.resolve_for_engine(engine)
+        if not resolution.ok:
+            return {
+                "ok": False,
+                "engine": engine,
+                "reason": resolution.reason,
+                "selected_image_key": "",
+                "selected_image": "",
+            }
+
+        return {
+            "ok": True,
+            "engine": engine,
+            "reason": reason,
+            "selected_image_key": resolution.selected_image_key,
+            "selected_image": resolution.selected_image,
+        }
+
+    async def _run_http_probe_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        from src.application.performance.http_probe_runner import HttpProbeRunner
+
+        target_url = str(arguments.get("target_url") or "").strip()
+        if not target_url:
+            return {"status": "error", "ok": False, "summary": "target_url 必填"}
+
+        runner = HttpProbeRunner(self._settings)
+        result = await runner.probe(
+            target_url=target_url,
+            method=str(arguments.get("method") or "GET"),
+            headers=arguments.get("headers") or {},
+            timeout_seconds=int(arguments.get("timeout_seconds") or 10),
+        )
+        payload = result.model_dump()
+        payload["status"] = "ok" if result.ok else "error"
+        return payload
+
+    async def _run_mock_target_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        from src.application.performance.mock_target_runner import MockTargetRunner
+
+        action = str(arguments.get("action") or "").lower().strip()
+        runner = MockTargetRunner(self._settings)
+
+        if action == "start":
+            result = await runner.start(
+                port=int(arguments.get("port") or 18080),
+                response_text=str(arguments.get("response_text") or "ok"),
+            )
+        elif action == "stop":
+            container_name = str(arguments.get("container_name") or "").strip()
+            if not container_name:
+                return {"status": "error", "ok": False, "summary": "stop 需要 container_name"}
+            result = await runner.stop(container_name=container_name)
+        else:
+            return {"status": "error", "ok": False, "summary": f"不支持的动作: {action}"}
+
+        payload = result.model_dump()
+        payload["status"] = "ok" if result.ok else "error"
+        return payload
+
+    async def _run_performance_engine_runner(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        from src.application.performance.performance_engine_runner import PerformanceEngineRunner
+        from src.modes.performance_testing_mode.plan_state import PerfPlan
+
+        engine = str(arguments.get("engine") or "k6").lower().strip()
+        scenario = str(arguments.get("scenario") or "api_baseline").lower().strip()
+
+        runner = PerformanceEngineRunner(self._settings)
+        plan_data = arguments.get("plan")
+        if plan_data and isinstance(plan_data, dict):
+            try:
+                plan = PerfPlan(**plan_data)
+                result = runner.validate_plan_engine(plan)
+            except Exception:
+                result = runner.select_engine(engine=engine, scenario=scenario)
+        else:
+            result = runner.select_engine(engine=engine, scenario=scenario)
 
         payload = result.model_dump()
         payload["status"] = "ok" if result.ok else "error"

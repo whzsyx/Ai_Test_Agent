@@ -18,6 +18,8 @@ from src.application.performance.perf_target_guard import PerfTargetGuard
 from src.core.config import Settings
 from src.modes.performance_testing_mode.contracts import (
     PHASE_ANALYZED,
+    PHASE_DOC_RESOLUTION,
+    PHASE_ENDPOINT_RESOLUTION,
     PHASE_FAILED,
     PHASE_GUARD_PASSED,
     PHASE_INTAKE,
@@ -66,11 +68,13 @@ class PerformanceTestingModeRuntime:
         coordinator_runtime_service=None,
         session_store=None,
         memory_runtime_service=None,
+        api_docs_service=None,
     ):
         self._settings = settings
         self._coordinator_runtime_service = coordinator_runtime_service
         self._session_store = session_store
         self._memory_runtime_service = memory_runtime_service
+        self._api_docs_service = api_docs_service
         self._interpreter = PerfRequestInterpreter()
         self._modeler = WorkloadModeler()
         self._parser = PerfResultParser()
@@ -102,17 +106,31 @@ class PerformanceTestingModeRuntime:
     def _create_engine_adapter(self, engine_key: str | None = None):
         engine = (engine_key or "k6").lower()
         rewrite = self._settings.performance_rewrite_localhost if self._settings else True
+        image = self._resolve_engine_image(engine) if self._settings else ""
         if engine == "k6":
             return K6EngineAdapter(
-                image=self._settings.k6_docker_image if self._settings else "",
+                image=image,
                 rewrite_localhost=rewrite,
             )
         if engine == "jmeter":
             return JMeterEngineAdapter(
-                image=self._settings.jmeter_docker_image if self._settings else "",
+                image=image,
                 rewrite_localhost=rewrite,
             )
         return None
+
+    def _resolve_engine_image(self, engine: str) -> str:
+        from src.application.images.image_resolver import ImageResolver
+        resolver = ImageResolver()
+        image_key = (
+            self._settings.jmeter_docker_image_key
+            if engine == "jmeter"
+            else self._settings.k6_docker_image_key
+        )
+        resolution = resolver.resolve_by_key(image_key) if image_key else resolver.resolve_for_engine(engine)
+        if resolution.ok:
+            return resolution.selected_image
+        return self._settings.jmeter_docker_image if engine == "jmeter" else self._settings.k6_docker_image
 
     async def handle(self, arguments: dict[str, Any], context: Any) -> dict[str, Any]:
         """Main entry point — restore state, advance phases, persist, return."""
@@ -152,6 +170,12 @@ class PerformanceTestingModeRuntime:
 
         if phase == PHASE_INTAKE:
             return await self._handle_intake(state, arguments)
+
+        if phase == PHASE_DOC_RESOLUTION:
+            return await self._handle_doc_resolution(state, arguments)
+
+        if phase == PHASE_ENDPOINT_RESOLUTION:
+            return await self._handle_endpoint_resolution(state, arguments)
 
         if phase == PHASE_PLAN_RESOLVED:
             return await self._handle_script_build(state)
@@ -228,6 +252,10 @@ class PerformanceTestingModeRuntime:
                 "missing_slots": list(missing),
             }
 
+        if self._needs_doc_resolution(state):
+            state.record_phase_transition(PHASE_DOC_RESOLUTION)
+            return await self._handle_doc_resolution(state, arguments)
+
         plan = self._build_plan_from_slots(state)
         state.plan = plan
         state.record_phase_transition(PHASE_PLAN_RESOLVED)
@@ -274,6 +302,121 @@ class PerformanceTestingModeRuntime:
             smoke=SmokeConfig(),
             sla=sla,
         )
+
+    def _needs_doc_resolution(self, state: PerformanceTestingState) -> bool:
+        """Check whether the target is a full URL or needs API doc resolution."""
+        target = state.request.target or state.request.filled_slots.get("target", "")
+        if not target:
+            return False
+        return not (target.startswith("http://") or target.startswith("https://"))
+
+    async def _handle_doc_resolution(
+        self, state: PerformanceTestingState, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve API docs when target is not a direct URL."""
+        if not self._api_docs_service:
+            return self._error("API 文档服务未初始化，无法解析接口文档", state)
+
+        from src.application.api_doc_resolution.service import ApiDocResolutionService
+
+        service = ApiDocResolutionService(api_docs_service=self._api_docs_service)
+        project_name = arguments.get("project_name") or state.request.filled_slots.get("project_name")
+        project_url = arguments.get("project_url") or state.request.filled_slots.get("project_url")
+
+        result = await service.discover_project_docs(
+            project_name=project_name,
+            project_url=project_url,
+        )
+
+        state.doc_resolution_status = result.model_dump()
+        state.missing_doc_reason = result.missing_doc_reason
+
+        if result.status == "awaiting_input":
+            return {
+                "status": "awaiting_input",
+                "ok": True,
+                "phase": PHASE_DOC_RESOLUTION,
+                "summary": result.summary,
+                "missing_doc_reason": result.missing_doc_reason,
+                "accepted_inputs": result.accepted_inputs,
+                "questions": ["请上传接口文档，或提供 OpenAPI/Swagger 文档 URL。"],
+            }
+
+        state.record_phase_transition(PHASE_ENDPOINT_RESOLUTION)
+        return await self._handle_endpoint_resolution(state, arguments)
+
+    async def _handle_endpoint_resolution(
+        self, state: PerformanceTestingState, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve a concrete endpoint from API docs."""
+        if not self._api_docs_service:
+            return self._error("API 文档服务未初始化", state)
+
+        from src.application.api_doc_resolution.service import ApiDocResolutionService
+
+        service = ApiDocResolutionService(api_docs_service=self._api_docs_service)
+        project_name = arguments.get("project_name") or state.request.filled_slots.get("project_name")
+        project_url = arguments.get("project_url") or state.request.filled_slots.get("project_url")
+        endpoint_hint = arguments.get("endpoint_hint") or state.request.target or ""
+
+        method, path = self._parse_endpoint_hint(endpoint_hint)
+
+        result = await service.resolve_endpoint_from_docs(
+            project_name=project_name,
+            project_url=project_url,
+            method=method,
+            path=path,
+            query=endpoint_hint,
+        )
+
+        state.doc_resolution_status = result.model_dump()
+        state.missing_doc_reason = result.missing_doc_reason
+
+        if result.status == "awaiting_input":
+            return {
+                "status": "awaiting_input",
+                "ok": True,
+                "phase": PHASE_ENDPOINT_RESOLUTION,
+                "summary": result.summary,
+                "missing_doc_reason": result.missing_doc_reason,
+                "accepted_inputs": result.accepted_inputs,
+                "questions": ["请上传接口文档，或提供 OpenAPI/Swagger 文档 URL。"],
+            }
+
+        if result.status == "ambiguous":
+            return {
+                "status": "awaiting_input",
+                "ok": True,
+                "phase": PHASE_ENDPOINT_RESOLUTION,
+                "summary": result.summary,
+                "candidates": result.candidates,
+                "questions": ["多个接口候选，请确认目标接口。"],
+            }
+
+        if result.resolved_endpoint:
+            ep = result.resolved_endpoint
+            state.resolved_endpoint = ep.model_dump()
+            full_url = ep.base_url.rstrip("/") + ep.path if ep.base_url else ep.path
+            state.request.target = full_url
+            state.request.filled_slots["target"] = full_url
+
+        state.record_phase_transition(PHASE_PLAN_RESOLVED)
+        plan = self._build_plan_from_slots(state)
+        state.plan = plan
+        return await self._handle_script_build(state)
+
+    @staticmethod
+    def _parse_endpoint_hint(hint: str) -> tuple[str | None, str | None]:
+        """Parse 'POST /api/orders' or '/api/orders' into (method, path)."""
+        if not hint:
+            return None, None
+        hint = hint.strip()
+        parts = hint.split(None, 1)
+        if len(parts) == 2 and parts[0].upper() in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
+            return parts[0].upper(), parts[1]
+        if hint.startswith("/"):
+            return None, hint
+        return None, hint
 
     async def _handle_script_build(self, state: PerformanceTestingState) -> dict[str, Any]:
         if not state.plan:
