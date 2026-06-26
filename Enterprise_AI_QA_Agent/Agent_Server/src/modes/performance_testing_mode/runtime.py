@@ -32,6 +32,8 @@ from src.modes.performance_testing_mode.contracts import (
     STATE_METADATA_KEY,
     TERMINAL_PHASES,
 )
+from src.modes.performance_testing_mode.coordinator import PerfCoordinator
+from src.modes.performance_testing_mode.failure_analyzer import PerfFailureAnalyzer
 from src.modes.performance_testing_mode.intake import (
     check_slots_ready,
     generate_next_questions,
@@ -73,6 +75,8 @@ class PerformanceTestingModeRuntime:
         self._modeler = WorkloadModeler()
         self._parser = PerfResultParser()
         self._report_builder = PerfReportBuilder()
+        self._coordinator = PerfCoordinator(coordinator_runtime_service)
+        self._failure_analyzer = PerfFailureAnalyzer()
 
         if settings:
             self._guard = PerfTargetGuard(settings)
@@ -87,6 +91,7 @@ class PerformanceTestingModeRuntime:
 
     def set_coordinator_runtime_service(self, svc) -> None:
         self._coordinator_runtime_service = svc
+        self._coordinator.set_coordinator_runtime_service(svc)
 
     def set_session_store(self, store) -> None:
         self._session_store = store
@@ -274,6 +279,8 @@ class PerformanceTestingModeRuntime:
         if not state.plan:
             return self._error("缺少压测计划", state)
 
+        await self._emit_progress(state, PHASE_SCRIPT_BUILT, "正在生成性能测试脚本")
+
         engine_adapter = self._create_engine_adapter(state.plan.engine)
         if not engine_adapter:
             return self._error("引擎适配器未初始化", state)
@@ -287,8 +294,14 @@ class PerformanceTestingModeRuntime:
         if not self._guard or not state.plan:
             return self._error("安全护栏未初始化", state)
 
+        await self._emit_progress(state, PHASE_GUARD_PASSED, "正在执行压测安全护栏检查")
+
         result = self._guard.validate(state.plan)
         if not result.ok:
+            state.failure_analysis = self._failure_analyzer.analyze({
+                "phase": PHASE_GUARD_PASSED,
+                "reason": result.reason,
+            }).model_dump()
             state.record_phase_transition(PHASE_FAILED)
             state.errors.append(result.reason)
             return {
@@ -311,6 +324,8 @@ class PerformanceTestingModeRuntime:
         if not self._runner or not state.plan:
             return self._error("执行器未初始化", state)
 
+        await self._emit_progress(state, PHASE_SMOKE_VALIDATED, "正在执行冒烟验证")
+
         engine_adapter = self._create_engine_adapter(state.plan.engine)
         if not engine_adapter:
             return self._error("引擎适配器未初始化", state)
@@ -319,6 +334,11 @@ class PerformanceTestingModeRuntime:
         smoke_result = await self._runner.run_smoke(state.plan, script, engine_adapter)
 
         if not smoke_result.passed:
+            state.failure_analysis = self._failure_analyzer.analyze({
+                "phase": PHASE_SMOKE_VALIDATED,
+                "detail": smoke_result.detail,
+                "smoke_result": smoke_result.model_dump(),
+            }).model_dump()
             state.record_phase_transition(PHASE_FAILED)
             state.errors.append(f"冒烟验证失败: {smoke_result.detail}")
             return {
@@ -336,6 +356,8 @@ class PerformanceTestingModeRuntime:
         if not self._runner or not state.plan:
             return self._error("执行器未初始化", state)
 
+        await self._emit_progress(state, PHASE_LOAD_RUNNING, "正在执行正式压测")
+
         engine_adapter = self._create_engine_adapter(state.plan.engine)
         if not engine_adapter:
             return self._error("引擎适配器未初始化", state)
@@ -350,6 +372,25 @@ class PerformanceTestingModeRuntime:
         run = await self._runner.execute(state.plan, script, run_opts, engine_adapter)
         state.run = run
 
+        if run.status != "completed" and not run.raw_metrics:
+            state.failure_analysis = self._failure_analyzer.analyze({
+                "phase": PHASE_LOAD_RUNNING,
+                "status": run.status,
+                "exit_code": run.exit_code,
+                "stdout_tail": run.stdout_tail,
+            }).model_dump()
+            state.record_phase_transition(PHASE_FAILED)
+            state.errors.append(f"压测执行失败: {run.status}")
+            return {
+                "status": "error",
+                "ok": False,
+                "phase": PHASE_FAILED,
+                "summary": f"压测执行失败: {run.status}",
+                "run_id": run.run_id,
+                "failure_analysis": state.failure_analysis,
+                "errors": state.errors,
+            }
+
         state.record_phase_transition(PHASE_RESULT_COLLECTED)
         return await self._handle_analysis(state)
 
@@ -360,6 +401,8 @@ class PerformanceTestingModeRuntime:
     async def _handle_analysis(self, state: PerformanceTestingState) -> dict[str, Any]:
         if not state.run or not state.plan:
             return self._error("缺少运行结果", state)
+
+        await self._emit_progress(state, PHASE_ANALYZED, "正在分析压测结果")
 
         raw_metrics = RawMetrics(**state.run.raw_metrics) if state.run.raw_metrics else RawMetrics()
 
@@ -386,6 +429,8 @@ class PerformanceTestingModeRuntime:
     async def _handle_report(self, state: PerformanceTestingState) -> dict[str, Any]:
         if not state.report:
             return self._error("缺少分析报告", state)
+
+        await self._emit_progress(state, PHASE_REPORT_READY, "正在生成性能测试报告")
 
         # Persist run metrics for future baseline lookups
         if self._metrics_store and state.run and state.plan:
@@ -419,6 +464,20 @@ class PerformanceTestingModeRuntime:
             "report_markdown": state.report.report_markdown,
             "report_html": state.report.report_html,
         }
+
+    async def _emit_progress(
+        self,
+        state: PerformanceTestingState,
+        phase: str,
+        message: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        await self._coordinator.emit_progress(
+            phase=phase,
+            message=message,
+            session_id=state.session_id,
+            data=data,
+        )
 
     def _error(self, message: str, state: PerformanceTestingState) -> dict[str, Any]:
         state.record_phase_transition(PHASE_FAILED)

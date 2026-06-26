@@ -10,6 +10,7 @@ from src.modes.api_testing_mode.prompt_contract import (
     API_TESTING_PROMPT_CONTRACT,
 )
 from src.modes.performance_testing_mode.prompt_contract import (
+    PERF_FAILURE_ANALYST_CONTRACT,
     PERFORMANCE_TESTING_SYSTEM_CONTRACT,
     PERF_PLANNER_CONTRACT,
     PERF_ANALYST_CONTRACT,
@@ -282,6 +283,17 @@ class PromptAssemblyService:
                     cache_scope="dynamic",
                     priority=50,
                     content=PERF_ANALYST_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "perf-failure-analyst":
+            sections.append(
+                PromptSection(
+                    key="perf_failure_analyst_contract",
+                    title="Perf Failure Analyst Contract",
+                    source="prompt_assembly.perf_failure_analyst",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=PERF_FAILURE_ANALYST_CONTRACT,
                 )
             )
 

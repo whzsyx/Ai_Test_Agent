@@ -175,6 +175,7 @@ AGENT_PLANNER = "perf-planner"
 AGENT_SCRIPT_BUILDER = "perf-script-builder"
 AGENT_RUNNER = "perf-runner"
 AGENT_ANALYST = "perf-analyst"
+AGENT_FAILURE_ANALYST = "perf-failure-analyst"
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +270,7 @@ __all__ = [
     "AGENT_SCRIPT_BUILDER",
     "AGENT_RUNNER",
     "AGENT_ANALYST",
+    "AGENT_FAILURE_ANALYST",
     "MAX_CONCURRENT_RUNS",
     "TOOL_EXEC_TIMEOUT_SECONDS",
     "DEFAULT_SMOKE_ITERATIONS",

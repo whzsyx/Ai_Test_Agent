@@ -17,6 +17,7 @@ MODE_MANIFEST = {
         "perf-script-builder",
         "perf-runner",
         "perf-analyst",
+        "perf-failure-analyst",
         "report-analyst",
     ],
     "default_skill_keys": [],

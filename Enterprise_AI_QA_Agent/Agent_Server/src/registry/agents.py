@@ -737,6 +737,24 @@ class AgentRegistry:
                     tags=["testing", "performance", "analysis"],
                 )
             ),
+            "perf-failure-analyst": AgentModule(
+                descriptor=AgentDescriptor(
+                    key="perf-failure-analyst",
+                    name="Perf Failure Analyst",
+                    role="analyst",
+                    summary="分析性能测试失败原因并给出可重试/降级/修复建议。",
+                    description=(
+                        "当性能测试脚本生成、冒烟验证、正式压测或结果解析失败时，"
+                        "根据 stdout/stderr、退出码、原始指标和上下文判断失败类型，"
+                        "输出结构化 failure_category/root_cause/retryable/suggested_fix。"
+                    ),
+                    supported_tools=["knowledge-rag", "observation-search", "session-history"],
+                    supported_skills=["report-synthesis"],
+                    supported_models=["claude-sonnet-4", "gpt-5.4", "deepseek-reasoner"],
+                    default_model="claude-sonnet-4",
+                    tags=["testing", "performance", "failure-analysis"],
+                )
+            ),
             "smoke-testing-agent": AgentModule(
                 descriptor=AgentDescriptor(
                     key="smoke-testing-agent",
