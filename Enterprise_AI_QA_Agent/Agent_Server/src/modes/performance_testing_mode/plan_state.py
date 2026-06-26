@@ -304,6 +304,7 @@ class PerformanceTestingState(BaseModel):
     plan: PerfPlan | None = None
     run: PerfRun | None = None
     report: PerfReport | None = None
+    failure_analysis: dict[str, Any] = Field(default_factory=dict)
     intake_complete: bool = False
     errors: list[str] = Field(default_factory=list)
     phase_history: list[dict[str, Any]] = Field(default_factory=list)

@@ -231,7 +231,10 @@ class K6EngineAdapter:
         if thresholds:
             lines.append("  thresholds: {")
             for metric, checks in thresholds.items():
-                formatted = ", ".join(f'"{c}"' for c in checks)
+                formatted = ", ".join(
+                    f'{{ threshold: "{c}", abortOnFail: true, delayAbortEval: "10s" }}'
+                    for c in checks
+                )
                 lines.append(f"    \"{metric}\": [{formatted}],")
             lines.append("  },")
 

@@ -60,8 +60,12 @@ class PerfResultParser:
         if not raw_data:
             return []
 
-        # k6 summary doesn't provide per-interval breakdown by default.
-        # For MVP, we produce a single-point curve from aggregate data.
+        series = raw_data.get("perf_curve") or raw_data.get("curve") or raw_data.get("stages")
+        if isinstance(series, list):
+            points = self._extract_curve_points(series)
+            if points:
+                return points
+
         if raw.throughput_tps > 0:
             return [CurvePoint(
                 rate_or_vus=raw.throughput_tps,
@@ -70,11 +74,29 @@ class PerfResultParser:
             )]
         return []
 
+    def _extract_curve_points(self, series: list[Any]) -> list[CurvePoint]:
+        points: list[CurvePoint] = []
+        for item in series:
+            if not isinstance(item, dict):
+                continue
+            rate = item.get("rate_or_vus", item.get("rate", item.get("vus", item.get("target"))))
+            p95 = item.get("p95_ms", item.get("p95", item.get("p(95)")))
+            error_rate = item.get("error_rate", item.get("failed_rate", item.get("errors", 0)))
+            try:
+                points.append(CurvePoint(
+                    rate_or_vus=float(rate),
+                    p95_ms=float(p95),
+                    error_rate=float(error_rate),
+                ))
+            except (TypeError, ValueError):
+                continue
+        points.sort(key=lambda p: p.rate_or_vus)
+        return points
+
     def _detect_inflection(self, curve: list[CurvePoint]) -> float | None:
         """Detect the load level where latency sharply increases.
 
-        For MVP with a single data point, returns None. With multi-stage
-        ramping data (stage 2), this would detect the knee in the curve.
+        Uses the strongest positive latency slope as the knee point.
         """
         if len(curve) < 3:
             return None

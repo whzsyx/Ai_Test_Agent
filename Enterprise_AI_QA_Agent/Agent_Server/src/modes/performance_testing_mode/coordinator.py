@@ -36,13 +36,29 @@ class PerfCoordinator:
             logger.warning("No coordinator runtime service available for dispatch")
             return {"status": "error", "summary": "coordinator service unavailable"}
 
+        context = context or {}
         try:
-            result = await self._coordinator_runtime_service.dispatch_worker(
-                agent_key=agent_key,
-                prompt=prompt,
-                description=description,
-                context=context or {},
-            )
+            if hasattr(self._coordinator_runtime_service, "dispatch_worker"):
+                result = await self._coordinator_runtime_service.dispatch_worker(
+                    agent_key=agent_key,
+                    prompt=prompt,
+                    description=description,
+                    context=context,
+                )
+            else:
+                task_id = str(context.get("task_id") or description or agent_key)
+                result = await self._coordinator_runtime_service.dispatch(
+                    payload={
+                        "workers": [{
+                            "task_id": task_id,
+                            "description": description or task_id,
+                            "prompt": prompt,
+                            "agent_key": agent_key,
+                            "context": context,
+                        }]
+                    },
+                    context=context,
+                )
             return result if isinstance(result, dict) else {"status": "ok", "result": result}
         except Exception as e:
             logger.warning(f"Worker dispatch failed: {e}")
