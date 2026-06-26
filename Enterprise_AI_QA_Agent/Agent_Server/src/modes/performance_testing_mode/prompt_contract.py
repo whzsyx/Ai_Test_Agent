@@ -41,6 +41,19 @@ PERFORMANCE_TESTING_SYSTEM_CONTRACT = """\
 - status: ok / error / awaiting_input
 - summary: 人类可读摘要
 - 阶段特定字段（metrics / report / questions 等）
+
+## Hard Requirements
+
+1. If the user explicitly requests `jmeter`, you must honor `jmeter` as the requested engine.
+   Do not say the system lacks JMeter unless a real tool execution result proves it.
+   Do not silently substitute `k6` for `jmeter`.
+2. If the user message already includes explicit execution confirmation and all required slots are present,
+   advance to actual execution in the same turn instead of stopping at a plan-only explanation.
+3. Once any tool returns a structured result, preserve that result faithfully:
+   - never rewrite `verdict=fail` as pass/success;
+   - never claim SLA passed when tool output says fail;
+   - if `baseline_comparison.regressed=true`, you must surface the regression clearly.
+4. When reporting final results, prefer exact fields from tool output over free-form reinterpretation.
 """
 
 PERF_PLANNER_CONTRACT = """\
