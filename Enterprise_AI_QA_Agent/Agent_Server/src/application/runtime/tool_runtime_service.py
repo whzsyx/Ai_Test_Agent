@@ -2754,6 +2754,7 @@ class ToolRuntimeService:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
+        from src.application.performance.jmeter_engine_adapter import JMeterEngineAdapter
         from src.application.performance.k6_engine_adapter import K6EngineAdapter
         from src.modes.performance_testing_mode.plan_state import PerfPlan
 
@@ -2765,10 +2766,15 @@ class ToolRuntimeService:
         except Exception as e:
             return {"status": "error", "ok": False, "summary": f"计划解析失败: {e}"}
 
+        rewrite = self._settings.performance_rewrite_localhost if self._settings else True
         if engine_key == "k6":
-            rewrite = self._settings.performance_rewrite_localhost if self._settings else True
             adapter = K6EngineAdapter(
                 image=self._settings.k6_docker_image if self._settings else "",
+                rewrite_localhost=rewrite,
+            )
+        elif engine_key == "jmeter":
+            adapter = JMeterEngineAdapter(
+                image=self._settings.jmeter_docker_image if self._settings else "",
                 rewrite_localhost=rewrite,
             )
         else:

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.modes.performance_testing_mode.contracts import (
+    SLOT_ENGINE,
     SLOT_RUN_INTENT,
     SLOT_SLA,
     SLOT_TARGET,
@@ -77,6 +78,10 @@ class PerfRequestInterpreter:
             result.slots[SLOT_SLA] = sla
             filled_count += 1
 
+        engine = self._extract_engine(message)
+        if engine:
+            result.slots[SLOT_ENGINE] = engine
+
         result.confidence = min(filled_count / 3.0, 1.0)
         return result
 
@@ -139,3 +144,11 @@ class PerfRequestInterpreter:
             parts.append(f"error_rate<{m.group(1)}%")
 
         return ", ".join(parts) if parts else None
+
+    def _extract_engine(self, message: str) -> str | None:
+        msg = message.lower()
+        if "jmeter" in msg or "jemter" in msg:
+            return "jmeter"
+        if "k6" in msg:
+            return "k6"
+        return None

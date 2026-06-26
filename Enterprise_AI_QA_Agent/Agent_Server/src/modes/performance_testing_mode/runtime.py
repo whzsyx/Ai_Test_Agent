@@ -10,7 +10,9 @@ import uuid
 from typing import Any
 
 from src.application.performance.engine_adapter import RawMetrics, RunOptions
+from src.application.performance.jmeter_engine_adapter import JMeterEngineAdapter
 from src.application.performance.k6_engine_adapter import K6EngineAdapter
+from src.application.performance.perf_metrics_store import PerfMetricsStore
 from src.application.performance.perf_runner_service import PerfRunnerService
 from src.application.performance.perf_target_guard import PerfTargetGuard
 from src.core.config import Settings
@@ -75,14 +77,13 @@ class PerformanceTestingModeRuntime:
         if settings:
             self._guard = PerfTargetGuard(settings)
             self._runner = PerfRunnerService(settings)
-            self._engine_adapter = K6EngineAdapter(
-                image=settings.k6_docker_image,
-                rewrite_localhost=settings.performance_rewrite_localhost,
-            )
+            self._engine_adapter = self._create_engine_adapter(settings.performance_default_engine)
+            self._metrics_store = PerfMetricsStore(settings)
         else:
             self._guard = None
             self._runner = None
             self._engine_adapter = None
+            self._metrics_store = None
 
     def set_coordinator_runtime_service(self, svc) -> None:
         self._coordinator_runtime_service = svc
@@ -92,6 +93,21 @@ class PerformanceTestingModeRuntime:
 
     def set_memory_runtime_service(self, svc) -> None:
         self._memory_runtime_service = svc
+
+    def _create_engine_adapter(self, engine_key: str | None = None):
+        engine = (engine_key or "k6").lower()
+        rewrite = self._settings.performance_rewrite_localhost if self._settings else True
+        if engine == "k6":
+            return K6EngineAdapter(
+                image=self._settings.k6_docker_image if self._settings else "",
+                rewrite_localhost=rewrite,
+            )
+        if engine == "jmeter":
+            return JMeterEngineAdapter(
+                image=self._settings.jmeter_docker_image if self._settings else "",
+                rewrite_localhost=rewrite,
+            )
+        return None
 
     async def handle(self, arguments: dict[str, Any], context: Any) -> dict[str, Any]:
         """Main entry point — restore state, advance phases, persist, return."""
@@ -162,6 +178,8 @@ class PerformanceTestingModeRuntime:
 
         for slot, value in interpreted.slots.items():
             state.request.filled_slots[slot] = value
+            if slot == "engine":
+                state.request.engine = value
 
         for key, value in arguments.items():
             if key == "target_url" and value:
@@ -187,6 +205,9 @@ class PerformanceTestingModeRuntime:
                 state.request.sla_p99_ms = value
             elif key == "sla_error_rate" and value is not None:
                 state.request.sla_error_rate = value
+            elif key == "engine" and value:
+                state.request.filled_slots["engine"] = value
+                state.request.engine = value
 
         ready, missing = check_slots_ready(state.request)
 
@@ -241,7 +262,7 @@ class PerformanceTestingModeRuntime:
         return PerfPlan(
             plan_id=f"plan-{uuid.uuid4().hex[:8]}",
             title=f"压测 {target_url}",
-            engine=req.engine or "k6",
+            engine=req.engine or slots.get("engine") or (self._settings.performance_default_engine if self._settings else "k6"),
             run_intent=req.run_intent or "probe",
             targets=[PerfTarget(name="primary", url=target_url, method=method)],
             workload=wl_config,
@@ -250,10 +271,14 @@ class PerformanceTestingModeRuntime:
         )
 
     async def _handle_script_build(self, state: PerformanceTestingState) -> dict[str, Any]:
-        if not self._engine_adapter or not state.plan:
+        if not state.plan:
+            return self._error("缺少压测计划", state)
+
+        engine_adapter = self._create_engine_adapter(state.plan.engine)
+        if not engine_adapter:
             return self._error("引擎适配器未初始化", state)
 
-        script = self._engine_adapter.build_script(state.plan)
+        script = engine_adapter.build_script(state.plan)
         state.record_phase_transition(PHASE_SCRIPT_BUILT)
 
         return await self._handle_guard_check(state)
@@ -283,11 +308,15 @@ class PerformanceTestingModeRuntime:
         return await self._handle_execution(state)
 
     async def _handle_smoke(self, state: PerformanceTestingState) -> dict[str, Any]:
-        if not self._runner or not self._engine_adapter or not state.plan:
+        if not self._runner or not state.plan:
             return self._error("执行器未初始化", state)
 
-        script = self._engine_adapter.build_script(state.plan)
-        smoke_result = await self._runner.run_smoke(state.plan, script, self._engine_adapter)
+        engine_adapter = self._create_engine_adapter(state.plan.engine)
+        if not engine_adapter:
+            return self._error("引擎适配器未初始化", state)
+
+        script = engine_adapter.build_script(state.plan)
+        smoke_result = await self._runner.run_smoke(state.plan, script, engine_adapter)
 
         if not smoke_result.passed:
             state.record_phase_transition(PHASE_FAILED)
@@ -304,17 +333,21 @@ class PerformanceTestingModeRuntime:
         return await self._handle_execution(state)
 
     async def _handle_execution(self, state: PerformanceTestingState) -> dict[str, Any]:
-        if not self._runner or not self._engine_adapter or not state.plan:
+        if not self._runner or not state.plan:
             return self._error("执行器未初始化", state)
+
+        engine_adapter = self._create_engine_adapter(state.plan.engine)
+        if not engine_adapter:
+            return self._error("引擎适配器未初始化", state)
 
         state.record_phase_transition(PHASE_LOAD_RUNNING)
 
-        script = self._engine_adapter.build_script(state.plan)
+        script = engine_adapter.build_script(state.plan)
         run_opts = RunOptions(
             timeout_seconds=state.plan.workload.hold_seconds + 120,
         )
 
-        run = await self._runner.execute(state.plan, script, run_opts, self._engine_adapter)
+        run = await self._runner.execute(state.plan, script, run_opts, engine_adapter)
         state.run = run
 
         state.record_phase_transition(PHASE_RESULT_COLLECTED)
@@ -338,6 +371,12 @@ class PerformanceTestingModeRuntime:
         baseline = None
         target_url = state.plan.targets[0].url if state.plan.targets else ""
 
+        if self._metrics_store and target_url:
+            try:
+                baseline = await self._metrics_store.get_baseline(target_url)
+            except Exception:
+                logger.debug("Baseline lookup failed, proceeding without baseline")
+
         report = self._report_builder.build(parsed, state.plan, state.run, baseline)
         state.report = report
 
@@ -347,6 +386,20 @@ class PerformanceTestingModeRuntime:
     async def _handle_report(self, state: PerformanceTestingState) -> dict[str, Any]:
         if not state.report:
             return self._error("缺少分析报告", state)
+
+        # Persist run metrics for future baseline lookups
+        if self._metrics_store and state.run and state.plan:
+            target_url = state.plan.targets[0].url if state.plan.targets else ""
+            try:
+                await self._metrics_store.save_run(
+                    run=state.run,
+                    metrics=state.report.metrics,
+                    verdict=state.report.verdict,
+                    target_url=target_url,
+                    run_intent=state.report.run_intent,
+                )
+            except Exception:
+                logger.debug("Failed to persist perf run metrics, non-blocking")
 
         state.record_phase_transition(PHASE_REPORT_READY)
 

@@ -9,6 +9,11 @@ from src.modes.api_testing_mode.prompt_contract import (
     API_EXECUTOR_WORKER_PROMPT_CONTRACT,
     API_TESTING_PROMPT_CONTRACT,
 )
+from src.modes.performance_testing_mode.prompt_contract import (
+    PERFORMANCE_TESTING_SYSTEM_CONTRACT,
+    PERF_PLANNER_CONTRACT,
+    PERF_ANALYST_CONTRACT,
+)
 from src.modes.smoke_testing_mode.prompt_contract import SMOKE_TESTING_PROMPT_CONTRACT
 from src.modes.ui_automation_mode.prompt_contract import UI_AUTOMATION_PROMPT_CONTRACT
 from src.schemas.prompting import PromptAssemblyResult, PromptSection
@@ -244,6 +249,39 @@ class PromptAssemblyService:
                     cache_scope="dynamic",
                     priority=50,
                     content=SMOKE_TESTING_PROMPT_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "performance-testing-agent":
+            sections.append(
+                PromptSection(
+                    key="performance_testing_contract",
+                    title="Performance Testing Contract",
+                    source="prompt_assembly.performance_testing",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=PERFORMANCE_TESTING_SYSTEM_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "perf-planner":
+            sections.append(
+                PromptSection(
+                    key="perf_planner_contract",
+                    title="Perf Planner Contract",
+                    source="prompt_assembly.perf_planner",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=PERF_PLANNER_CONTRACT,
+                )
+            )
+        elif selected_agent_key == "perf-analyst":
+            sections.append(
+                PromptSection(
+                    key="perf_analyst_contract",
+                    title="Perf Analyst Contract",
+                    source="prompt_assembly.perf_analyst",
+                    cache_scope="dynamic",
+                    priority=50,
+                    content=PERF_ANALYST_CONTRACT,
                 )
             )
 

@@ -209,6 +209,7 @@ class PerfRunnerService:
         with tempfile.TemporaryDirectory(prefix="perf-") as tmpdir:
             script_path = Path(tmpdir) / script.filename
             script_path.write_text(script.script_content, encoding="utf-8")
+            self._materialize_data_files(script, Path(tmpdir))
 
             summary_path = Path(tmpdir) / "summary.json"
 
@@ -241,9 +242,7 @@ class PerfRunnerService:
                     errors="replace",
                     timeout=timeout_seconds,
                 )
-                summary_json = ""
-                if summary_path.exists():
-                    summary_json = summary_path.read_text(encoding="utf-8")
+                summary_json = self._read_summary_artifact(Path(tmpdir), summary_path)
 
                 return ExecutionResult(
                     exit_code=proc.returncode,
@@ -264,6 +263,7 @@ class PerfRunnerService:
         with tempfile.TemporaryDirectory(prefix="perf-") as tmpdir:
             script_path = Path(tmpdir) / script.filename
             script_path.write_text(script.script_content, encoding="utf-8")
+            self._materialize_data_files(script, Path(tmpdir))
 
             local_cmd = []
             for part in cmd.command:
@@ -285,9 +285,7 @@ class PerfRunnerService:
                     cwd=tmpdir,
                     env=None,
                 )
-                summary_json = ""
-                if summary_path.exists():
-                    summary_json = summary_path.read_text(encoding="utf-8")
+                summary_json = self._read_summary_artifact(Path(tmpdir), summary_path)
 
                 return ExecutionResult(
                     exit_code=proc.returncode,
@@ -308,3 +306,24 @@ class PerfRunnerService:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _read_summary_artifact(tmpdir: Path, summary_path: Path) -> str:
+        if summary_path.exists():
+            return summary_path.read_text(encoding="utf-8")
+
+        jmeter_stats = tmpdir / "report" / "statistics.json"
+        if jmeter_stats.exists():
+            return jmeter_stats.read_text(encoding="utf-8")
+
+        return ""
+
+    @staticmethod
+    def _materialize_data_files(script: ScriptArtifact, tmpdir: Path) -> None:
+        for relative_path, source_path in script.data_files.items():
+            source = Path(source_path)
+            if not source.exists() or not source.is_file():
+                continue
+            target = tmpdir / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
