@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from src.application.models.model_runtime_service import ModelRuntimeService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
+from src.application.resources.session_resource_service import SessionResourceService
 from src.application.runtime.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
 from src.domain.models import SessionRecord
 from src.infrastructure.storage_utils import make_json_safe
@@ -40,6 +41,7 @@ class RuntimeService:
         runtime_control: RuntimeControlRegistry,
         transcript_hygiene_service: TranscriptHygieneService | None = None,
         max_iterations: int = 8,
+        session_resource_service: SessionResourceService | None = None,
     ) -> None:
         self._graph = graph
         self._model_runtime_service = model_runtime_service
@@ -48,6 +50,7 @@ class RuntimeService:
         self._runtime_control = runtime_control
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._max_iterations = max_iterations
+        self._session_resource_service = session_resource_service
 
     def request_interrupt(self, session_id: str, reason: str = "") -> None:
         self._runtime_control.request_interrupt(session_id, reason)
@@ -66,6 +69,7 @@ class RuntimeService:
     ) -> RuntimeTurnResult:
         self.clear_interrupt(session.id)
         initial_state = self._build_initial_state(session, request)
+        await self._attach_session_resources(initial_state)
         append_graph_event(
             initial_state,
             "runtime.turn_started",
@@ -94,6 +98,7 @@ class RuntimeService:
             return None
 
         state = self._state_from_pending_turn(session, pending_turn)
+        await self._attach_session_resources(state)
         turn_id = str(state["turn_id"])
         tool_call = ModelToolCall(
             id=str(approval["metadata"].get("call_id", approval["id"])),
@@ -221,6 +226,7 @@ class RuntimeService:
     ) -> RuntimeTurnResult:
         self.clear_interrupt(session.id)
         state = self._state_from_snapshot(session, snapshot)
+        await self._attach_session_resources(state)
         state["control_state"] = "resuming"
         state["interrupt_requested"] = False
         state["interrupt_reason"] = ""
@@ -244,6 +250,7 @@ class RuntimeService:
         async with self._model_runtime_service.stream_handler(on_model_chunk):
             result = await self._run_until_settled(state)
 
+        self._convert_model_interruption_to_resumable(result)
         if result["termination_reason"] == "interrupted":
             append_graph_event(
                 result,
@@ -289,6 +296,16 @@ class RuntimeService:
             tool_messages=self._to_chat_messages(result["turn_id"], result["tool_results"]),
             pending_turn=result["pending_turn"],
         )
+
+    async def _attach_session_resources(self, state: dict[str, Any]) -> None:
+        if self._session_resource_service is None:
+            return
+        session_id = str(state.get("session_id") or "").strip()
+        if not session_id:
+            return
+        context_bundle = dict(state.get("context_bundle") or {})
+        context_bundle["session_resources"] = await self._session_resource_service.build_context(session_id)
+        state["context_bundle"] = context_bundle
 
     def _build_initial_state(self, session: SessionRecord, request: ExecutionRequest) -> dict[str, Any]:
         model_config = self._effective_model_config()
@@ -572,6 +589,25 @@ class RuntimeService:
             )
             result["loop_iteration"] += 1
             current_state = result
+
+    def _convert_model_interruption_to_resumable(self, state: dict[str, Any]) -> None:
+        summary = dict(state.get("model_response_summary") or {})
+        if str(summary.get("mode") or "") != "http_error":
+            return
+        state["continue_loop"] = False
+        state["termination_reason"] = "interrupted"
+        state["control_state"] = "interrupted"
+        state["interrupt_reason"] = str(summary.get("error") or summary.get("error_type") or "model_interrupted")
+        state["pending_turn"] = self._build_pending_turn(state, stage="interrupted")
+        append_graph_event(
+            state,
+            "model.invocation_interrupted",
+            "runtime",
+            "Model invocation failed and the turn was preserved for resume.",
+            error_type=str(summary.get("error_type") or ""),
+            status_code=summary.get("status_code"),
+            provider=str(summary.get("provider") or ""),
+        )
 
     def _apply_interrupt_state(self, state: dict[str, Any]) -> None:
         reason = self._runtime_control.get_interrupt_reason(str(state["session_id"]))

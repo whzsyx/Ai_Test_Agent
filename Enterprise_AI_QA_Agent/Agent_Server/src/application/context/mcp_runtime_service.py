@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import Settings
+from src.application.resources.session_resource_service import SessionResourceService
 from src.application.runtime.python_playwright_cli import PythonPlaywrightCliRuntime
 from src.registry.mcp import MCPRegistry
+from src.schemas.session_resource import SessionResourceKind
 
 
 class MCPRuntimeService:
@@ -20,12 +22,21 @@ class MCPRuntimeService:
     the playwright-cli command contract.
     """
 
-    def __init__(self, mcp_registry: MCPRegistry, settings: Settings) -> None:
+    def __init__(
+        self,
+        mcp_registry: MCPRegistry,
+        settings: Settings,
+        session_resource_service: SessionResourceService | None = None,
+    ) -> None:
         self._mcp_registry = mcp_registry
         self._settings = settings
+        self._session_resource_service = session_resource_service
         self._artifact_root = Path(__file__).resolve().parents[2] / settings.artifact_root_dir
         self._artifact_root.mkdir(parents=True, exist_ok=True)
         self._playwright_cli = PythonPlaywrightCliRuntime(settings)
+
+    async def close_browser_session(self, session_name: str) -> None:
+        await self._playwright_cli.close_session(session_name)
 
     def list_active_servers(self) -> list[dict[str, Any]]:
         return [server.model_dump() for server in self._mcp_registry.list_enabled()]
@@ -406,6 +417,7 @@ class MCPRuntimeService:
                 cwd=artifact_dir,
                 raw=bool(payload.get("raw", False)),
             )
+            await self._register_browser_resources(context, session_name, args, artifact_dir)
             command_log.append(result)
             transcript_path = self._write_transcript(artifact_dir, command_log)
             return {
@@ -420,6 +432,48 @@ class MCPRuntimeService:
         finally:
             if args[0] in {"close", "delete-data"}:
                 await self._close_playwright_session(session_name, artifact_dir)
+                if self._session_resource_service is not None:
+                    await self._session_resource_service.mark_released(
+                        session_id=str(context.get("session_id") or ""),
+                        kind=SessionResourceKind.browser_session,
+                        resource_key=session_name,
+                        reason=f"browser-control:{args[0]}",
+                    )
+
+    async def _register_browser_resources(
+        self,
+        context: dict[str, Any],
+        session_name: str,
+        args: list[str],
+        artifact_dir: Path,
+    ) -> None:
+        if self._session_resource_service is None or not args:
+            return
+        verb = str(args[0] or "").strip().lower()
+        session_id = str(context.get("session_id") or "").strip()
+        if not session_id or verb in {"close", "close-all", "kill-all", "delete-data"}:
+            return
+        await self._session_resource_service.register(
+            session_id=session_id,
+            kind=SessionResourceKind.browser_session,
+            resource_key=session_name,
+            metadata={
+                "artifact_dir": str(artifact_dir),
+                "last_command": args,
+                "runtime": "python-playwright-cli",
+            },
+        )
+        profile = self._option_value(args, "--profile")
+        if profile or "--persistent" in args:
+            await self._session_resource_service.register(
+                session_id=session_id,
+                kind=SessionResourceKind.browser_profile,
+                resource_key=profile or str(artifact_dir / ".playwright-cli" / session_name / "profile"),
+                metadata={
+                    "browser_session": session_name,
+                    "artifact_dir": str(artifact_dir),
+                },
+            )
 
     async def _execute_browser_action(
         self,
@@ -600,6 +654,16 @@ class MCPRuntimeService:
     def _slug(self, value: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-")
         return slug[:96] or "item"
+
+    @staticmethod
+    def _option_value(args: list[str], name: str) -> str | None:
+        prefix = f"{name}="
+        for index, item in enumerate(args):
+            if item == name and index + 1 < len(args):
+                return args[index + 1]
+            if item.startswith(prefix):
+                return item[len(prefix):]
+        return None
 
     def _parse_json_if_possible(self, text: str) -> Any:
         stripped = text.strip()

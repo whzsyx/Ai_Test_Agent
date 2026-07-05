@@ -144,6 +144,9 @@ class PythonPlaywrightCliRuntime:
         for session_name in list(self._sessions):
             await self._close_session(session_name)
 
+    async def close_session(self, session_name: str) -> None:
+        await self._close_session(session_name)
+
     async def _ensure_session(self, session_name: str, cwd: Path, open_args: list[str]) -> _BrowserSession:
         if session_name in self._sessions:
             return self._sessions[session_name]

@@ -36,6 +36,7 @@ from src.modes.code_review_mode.project_source import (
     resolve_local_project_root,
 )
 from src.application.reporting.report_template_service import ReportTemplateService
+from src.application.resources.session_resource_service import SessionResourceService
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.application.testing.ui_exploration_service import UIExplorationService
@@ -49,6 +50,7 @@ from src.runtime.store import SessionStore
 from src.schemas.agent import ToolDescriptor
 from src.schemas.model_config import ModelConfigRecord
 from src.schemas.tool_runtime import ModelToolCall, ToolExecutionRecord
+from src.schemas.session_resource import SessionResourceKind
 
 CODE_REVIEW_RESULT_CATEGORY_LABELS = {
     "serious_issue": "严重问题",
@@ -77,6 +79,7 @@ class ToolExecutionContext:
     selected_model_key: str = ""
     tool_job_id: str = ""
     tool_key: str = ""
+    call_id: str = ""
 
 
 class ToolRuntimeService:
@@ -94,6 +97,7 @@ class ToolRuntimeService:
         coordinator_runtime_service=None,
         mcp_connection_manager: McpConnectionManager | None = None,
         compatibility_runner_service=None,
+        session_resource_service: SessionResourceService | None = None,
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
         self._settings = settings
@@ -109,6 +113,7 @@ class ToolRuntimeService:
         self._coordinator_runtime_service = coordinator_runtime_service
         self._mcp_connection_manager = mcp_connection_manager
         self._compatibility_runner_service = compatibility_runner_service
+        self._session_resource_service = session_resource_service
         self._model_registry = None
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
         self._report_template_service = ReportTemplateService()
@@ -290,7 +295,7 @@ class ToolRuntimeService:
 
         try:
             job_context = context
-            if not job_context.tool_key:
+            if not job_context.tool_key or not job_context.call_id:
                 job_context = ToolExecutionContext(
                     session_id=context.session_id,
                     turn_id=context.turn_id,
@@ -302,6 +307,7 @@ class ToolRuntimeService:
                     selected_model_key=context.selected_model_key,
                     tool_job_id=context.tool_job_id,
                     tool_key=tool.key,
+                    call_id=call.id,
                 )
             if self._tool_job_service is not None:
                 if context.tool_job_id:
@@ -331,6 +337,7 @@ class ToolRuntimeService:
                     selected_model_key=context.selected_model_key,
                     tool_job_id=job.id,
                     tool_key=tool.key,
+                    call_id=call.id,
                 )
 
             raw_result = await handler(call.arguments, job_context)
@@ -2854,6 +2861,27 @@ class ToolRuntimeService:
 
         payload = result.model_dump()
         payload["status"] = "ok" if result.ok else "error"
+        if action == "start" and result.ok and self._session_resource_service is not None:
+            await self._session_resource_service.register(
+                session_id=context.session_id,
+                kind=SessionResourceKind.docker_container,
+                resource_key=result.container_name,
+                metadata={
+                    "engine": result.engine,
+                    "image": result.image,
+                    "tool_key": context.tool_key or "perf-container-manager",
+                    "call_id": context.call_id,
+                    "tool_job_id": context.tool_job_id,
+                    "turn_id": context.turn_id,
+                },
+            )
+        elif action in {"stop", "destroy"} and result.ok and self._session_resource_service is not None:
+            await self._session_resource_service.mark_released(
+                session_id=context.session_id,
+                kind=SessionResourceKind.docker_container,
+                resource_key=result.container_name,
+                reason=f"perf-container-manager:{action}",
+            )
         return payload
 
     async def _run_api_docs_ingest(
@@ -2964,6 +2992,28 @@ class ToolRuntimeService:
         )
         payload = result.model_dump()
         payload["status"] = "ok" if result.ok else "error"
+        if action == "start" and result.ok and self._session_resource_service is not None:
+            await self._session_resource_service.register(
+                session_id=context.session_id,
+                kind=SessionResourceKind.docker_container,
+                resource_key=result.container_name,
+                metadata={
+                    "engine": "helper",
+                    "image": result.selected_image,
+                    "tool_key": context.tool_key or "mock-target-runner",
+                    "call_id": context.call_id,
+                    "tool_job_id": context.tool_job_id,
+                    "turn_id": context.turn_id,
+                    "port": result.port,
+                },
+            )
+        elif action == "stop" and result.ok and self._session_resource_service is not None:
+            await self._session_resource_service.mark_released(
+                session_id=context.session_id,
+                kind=SessionResourceKind.docker_container,
+                resource_key=result.container_name,
+                reason="mock-target-runner:stop",
+            )
         return payload
 
     async def _run_mock_target_runner(

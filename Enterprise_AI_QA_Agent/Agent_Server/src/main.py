@@ -46,6 +46,7 @@ from src.application.permissions.permission_service import PermissionService
 from src.application.prompting.prompt_assembly_service import PromptAssemblyService
 from src.application.prompting.prompt_service import PromptSubmissionService
 from src.application.registries.registry_service import RegistryService
+from src.application.resources.session_resource_service import SessionResourceService
 from src.application.runtime.runtime_service import RuntimeService
 from src.application.sessions.session_service import SessionService
 from src.application.security.upload_security_service import UploadSecurityService
@@ -68,6 +69,7 @@ from src.registry.models import ModelRegistry
 from src.registry.skills import SkillRegistry
 from src.registry.tools import ToolRegistry
 from src.runtime.postgres_session_store import PostgresSessionStore
+from src.runtime.session_resource_store import PostgresSessionResourceStore
 from src.runtime.control import RuntimeControlRegistry
 from src.runtime.postgres_tool_job_store import PostgresToolJobStore
 
@@ -88,7 +90,15 @@ async def lifespan(app: FastAPI):
     mcp_registry = MCPRegistry()
     mode_registry = ModeRegistry()
     skill_runtime_service = SkillRuntimeService(skill_registry=skill_registry)
-    mcp_runtime_service = MCPRuntimeService(mcp_registry=mcp_registry, settings=settings)
+    session_resource_store = PostgresSessionResourceStore(settings=settings)
+    session_resource_service = SessionResourceService(store=session_resource_store)
+    await session_resource_service.initialize()
+    mcp_runtime_service = MCPRuntimeService(
+        mcp_registry=mcp_registry,
+        settings=settings,
+        session_resource_service=session_resource_service,
+    )
+    session_resource_service.set_browser_cleanup(mcp_runtime_service.close_browser_session)
     artifact_storage_service = ArtifactStorageService(settings=settings)
     upload_security_service = UploadSecurityService(
         settings=settings,
@@ -176,6 +186,7 @@ async def lifespan(app: FastAPI):
         api_docs_service=api_docs_service,
         mcp_connection_manager=mcp_connection_manager,
         compatibility_runner_service=compatibility_runner_service,
+        session_resource_service=session_resource_service,
     )
     graph = build_agent_graph(
         agent_registry=agent_registry,
@@ -199,6 +210,7 @@ async def lifespan(app: FastAPI):
         runtime_control=runtime_control,
         transcript_hygiene_service=transcript_hygiene_service,
         max_iterations=settings.runtime_max_iterations,
+        session_resource_service=session_resource_service,
     )
 
     app.state.settings = settings
@@ -225,6 +237,8 @@ async def lifespan(app: FastAPI):
     app.state.mcp_runtime_manager = mcp_runtime_manager
     app.state.mcp_manager_service = mcp_manager_service
     app.state.memory_store = memory_store
+    app.state.session_resource_store = session_resource_store
+    app.state.session_resource_service = session_resource_service
     app.state.memory_runtime_service = memory_runtime_service
     app.state.session_backend = settings.session_backend
     app.state.tool_job_store = tool_job_store
@@ -254,6 +268,7 @@ async def lifespan(app: FastAPI):
         memory_runtime_service=memory_runtime_service,
         observation_runtime_service=observation_runtime_service,
         transcript_hygiene_service=transcript_hygiene_service,
+        session_resource_service=session_resource_service,
     )
     coordinator_runtime_service = CoordinatorRuntimeService(
         settings=settings,

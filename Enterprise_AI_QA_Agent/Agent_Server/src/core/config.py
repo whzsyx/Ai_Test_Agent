@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     postgres_approval_table: str = "agent_session_approvals"
     postgres_tool_job_table: str = "agent_tool_jobs"
     postgres_tool_artifact_table: str = "agent_tool_artifacts"
+    postgres_session_resource_table: str = "agent_session_resources"
     postgres_mcp_server_table: str = "agent_mcp_servers"
     postgres_vector_dimension: int = 1536
     memgraph_host: str = "127.0.0.1"

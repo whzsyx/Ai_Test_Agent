@@ -10,6 +10,7 @@ from src.application.context.memory_runtime_service import MemoryRuntimeService
 from src.application.context.observation_runtime_service import ObservationRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
 from src.application.runtime.runtime_service import RuntimeService
+from src.application.resources.session_resource_service import SessionResourceService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.application.testing.verification_service import VerificationService
 from src.domain.models import SessionRecord
@@ -54,6 +55,7 @@ class SessionService:
         observation_runtime_service: ObservationRuntimeService | None = None,
         transcript_hygiene_service: TranscriptHygieneService | None = None,
         verification_service: VerificationService | None = None,
+        session_resource_service: SessionResourceService | None = None,
     ) -> None:
         self._store = store
         self._input_orchestrator_service = input_orchestrator_service
@@ -63,6 +65,7 @@ class SessionService:
         self._observation_runtime_service = observation_runtime_service
         self._transcript_hygiene_service = transcript_hygiene_service or TranscriptHygieneService()
         self._verification_service = verification_service or VerificationService()
+        self._session_resource_service = session_resource_service
         self._session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
         self._approval_forward_tasks: dict[str, asyncio.Task[None]] = {}
@@ -467,13 +470,15 @@ class SessionService:
                     user_message_override=str(continuation.state.get("user_message", "")),
                 )
             except Exception as exc:
-                session.status = SessionStatus.failed
+                session.status = SessionStatus.interrupted
                 control = self._ensure_control_metadata(session)
                 control.update(
                     {
-                        "control_state": "failed",
-                        "is_interrupted": False,
-                        "is_resumable": False,
+                        "control_state": "interrupted",
+                        "is_interrupted": True,
+                        "is_resumable": True,
+                        "preserve_resources": True,
+                        "last_interrupt_reason": truncate_text(str(exc), 240),
                         "last_approval_id": approval.id,
                     }
                 )
@@ -483,11 +488,11 @@ class SessionService:
                     session_id,
                     self._make_event(
                         session_id,
-                        "approval.continuation_failed",
+                        "approval.continuation_interrupted",
                         {
                             "approval_id": approval.id,
                             "tool_key": approval.tool_key,
-                            "message": "Approval continuation failed in the background.",
+                            "message": "Approval continuation was interrupted and preserved for resume.",
                             "error": str(exc),
                         },
                     ),
@@ -560,7 +565,6 @@ class SessionService:
         allow_interrupted: bool = False,
     ) -> ConversationResponse:
         session_id = session.id
-        failure_message = "Runtime execution failed before the assistant response was produced."
         superseded_turn_id = ""
 
         if session.status == SessionStatus.interrupted and allow_interrupted:
@@ -756,12 +760,20 @@ class SessionService:
             )
         except Exception as exc:
             session = await self._require_session(session_id)
-            session.status = SessionStatus.failed
+            latest_snapshot = await self._store.get_latest_snapshot(session_id)
+            is_resumable = latest_snapshot is not None and latest_snapshot.stage in {
+                "waiting_approval",
+                "interrupted",
+                "resumable",
+            }
+            session.status = SessionStatus.interrupted
             self._ensure_control_metadata(session).update(
                 {
-                    "control_state": "failed",
-                    "is_interrupted": False,
-                    "is_resumable": False,
+                    "control_state": "interrupted",
+                    "is_interrupted": True,
+                    "is_resumable": is_resumable,
+                    "preserve_resources": True,
+                    "last_interrupt_reason": truncate_text(str(exc), 240),
                 }
             )
             await self._store.save_session(session)
@@ -769,12 +781,13 @@ class SessionService:
                 session_id,
                 self._make_event(
                     session_id,
-                    "turn.failed",
+                    "turn.interrupted",
                     {
                         "turn_id": execution_request.turn_id,
-                        "message": failure_message,
+                        "message": "Runtime execution was interrupted before the assistant response was produced.",
                         "error_type": exc.__class__.__name__,
                         "error": truncate_text(str(exc), 240),
+                        "is_resumable": is_resumable,
                     },
                 ),
             )
@@ -1076,6 +1089,7 @@ class SessionService:
                 "control_state": control_state,
                 "is_interrupted": control_state == "interrupted",
                 "is_resumable": control_state in {"waiting_approval", "interrupted", "resumable"},
+                "preserve_resources": control_state in {"waiting_approval", "interrupted", "resumable"},
                 "replay_available": True,
                 "last_snapshot_stage": runtime_result.snapshot.stage,
                 "last_turn_id": runtime_result.state["turn_id"],
@@ -1218,6 +1232,40 @@ class SessionService:
             session=await self._to_detail(latest_session),
             output=assistant_message,
             events=events[-10:],
+        )
+
+    async def _cleanup_session_resources_if_terminal(self, session: SessionRecord) -> None:
+        if self._session_resource_service is None:
+            return
+        control = self._ensure_control_metadata(session)
+        if bool(control.get("preserve_resources")):
+            return
+        if session.status != SessionStatus.completed:
+            return
+        cleaned = await self._session_resource_service.cleanup_session(
+            session.id,
+            reason=f"session_{session.status.value}",
+        )
+        if not cleaned:
+            return
+        await self._store.append_event(
+            session.id,
+            self._make_event(
+                session.id,
+                "session.resources_cleaned",
+                {
+                    "session_status": session.status.value,
+                    "resource_count": len(cleaned),
+                    "resources": [
+                        {
+                            "kind": item.kind.value,
+                            "resource_key": item.resource_key,
+                            "status": item.status.value,
+                        }
+                        for item in cleaned
+                    ],
+                },
+            ),
         )
 
     async def _forward_proxy_approval_decision(
@@ -1543,7 +1591,7 @@ class SessionService:
     def _session_status_from_runtime_result(self, runtime_result) -> SessionStatus:
         model_response_summary = runtime_result.state.get("model_response_summary", {})
         if str(model_response_summary.get("mode") or "") == "http_error":
-            return SessionStatus.failed
+            return SessionStatus.interrupted
         if runtime_result.state.get("termination_reason") == "interrupted":
             return SessionStatus.interrupted
         if runtime_result.approvals or runtime_result.snapshot.stage == "waiting_approval":
@@ -1553,7 +1601,7 @@ class SessionService:
     def _control_state_from_runtime_result(self, runtime_result) -> str:
         model_response_summary = runtime_result.state.get("model_response_summary", {})
         if str(model_response_summary.get("mode") or "") == "http_error":
-            return "failed"
+            return "interrupted"
         if runtime_result.state.get("termination_reason") == "interrupted":
             return "interrupted"
         if runtime_result.approvals or runtime_result.snapshot.stage == "waiting_approval":
