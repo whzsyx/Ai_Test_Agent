@@ -70,6 +70,9 @@ function isAppFontSize(value: unknown): value is AppFontSize {
 }
 
 function readDesktopPermission(): DesktopNotificationPermission {
+  if (typeof window !== "undefined" && window.qaAgentDesktop?.isDesktop) {
+    return "granted";
+  }
   if (typeof window === "undefined" || !("Notification" in window)) {
     return "unsupported";
   }
@@ -208,6 +211,10 @@ export const useGeneralSettingsStore = defineStore("generalSettings", {
     },
 
     async requestNotificationPermission(): Promise<DesktopNotificationPermission> {
+      if (typeof window !== "undefined" && window.qaAgentDesktop?.isDesktop) {
+        this.notificationPermissionStatus = "granted";
+        return "granted";
+      }
       if (typeof window === "undefined" || !("Notification" in window)) {
         this.notificationPermissionStatus = "unsupported";
         return "unsupported";

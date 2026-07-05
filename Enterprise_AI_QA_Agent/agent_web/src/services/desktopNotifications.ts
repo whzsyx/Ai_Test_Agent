@@ -1,24 +1,27 @@
 /**
- * Desktop Notification Service (Service Worker based).
+ * Desktop notification service.
  *
- * Uses Service Worker's showNotification() for reliable notifications
- * that work even when the tab is in background or minimized.
- *
- * Monitors session events and triggers browser notifications when:
- * - A session completes while the user is away.
- * - An approval is required while the user is away.
- *
- * Respects the user's general settings for notification preferences.
+ * Electron desktop builds use the native main-process Notification API through
+ * the preload bridge. Browser builds keep the Service Worker/Notification API
+ * fallback.
  */
 import { useGeneralSettingsStore } from "../stores/generalSettings";
 
 const notifiedIds = new Set<string>();
 let swRegistration: ServiceWorkerRegistration | null = null;
 
+function hasDesktopBridge(): boolean {
+  return Boolean(window.qaAgentDesktop?.isDesktop && window.qaAgentDesktop.notify);
+}
+
 /**
  * Register the Service Worker. Call once at app startup.
  */
 export async function registerServiceWorker(): Promise<void> {
+  if (hasDesktopBridge()) {
+    return;
+  }
+
   if (!("serviceWorker" in navigator)) {
     console.warn("[Notifications] Service Worker not supported in this browser");
     return;
@@ -31,9 +34,6 @@ export async function registerServiceWorker(): Promise<void> {
   }
 }
 
-/**
- * Get the active SW registration (lazy).
- */
 async function getRegistration(): Promise<ServiceWorkerRegistration | null> {
   if (swRegistration) return swRegistration;
   if (!("serviceWorker" in navigator)) return null;
@@ -45,35 +45,36 @@ async function getRegistration(): Promise<ServiceWorkerRegistration | null> {
   }
 }
 
-/**
- * Determine if the user is "away" from the current session.
- * Away means: tab not visible, OR user is not on the Home page.
- */
 function isUserAway(_sessionId?: string): boolean {
-  // Tab not visible (user switched to another app/tab).
   if (document.visibilityState !== "visible") {
     return true;
   }
-  // User navigated away from the home/chat page within the app.
+
   const path = window.location.pathname || "";
-  if (!path.endsWith("/") && path !== "/" && !path.includes("/home")) {
-    return true;
-  }
-  return false;
+  return !path.endsWith("/") && path !== "/" && !path.includes("/home");
 }
 
-/**
- * Send a desktop notification via Service Worker.
- * Falls back to basic Notification API if SW is not available.
- */
 async function sendNotification(title: string, options?: NotificationOptions): Promise<void> {
+  if (hasDesktopBridge()) {
+    try {
+      await window.qaAgentDesktop?.notify({
+        title,
+        body: typeof options?.body === "string" ? options.body : undefined,
+        tag: options?.tag,
+        silent: options?.silent,
+      });
+    } catch (err) {
+      console.warn("[Notifications] Native desktop notification failed:", err);
+    }
+    return;
+  }
+
   if (!("Notification" in window) || Notification.permission !== "granted") {
     return;
   }
 
   const reg = await getRegistration();
   if (reg) {
-    // Use Service Worker showNotification (works in background).
     try {
       await reg.showNotification(title, {
         icon: "/logo.svg",
@@ -83,11 +84,10 @@ async function sendNotification(title: string, options?: NotificationOptions): P
       } as NotificationOptions);
       return;
     } catch {
-      // Fall through to basic API.
+      // Fall through to the basic Notification API.
     }
   }
 
-  // Fallback: basic Notification API.
   try {
     const notification = new Notification(title, {
       icon: "/logo.svg",
@@ -97,25 +97,14 @@ async function sendNotification(title: string, options?: NotificationOptions): P
       window.focus();
       notification.close();
     };
-    setTimeout(() => notification.close(), 8000);
+    window.setTimeout(() => notification.close(), 8000);
   } catch {
-    // Notification API may fail in some contexts.
+    // Notification API may fail in restricted browser contexts.
   }
 }
 
-/**
- * Check and notify for session completion.
- */
 export function notifySessionComplete(sessionId: string, title?: string): void {
   const settings = useGeneralSettingsStore();
-  console.log("[Notifications] notifySessionComplete called", {
-    sessionId,
-    notifyEnabled: settings.notifySessionCompleteWhenAway,
-    canSend: settings.canSendDesktopNotifications,
-    awayOnly: settings.notificationsAwayOnly,
-    isAway: isUserAway(sessionId),
-    permission: typeof Notification !== "undefined" ? Notification.permission : "N/A",
-  });
 
   if (!settings.notifySessionCompleteWhenAway) return;
   if (!settings.canSendDesktopNotifications) return;
@@ -125,16 +114,12 @@ export function notifySessionComplete(sessionId: string, title?: string): void {
   if (notifiedIds.has(notifyKey)) return;
   notifiedIds.add(notifyKey);
 
-  console.log("[Notifications] Sending notification:", title);
   void sendNotification("会话执行完成", {
     body: title || `会话 ${sessionId.slice(0, 8)} 已完成执行。`,
     tag: notifyKey,
   });
 }
 
-/**
- * Check and notify for pending approval.
- */
 export function notifyApprovalRequired(
   sessionId: string,
   approvalId: string,
@@ -151,15 +136,12 @@ export function notifyApprovalRequired(
 
   void sendNotification("工具审批待处理", {
     body: toolName
-      ? `工具 "${toolName}" 需要审批才能继续执行。`
+      ? `工具 "${toolName}" 需要审批后才能继续执行。`
       : "有工具操作需要您的审批。",
     tag: notifyKey,
   });
 }
 
-/**
- * Clear notification history (e.g., on session switch).
- */
 export function clearNotificationHistory(): void {
   notifiedIds.clear();
 }

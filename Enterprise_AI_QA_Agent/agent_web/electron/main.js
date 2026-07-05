@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, Notification, shell } from "electron";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -11,9 +11,14 @@ const rendererRoot = join(appRoot, "dist");
 const iconPath = join(appRoot, "desktop-assets", process.platform === "win32" ? "logo.ico" : "logo.png");
 const backendOrigin = process.env.QA_AGENT_API_ORIGIN || "http://127.0.0.1:1032";
 const desktopDebugEnabled = !app.isPackaged || process.env.QA_AGENT_DESKTOP_DEBUG === "1";
+const windowsAppUserModelId = app.isPackaged ? "com.enterprise-ai-qa-agent.desktop" : process.execPath;
 
 let mainWindow = null;
 let staticServer = null;
+
+if (process.platform === "win32") {
+  app.setAppUserModelId(windowsAppUserModelId);
+}
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -139,6 +144,53 @@ function toggleDetachedDevTools(webContents) {
   webContents.openDevTools({ mode: "detach", activate: true });
 }
 
+function normalizeNotificationPayload(payload) {
+  const record = payload && typeof payload === "object" ? payload : {};
+  const title = typeof record.title === "string" ? record.title.trim().slice(0, 120) : "";
+  const body = typeof record.body === "string" ? record.body.trim().slice(0, 500) : "";
+  const tag = typeof record.tag === "string" ? record.tag.trim().slice(0, 120) : undefined;
+
+  if (!title) {
+    return null;
+  }
+
+  return {
+    title,
+    body,
+    tag,
+    silent: Boolean(record.silent),
+  };
+}
+
+function focusMainWindow() {
+  if (!mainWindow) {
+    return;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function registerDesktopIpc() {
+  ipcMain.handle("desktop:notify", (_event, payload) => {
+    const normalized = normalizeNotificationPayload(payload);
+    if (!normalized || !Notification.isSupported()) {
+      return false;
+    }
+
+    const notification = new Notification({
+      ...normalized,
+      icon: existsSync(iconPath) ? iconPath : undefined,
+    });
+    notification.on("click", focusMainWindow);
+    notification.show();
+    return true;
+  });
+}
+
 async function createMainWindow() {
   Menu.setApplicationMenu(null);
 
@@ -155,6 +207,7 @@ async function createMainWindow() {
       contextIsolation: true,
       devTools: true,
       nodeIntegration: false,
+      preload: join(__dirname, "preload.cjs"),
       sandbox: true,
     },
   });
@@ -186,7 +239,10 @@ async function createMainWindow() {
   });
 }
 
-app.whenReady().then(createMainWindow);
+app.whenReady().then(() => {
+  registerDesktopIpc();
+  return createMainWindow();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
