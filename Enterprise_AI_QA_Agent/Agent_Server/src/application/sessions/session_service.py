@@ -377,6 +377,17 @@ class SessionService:
                 ),
             )
             if proxy_child_session_id and proxy_child_approval_id:
+                proxy_execution_status = (
+                    SessionStatus.running.value
+                    if payload.decision == ToolApprovalStatus.approved
+                    else ToolApprovalStatus.denied.value
+                )
+                await self._mark_proxy_worker_decision_applied(
+                    session=session,
+                    approval=approval,
+                    child_session_id=proxy_child_session_id,
+                    execution_status=proxy_execution_status,
+                )
                 task = asyncio.create_task(
                     self._forward_proxy_approval_decision(
                         parent_session_id=session_id,
@@ -1234,6 +1245,113 @@ class SessionService:
                     },
                 ),
             )
+
+    async def _mark_proxy_worker_decision_applied(
+        self,
+        *,
+        session: SessionRecord,
+        approval: ToolApprovalRequest,
+        child_session_id: str,
+        execution_status: str,
+    ) -> None:
+        metadata = approval.metadata if isinstance(approval.metadata, dict) else {}
+        task_id = str(metadata.get("proxy_task_id") or "").strip()
+        worker_agent_key = str(metadata.get("proxy_worker_agent_key") or "").strip()
+        parent_turn_id = str(metadata.get("proxy_parent_turn_id") or "").strip()
+        is_approved = approval.status == ToolApprovalStatus.approved
+
+        changed = False
+        worker_dispatches: list[dict] = []
+        for record in session.metadata.get("worker_dispatches", []):
+            if not isinstance(record, dict):
+                continue
+            record_task_id = str(record.get("task_id") or "").strip()
+            record_child_session_id = str(record.get("child_session_id") or "").strip()
+            if (task_id and record_task_id == task_id) or (child_session_id and record_child_session_id == child_session_id):
+                next_record = {
+                    **record,
+                    "status": execution_status,
+                    "child_session_id": child_session_id or record_child_session_id,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+                worker_dispatches.append(next_record)
+                changed = True
+            else:
+                worker_dispatches.append(record)
+
+        if not changed and task_id:
+            worker_dispatches.append(
+                {
+                    "task_id": task_id,
+                    "child_session_id": child_session_id,
+                    "agent_key": worker_agent_key,
+                    "description": str(metadata.get("tool_name") or metadata.get("tool_key") or "Worker"),
+                    "status": execution_status,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            )
+            changed = True
+
+        if changed:
+            session.metadata["worker_dispatches"] = worker_dispatches
+
+        pending_approvals = [
+            item for item in await self._store.list_approvals(session.id)
+            if item.status == ToolApprovalStatus.pending
+        ]
+        if not pending_approvals and session.status == SessionStatus.waiting_approval:
+            session.status = SessionStatus.running
+            control = self._ensure_control_metadata(session)
+            control.update(
+                {
+                    "control_state": "running",
+                    "is_interrupted": False,
+                    "is_resumable": False,
+                    "last_approval_id": approval.id,
+                }
+            )
+            session.metadata["control"] = control
+
+        session.updated_at = datetime.utcnow()
+        await self._store.save_session(session)
+        await self._store.append_event(
+            session.id,
+            self._make_event(
+                session.id,
+                "worker.task_notification_received",
+                {
+                    "turn_id": parent_turn_id,
+                    "task_id": task_id,
+                    "child_session_id": child_session_id,
+                    "worker_agent_key": worker_agent_key,
+                    "worker_status": execution_status,
+                    "source": "proxy_approval_forwarder",
+                },
+            ),
+        )
+        event_type = "tool.execution_started" if is_approved else "tool.execution_denied"
+        summary = (
+            f"Approved tool '{approval.tool_name}' is now executing."
+            if is_approved
+            else f"Approval denied for tool '{approval.tool_name}'."
+        )
+        await self._store.append_event(
+            session.id,
+            self._make_event(
+                session.id,
+                event_type,
+                {
+                    "turn_id": parent_turn_id,
+                    "approval_id": approval.id,
+                    "tool_key": approval.tool_key,
+                    "tool_name": approval.tool_name,
+                    "child_session_id": child_session_id,
+                    "status": execution_status,
+                    "summary": summary,
+                    "source": "proxy_approval_forwarder",
+                },
+            ),
+        )
 
     async def _require_session(self, session_id: str) -> SessionRecord:
         session = await self._store.get_session(session_id)

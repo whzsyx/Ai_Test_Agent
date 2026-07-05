@@ -1427,7 +1427,14 @@ class ApiDocsService:
             return fetched
 
         last_error: Exception | None = None
-        for candidate_url in candidate_urls:
+        checked_urls: set[str] = set()
+        index = 0
+        while index < len(candidate_urls):
+            candidate_url = candidate_urls[index]
+            index += 1
+            if candidate_url in checked_urls:
+                continue
+            checked_urls.add(candidate_url)
             try:
                 candidate = await self._fetch_remote_document(url=candidate_url, headers=headers, auth=auth)
             except Exception as exc:
@@ -1439,6 +1446,16 @@ class ApiDocsService:
                 metadata["discovery_mode"] = "swagger_ui_html"
                 candidate["metadata"] = metadata
                 return candidate
+            for nested_url in self._discover_openapi_candidate_urls_from_payload(candidate):
+                self._append_unique_url(candidate_urls, nested_url)
+            if self._looks_like_discovery_text_document(candidate):
+                candidate_text = self._decode_text(candidate.get("content", b""))
+                for nested_url in self._discover_openapi_candidate_urls(
+                    original_url=original_url,
+                    final_url=str(candidate.get("final_url") or candidate_url),
+                    html=candidate_text,
+                ):
+                    self._append_unique_url(candidate_urls, nested_url)
 
         if last_error is not None:
             raise ValueError(
@@ -1455,9 +1472,10 @@ class ApiDocsService:
         base_url = final_url or original_url
 
         for pattern in (
-            r"""(?:url|spec-url)\s*[:=]\s*["']([^"']+(?:openapi|swagger)[^"']*)["']""",
-            r"""["']url["']\s*:\s*["']([^"']+(?:openapi|swagger)[^"']*)["']""",
-            r"""href=["']([^"']+(?:openapi|swagger)[^"']*)["']""",
+            r"""(?:url|urls|spec-url|specUrl|configUrl|config-url)\s*[:=]\s*["']([^"']+)["']""",
+            r"""["'](?:url|spec-url|specUrl|configUrl|config-url)["']\s*:\s*["']([^"']+)["']""",
+            r"""href=["']([^"']+(?:openapi|swagger|api-docs)[^"']*)["']""",
+            r"""src=["']([^"']+(?:swagger|redoc|api-docs)[^"']*)["']""",
         ):
             for match in re.finditer(pattern, html, flags=re.IGNORECASE):
                 self._append_unique_url(candidates, urljoin(base_url, match.group(1)))
@@ -1465,20 +1483,73 @@ class ApiDocsService:
         parsed = urlparse(base_url)
         normalized_path = parsed.path.rstrip("/")
         conventional_paths = []
-        if normalized_path.lower().endswith(("/docs", "/redoc", "/swagger", "/swagger-ui")):
-            parent = normalized_path.rsplit("/", 1)[0]
-            conventional_paths.extend(
-                [
-                    f"{parent}/openapi.json" if parent else "/openapi.json",
-                    f"{parent}/swagger.json" if parent else "/swagger.json",
-                    "/openapi.json",
-                    "/swagger.json",
-                ]
-            )
-        conventional_paths.extend(["/openapi.json", "/swagger.json"])
+        path_lower = normalized_path.lower()
+        ui_markers = ("/docs", "/redoc", "/swagger", "/swagger-ui", "/swagger-ui/index.html", "/doc.html", "/api-docs")
+        if any(marker in path_lower for marker in ui_markers):
+            parent = normalized_path
+            for marker in ("/swagger-ui/index.html", "/swagger-ui", "/redoc", "/docs", "/swagger", "/doc.html"):
+                marker_index = path_lower.find(marker)
+                if marker_index >= 0:
+                    parent = normalized_path[:marker_index]
+                    break
+            parent = parent.rstrip("/")
+            conventional_paths.extend(self._openapi_conventional_paths(parent))
+        conventional_paths.extend(self._openapi_conventional_paths(""))
         origin = f"{parsed.scheme}://{parsed.netloc}"
         for path in conventional_paths:
             self._append_unique_url(candidates, urljoin(f"{origin}/", path.lstrip("/")))
+        return candidates
+
+    def _openapi_conventional_paths(self, prefix: str) -> list[str]:
+        prefix = prefix.rstrip("/")
+        paths = [
+            "/openapi.json",
+            "/swagger.json",
+            "/openapi.yaml",
+            "/swagger.yaml",
+            "/v3/api-docs",
+            "/v3/api-docs/swagger-config",
+            "/v2/api-docs",
+            "/api-docs",
+            "/swagger/v1/swagger.json",
+            "/swagger/v2/swagger.json",
+            "/api/openapi.json",
+            "/api/swagger.json",
+            "/api/v3/api-docs",
+            "/api/v3/api-docs/swagger-config",
+            "/api/v2/api-docs",
+        ]
+        if not prefix:
+            return paths
+        return [f"{prefix}{path}" for path in paths] + paths
+
+    def _discover_openapi_candidate_urls_from_payload(self, fetched: dict[str, Any]) -> list[str]:
+        text = self._decode_text(fetched.get("content", b""))
+        if not text:
+            return []
+        stripped = text.lstrip()
+        if not stripped.startswith("{"):
+            return []
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return []
+        if not isinstance(payload, dict):
+            return []
+
+        base_url = str(fetched.get("final_url") or "")
+        candidates: list[str] = []
+        for key in ("url", "configUrl", "specUrl", "spec-url"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                self._append_unique_url(candidates, urljoin(base_url, value))
+        urls = payload.get("urls")
+        if isinstance(urls, list):
+            for item in urls:
+                if isinstance(item, dict) and isinstance(item.get("url"), str):
+                    self._append_unique_url(candidates, urljoin(base_url, item["url"]))
+                elif isinstance(item, str):
+                    self._append_unique_url(candidates, urljoin(base_url, item))
         return candidates
 
     def _append_unique_url(self, items: list[str], value: str) -> None:
@@ -1526,6 +1597,22 @@ class ApiDocsService:
             or "<html" in lowered
             or "swagger-ui" in lowered
             or "redoc" in lowered
+        )
+
+    def _looks_like_discovery_text_document(self, fetched: dict[str, Any]) -> bool:
+        content_type = str(fetched.get("content_type") or "").split(";", 1)[0].strip().lower()
+        final_url = str(fetched.get("final_url") or "")
+        suffix = Path(urlparse(final_url).path).suffix.lower()
+        content = fetched.get("content", b"")
+        text = self._decode_text(content[:100_000] if isinstance(content, bytes) else content)
+        lowered = text[:5000].lower()
+        return (
+            content_type in {"text/html", "application/javascript", "text/javascript", "application/x-javascript"}
+            or suffix in {".html", ".htm", ".js"}
+            or "swaggeruibundle" in lowered
+            or "swagger-ui" in lowered
+            or "redoc.init" in lowered
+            or "<redoc" in lowered
         )
 
     def _decode_text(self, content: Any) -> str:

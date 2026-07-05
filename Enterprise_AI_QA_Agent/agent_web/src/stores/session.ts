@@ -191,6 +191,8 @@ function createOptimisticAssistantMessage() {
 const WATCHER_INTERVAL_MS = 5000;
 const EVENT_REFRESH_DEBOUNCE_MS = 220;
 const TOOLING_REFRESH_MIN_INTERVAL_MS = 10000;
+const EVENT_RECONNECT_DELAY_MS = 1500;
+const RECEIVED_EVENT_ID_LIMIT = 5000;
 
 function mergeSessionMessages(
   serverMessages: ChatMessage[],
@@ -201,6 +203,11 @@ function mergeSessionMessages(
   const serverToolCallIds = new Set(
     serverMessages
       .map((message) => toolMessageCallId(message))
+      .filter((value) => Boolean(value)),
+  );
+  const serverApprovalIds = new Set(
+    serverMessages
+      .map((message) => String(message.metadata?.approval_id || "").trim())
       .filter((value) => Boolean(value)),
   );
   const serverToolKeys = new Set(
@@ -214,8 +221,7 @@ function mergeSessionMessages(
     sessionStatus === "running" ||
     sessionStatus === "waiting_approval" ||
     sessionStatus === "interrupted" ||
-    hasStreamingAssistantMessage(localMessages) ||
-    localMessages.some((message) => isTransientToolMessage(message));
+    hasStreamingAssistantMessage(localMessages);
 
   const merged = serverMessages.map((serverMessage) => {
     const localMessage = localById.get(serverMessage.id);
@@ -261,6 +267,10 @@ function mergeSessionMessages(
     if (callId && serverToolCallIds.has(callId)) {
       return false;
     }
+    const approvalId = String(message.metadata?.approval_id || "").trim();
+    if (approvalId && serverApprovalIds.has(approvalId)) {
+      return false;
+    }
     const toolKey = toolMessageKey(message);
     if (!callId && toolKey && serverToolKeys.has(toolKey)) {
       return false;
@@ -274,12 +284,23 @@ function mergeSessionMessages(
 function findToolMessageIndex(messages: ChatMessage[], event: ExecutionEvent) {
   const eventCallId = String(event.payload?.call_id || "").trim();
   const eventToolKey = String(event.payload?.tool_key || "").trim();
+  const eventApprovalId = String(event.payload?.approval_id || "").trim();
   if (eventCallId) {
     const byCallId = messages.findIndex(
       (message) => isTransientToolMessage(message) && toolMessageCallId(message) === eventCallId,
     );
     if (byCallId >= 0) {
       return byCallId;
+    }
+  }
+  if (eventApprovalId) {
+    const byApprovalId = messages.findIndex(
+      (message) =>
+        isTransientToolMessage(message) &&
+        String(message.metadata?.approval_id || "").trim() === eventApprovalId,
+    );
+    if (byApprovalId >= 0) {
+      return byApprovalId;
     }
   }
   if (!eventToolKey) {
@@ -333,6 +354,37 @@ function createTransientToolMessage(event: ExecutionEvent, status: string, summa
   };
 }
 
+function updateTransientToolMessageStatus(message: ChatMessage, status: string, summary: string): ChatMessage {
+  let payload: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(message.content || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      payload = parsed as Record<string, unknown>;
+    }
+  } catch {
+    payload = {};
+  }
+
+  return {
+    ...message,
+    content: JSON.stringify(
+      {
+        ...payload,
+        status,
+        summary,
+      },
+      null,
+      2,
+    ),
+    metadata: {
+      ...message.metadata,
+      delivery_status: status === "running" ? "streaming" : "completed",
+      tool_progress_status: status,
+      tool_progress_finalized: status === "running" ? "false" : "true",
+    },
+  };
+}
+
 export const useSessionStore = defineStore("session", {
   state: () => ({
     session: null as SessionDetail | null,
@@ -364,6 +416,10 @@ export const useSessionStore = defineStore("session", {
     selectedToolJob: null as ToolJobDetail | null,
     error: "",
     eventSource: null as EventSource | null,
+    eventStreamSessionId: "",
+    eventReconnectTimer: null as number | null,
+    eventCursorBySession: {} as Record<string, string>,
+    receivedEventIds: [] as string[],
   }),
   getters: {
     activeAgent(state) {
@@ -583,12 +639,33 @@ export const useSessionStore = defineStore("session", {
       }
       this.selectedModeKey = sessionModeKey || this.selectedModeKey;
     },
-    connectEvents() {
+    connectEvents(force = false) {
       if (!this.session) {
         return;
       }
+      const sessionId = this.session.id;
+      if (
+        !force &&
+        this.eventSource &&
+        this.eventStreamSessionId === sessionId &&
+        this.eventSource.readyState !== EventSource.CLOSED
+      ) {
+        return;
+      }
+      if (this.eventReconnectTimer !== null) {
+        window.clearTimeout(this.eventReconnectTimer);
+        this.eventReconnectTimer = null;
+      }
       this.eventSource?.close();
-      this.eventSource = api.connectEvents(this.session.id, (event) => {
+      this.eventStreamSessionId = sessionId;
+      const lastEventId = this.eventCursorBySession[sessionId] || "";
+      const source = api.connectEvents(sessionId, (event) => {
+        if (this.session?.id !== sessionId) {
+          return;
+        }
+        if (!this.rememberIncomingEvent(event)) {
+          return;
+        }
         this.activity = [event, ...this.activity].slice(0, 50);
         this.applyStreamingEvent(event);
         // Debug: log all SSE events for notification troubleshooting
@@ -633,10 +710,72 @@ export const useSessionStore = defineStore("session", {
         ) {
           this.scheduleRefresh(false);
         }
-      });
-      this.eventSource.onerror = () => {
-        this.error = "事件流已断开，请刷新会话后重新连接。";
+      }, lastEventId);
+      source.onopen = () => {
+        if (this.session?.id !== sessionId || this.eventSource !== source) {
+          return;
+        }
+        if (this.error === "事件流已断开，正在尝试重新连接。") {
+          this.error = "";
+        }
       };
+      source.onerror = () => {
+        if (this.eventSource !== source) {
+          return;
+        }
+        source.close();
+        this.eventSource = null;
+        this.error = "事件流已断开，正在尝试重新连接。";
+        this.scheduleEventReconnect(sessionId);
+      };
+      this.eventSource = source;
+    },
+    scheduleEventReconnect(sessionId = this.session?.id || "") {
+      if (!sessionId || this.eventReconnectTimer !== null) {
+        return;
+      }
+      this.eventReconnectTimer = window.setTimeout(() => {
+        this.eventReconnectTimer = null;
+        if (this.session?.id === sessionId) {
+          this.connectEvents(true);
+        }
+      }, EVENT_RECONNECT_DELAY_MS);
+    },
+    ensureEventStreamConnected() {
+      if (!this.session) {
+        return;
+      }
+      if (
+        !this.eventSource ||
+        this.eventStreamSessionId !== this.session.id ||
+        this.eventSource.readyState === EventSource.CLOSED
+      ) {
+        this.connectEvents(true);
+      }
+    },
+    rememberIncomingEvent(event: ExecutionEvent) {
+      const eventId = String(event.id || "").trim();
+      if (!eventId) {
+        return true;
+      }
+      if (this.receivedEventIds.includes(eventId)) {
+        return false;
+      }
+      this.receivedEventIds = [...this.receivedEventIds, eventId].slice(-RECEIVED_EVENT_ID_LIMIT);
+      this.eventCursorBySession = {
+        ...this.eventCursorBySession,
+        [event.session_id]: eventId,
+      };
+      return true;
+    },
+    disconnectEvents() {
+      if (this.eventReconnectTimer !== null) {
+        window.clearTimeout(this.eventReconnectTimer);
+        this.eventReconnectTimer = null;
+      }
+      this.eventSource?.close();
+      this.eventSource = null;
+      this.eventStreamSessionId = "";
     },
     scheduleRefresh(includeTooling = false, delayMs = EVENT_REFRESH_DEBOUNCE_MS) {
       if (!this.session) {
@@ -758,6 +897,7 @@ export const useSessionStore = defineStore("session", {
       this.messages = [...this.messages, optimisticMessage, optimisticAssistantMessage];
       this.isSending = true;
       this.error = "";
+      this.ensureEventStreamConnected();
       try {
         const response = await api.sendMessage(
           this.session.id,
@@ -804,6 +944,18 @@ export const useSessionStore = defineStore("session", {
         if (this.session) {
           this.session.pending_approvals = this.session.pending_approvals.filter((item) => item.id !== approvalId);
         }
+        const nextStatus = decision === "approved" ? "running" : "denied";
+        const nextSummary =
+          decision === "approved"
+            ? "Approval granted. Tool execution is running."
+            : "Approval denied. Tool execution was skipped.";
+        this.messages = this.messages.map((message) => {
+          const messageApprovalId = String(message.metadata?.approval_id || "").trim();
+          if (!isTransientToolMessage(message) || messageApprovalId !== approvalId) {
+            return message;
+          }
+          return updateTransientToolMessageStatus(message, nextStatus, nextSummary);
+        });
         this.scheduleRefresh(true, 120);
       } catch (error) {
         this.error = error instanceof Error ? error.message : "Failed to resolve approval.";
