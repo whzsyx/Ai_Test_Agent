@@ -102,6 +102,13 @@ function startStaticServer() {
 
   staticServer = createServer((request, response) => {
     const requestUrl = request.url || "/";
+    const requestPath = new URL(requestUrl, "http://desktop.local").pathname;
+    if (requestPath === "/docs/home" || requestPath === "/docs/home.html") {
+      response.writeHead(302, { location: "/home" });
+      response.end();
+      return;
+    }
+
     if (requestUrl.startsWith("/api/")) {
       proxyApiRequest(request, response);
       return;
