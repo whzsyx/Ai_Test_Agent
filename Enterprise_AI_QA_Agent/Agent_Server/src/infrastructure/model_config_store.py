@@ -3,14 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 import json
 
-import pymysql
-
 from src.application.model_adapters.provider_profiles import (
     normalize_provider,
     normalize_transport,
     resolve_provider_profile,
 )
 from src.core.config import Settings
+from src.infrastructure.sqlalchemy_runtime import mysql_raw_connection
 from src.schemas.model_config import (
     ModelCapabilitiesOverride,
     ModelConfigPublic,
@@ -489,16 +488,7 @@ class MySQLModelConfigStore:
         )
 
     def _connect(self):
-        return pymysql.connect(
-            host=self._settings.mysql_host,
-            port=self._settings.mysql_port,
-            user=self._settings.mysql_user,
-            password=self._settings.mysql_password,
-            database=self._settings.mysql_database,
-            charset=self._settings.mysql_charset,
-            cursorclass=pymysql.cursors.DictCursor,
-            autocommit=False,
-        )
+        return mysql_raw_connection(self._settings)
 
     def _row_to_record(self, row: dict) -> ModelConfigRecord:
         provider = normalize_provider(row["provider"] or "")

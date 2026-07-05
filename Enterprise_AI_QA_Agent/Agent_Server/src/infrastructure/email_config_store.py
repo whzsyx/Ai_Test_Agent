@@ -3,9 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 import json
 
-import pymysql
-
 from src.core.config import Settings
+from src.infrastructure.sqlalchemy_runtime import mysql_raw_connection
 from src.schemas.email_config import (
     EmailConfigCreateRequest,
     EmailConfigPublic,
@@ -474,16 +473,7 @@ class MySQLEmailConfigStore:
         )
 
     def _connect(self):
-        return pymysql.connect(
-            host=self._settings.mysql_host,
-            port=self._settings.mysql_port,
-            user=self._settings.mysql_user,
-            password=self._settings.mysql_password,
-            database=self._settings.mysql_database,
-            charset=self._settings.mysql_charset,
-            cursorclass=pymysql.cursors.DictCursor,
-            autocommit=False,
-        )
+        return mysql_raw_connection(self._settings)
 
 
 def _clean_str(value):
