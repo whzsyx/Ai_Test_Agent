@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -63,6 +64,7 @@ class ChatMessage(BaseModel):
 
 
 class ExecutionEvent(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
     type: str
     session_id: str
     timestamp: datetime

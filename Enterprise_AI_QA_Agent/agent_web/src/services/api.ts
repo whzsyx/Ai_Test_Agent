@@ -657,10 +657,18 @@ export const api = {
   listVerifications(sessionId: string): Promise<SessionVerificationResponse> {
     return request(`/api/v1/sessions/${sessionId}/verifications`);
   },
-  connectEvents(sessionId: string, onEvent: (event: ExecutionEvent) => void): EventSource {
-    const source = new EventSource(`/api/v1/sessions/${sessionId}/events`);
+  connectEvents(sessionId: string, onEvent: (event: ExecutionEvent) => void, lastEventId = ""): EventSource {
+    const query = new URLSearchParams();
+    if (lastEventId) {
+      query.set("last_event_id", lastEventId);
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const source = new EventSource(`/api/v1/sessions/${sessionId}/events${suffix}`);
     source.onmessage = (message) => {
       const payload = JSON.parse(message.data) as ExecutionEvent;
+      if (!payload.id && message.lastEventId) {
+        payload.id = message.lastEventId;
+      }
       onEvent(payload);
     };
     return source;

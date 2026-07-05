@@ -567,6 +567,7 @@ export type SessionWatcherPhase =
   | "completed";
 
 export interface ExecutionEvent {
+  id?: string;
   type: string;
   session_id: string;
   timestamp: string;

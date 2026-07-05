@@ -154,7 +154,7 @@ onBeforeUnmount(() => {
     healthPollTimer = null;
   }
   sessionStore.stopWatcher();
-  sessionStore.eventSource?.close();
+  sessionStore.disconnectEvents();
 });
 </script>
 

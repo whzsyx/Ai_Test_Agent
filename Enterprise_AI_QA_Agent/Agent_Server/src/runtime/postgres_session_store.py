@@ -4,7 +4,6 @@ import asyncio
 import json
 from collections import defaultdict
 from datetime import datetime
-from uuid import uuid4
 
 from src.core.config import Settings
 from src.domain.models import SessionRecord
@@ -333,7 +332,7 @@ class PostgresSessionStore:
                     ) VALUES (%s, %s, %s, %s, %s::jsonb)
                     """,
                     (
-                        str(uuid4()),
+                        event.id,
                         session_id,
                         event.type,
                         event.timestamp,
@@ -364,6 +363,7 @@ class PostgresSessionStore:
                 rows = cur.fetchall() or []
         return [
             ExecutionEvent(
+                id=str(row["id"]),
                 type=row["type"],
                 session_id=session_id,
                 timestamp=ensure_utc_datetime(row["timestamp"]) or datetime.utcnow(),

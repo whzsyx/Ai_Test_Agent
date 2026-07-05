@@ -5,5 +5,7 @@ from src.schemas.session import ExecutionEvent
 
 
 def format_sse(event: ExecutionEvent) -> str:
-    return f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+    event_id = str(event.id or "").replace("\r", "").replace("\n", "")
+    payload = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
+    return f"id: {event_id}\ndata: {payload}\n\n"
 

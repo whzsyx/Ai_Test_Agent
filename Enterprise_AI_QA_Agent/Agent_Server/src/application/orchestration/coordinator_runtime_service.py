@@ -610,6 +610,10 @@ class CoordinatorRuntimeService:
                 metadata=metadata,
             )
             previous_status = proxy.status if proxy is not None else None
+
+            if proxy is not None and proxy.status != ToolApprovalStatus.pending:
+                continue
+
             await self._store.save_approval(parent_session_id, mirrored)
             if proxy is None and mirrored.status == ToolApprovalStatus.pending:
                 await self._store.append_event(

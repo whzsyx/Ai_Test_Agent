@@ -204,8 +204,24 @@ async def stream_events(session_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
     queue = request.app.state.session_service.get_event_queue(session_id)
+    last_event_id = (
+        request.headers.get("last-event-id")
+        or request.query_params.get("last_event_id")
+        or request.query_params.get("Last-Event-ID")
+        or ""
+    ).strip()
 
     async def event_generator():
+        if last_event_id:
+            events = await request.app.state.session_service.list_events(session_id)
+            should_replay = False
+            for event in events:
+                if should_replay:
+                    yield format_sse(event)
+                    continue
+                if str(event.id) == last_event_id:
+                    should_replay = True
+
         while True:
             if await request.is_disconnected():
                 break
