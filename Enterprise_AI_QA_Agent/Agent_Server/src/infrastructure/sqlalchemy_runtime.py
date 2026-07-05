@@ -135,6 +135,8 @@ class SQLAlchemyCursor:
     def __init__(self, connection) -> None:
         self._connection = connection
         self._result = None
+        self._rows: list[Any] = []
+        self._row_index = 0
         self.lastrowid: int | None = None
         self.rowcount: int = -1
 
@@ -145,6 +147,7 @@ class SQLAlchemyCursor:
         self.close()
 
     def execute(self, statement: str, parameters: Any = None) -> SQLAlchemyCursor:
+        self.close()
         if parameters is None:
             result = self._connection.exec_driver_sql(statement)
         else:
@@ -153,35 +156,42 @@ class SQLAlchemyCursor:
         return self
 
     def executemany(self, statement: str, seq_of_parameters: Any) -> SQLAlchemyCursor:
+        self.close()
         result = self._connection.exec_driver_sql(statement, seq_of_parameters)
         self._set_result(result)
         return self
 
     def fetchone(self):
-        if self._result is None:
+        if self._row_index >= len(self._rows):
             return None
-        try:
-            return self._result.mappings().fetchone()
-        except ResourceClosedError:
-            return None
+        row = self._rows[self._row_index]
+        self._row_index += 1
+        return row
 
     def fetchall(self):
-        if self._result is None:
-            return []
-        try:
-            return self._result.mappings().fetchall()
-        except ResourceClosedError:
-            return []
+        rows = self._rows[self._row_index :]
+        self._row_index = len(self._rows)
+        return rows
 
     def close(self) -> None:
         if self._result is not None:
             self._result.close()
             self._result = None
+        self._rows = []
+        self._row_index = 0
 
     def _set_result(self, result) -> None:
         self._result = result
+        self._row_index = 0
+        try:
+            self._rows = list(result.mappings().all()) if result.returns_rows else []
+        except Exception:
+            self._rows = []
         self.rowcount = result.rowcount
-        self.lastrowid = getattr(result, "lastrowid", None)
+        try:
+            self.lastrowid = getattr(result, "lastrowid", None)
+        except Exception:
+            self.lastrowid = None
 
 
 def dispose_sqlalchemy_engines(database: DatabaseKind | None = None) -> None:
