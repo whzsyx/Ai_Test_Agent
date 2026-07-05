@@ -151,7 +151,7 @@ class SQLAlchemyCursor:
         if parameters is None:
             result = self._connection.exec_driver_sql(statement)
         else:
-            result = self._connection.exec_driver_sql(statement, parameters)
+            result = self._connection.exec_driver_sql(statement, _normalize_execute_parameters(parameters))
         self._set_result(result)
         return self
 
@@ -261,6 +261,12 @@ def _cursor_connection(engine: Engine) -> Iterator[SQLAlchemyCursorConnection]:
         raise
     finally:
         conn.close()
+
+
+def _normalize_execute_parameters(parameters: Any) -> Any:
+    if isinstance(parameters, list):
+        return tuple(parameters)
+    return parameters
 
 
 def _mysql_engine_key(settings: Settings) -> tuple[Any, ...]:
