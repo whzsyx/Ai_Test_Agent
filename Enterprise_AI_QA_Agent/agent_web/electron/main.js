@@ -130,6 +130,15 @@ function startStaticServer() {
   });
 }
 
+function toggleDetachedDevTools(webContents) {
+  if (webContents.isDevToolsOpened()) {
+    webContents.closeDevTools();
+    return;
+  }
+
+  webContents.openDevTools({ mode: "detach", activate: true });
+}
+
 async function createMainWindow() {
   Menu.setApplicationMenu(null);
 
@@ -161,14 +170,14 @@ async function createMainWindow() {
   mainWindow.webContents.on("before-input-event", (event, input) => {
     const key = input.key.toLowerCase();
     if (desktopDebugEnabled && (input.key === "F12" || (input.control && input.shift && key === "i"))) {
-      mainWindow.webContents.toggleDevTools();
+      toggleDetachedDevTools(mainWindow.webContents);
       event.preventDefault();
     }
   });
 
   if (desktopDebugEnabled) {
     mainWindow.webContents.once("did-finish-load", () => {
-      mainWindow.webContents.openDevTools();
+      mainWindow.webContents.openDevTools({ mode: "detach", activate: true });
     });
   }
 
