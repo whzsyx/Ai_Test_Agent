@@ -8,6 +8,7 @@ declare const process: { env: Record<string, string | undefined> }
 const APP_HOME_URL = process.env.DOCS_APP_URL ?? 'http://localhost:5175/home'
 
 export default withMermaid(defineConfig({
+  base: process.env.DOCS_BASE ?? '/',
   title: "御策天检 Docs",
   description: "Enterprise AI QA Agent 文档",
   head: [

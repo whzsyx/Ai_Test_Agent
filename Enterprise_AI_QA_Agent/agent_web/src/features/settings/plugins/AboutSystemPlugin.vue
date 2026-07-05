@@ -8,7 +8,9 @@ defineProps<{
 
 const repoUrl = "https://github.com/eighteendreamer/Ai_Test_Agent";
 const issuesUrl = `${repoUrl}/issues`;
-const docsUrl = "http://localhost:5173/";
+const isDesktopBuild = import.meta.env.VITE_QA_AGENT_DESKTOP === "1";
+const docsUrl = isDesktopBuild ? "/docs/" : "http://localhost:5173/";
+const docsTarget = isDesktopBuild ? "_self" : "_blank";
 
 const stackItems = [
   {
@@ -91,7 +93,7 @@ const infoCards = [
           <i class="fa-solid fa-bug"></i>
           <span>{{ t("about.feedback") }}</span>
         </a>
-        <a class="action-btn" :href="docsUrl" target="_blank" rel="noreferrer">
+        <a class="action-btn" :href="docsUrl" :target="docsTarget" rel="noreferrer">
           <i class="fa-solid fa-book-open"></i>
           <span>{{ t("about.read_docs") }}</span>
         </a>

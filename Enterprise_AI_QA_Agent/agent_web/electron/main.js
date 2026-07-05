@@ -44,6 +44,18 @@ function safeRendererPath(urlPath) {
     return resolvedCandidate;
   }
 
+  if (existsSync(resolvedCandidate) && statSync(resolvedCandidate).isDirectory()) {
+    const directoryIndex = join(resolvedCandidate, "index.html");
+    if (existsSync(directoryIndex) && statSync(directoryIndex).isFile()) {
+      return directoryIndex;
+    }
+  }
+
+  const htmlCandidate = `${resolvedCandidate}.html`;
+  if (existsSync(htmlCandidate) && statSync(htmlCandidate).isFile()) {
+    return htmlCandidate;
+  }
+
   return join(rendererRoot, "index.html");
 }
 
