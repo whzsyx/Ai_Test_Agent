@@ -10,6 +10,7 @@ const appRoot = resolve(__dirname, "..");
 const rendererRoot = join(appRoot, "dist");
 const iconPath = join(appRoot, "desktop-assets", process.platform === "win32" ? "logo.ico" : "logo.png");
 const backendOrigin = process.env.QA_AGENT_API_ORIGIN || "http://127.0.0.1:1032";
+const desktopDebugEnabled = !app.isPackaged || process.env.QA_AGENT_DESKTOP_DEBUG === "1";
 
 let mainWindow = null;
 let staticServer = null;
@@ -124,6 +125,7 @@ async function createMainWindow() {
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
+      devTools: true,
       nodeIntegration: false,
       sandbox: true,
     },
@@ -136,6 +138,20 @@ async function createMainWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const key = input.key.toLowerCase();
+    if (desktopDebugEnabled && (input.key === "F12" || (input.control && input.shift && key === "i"))) {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+
+  if (desktopDebugEnabled) {
+    mainWindow.webContents.once("did-finish-load", () => {
+      mainWindow.webContents.openDevTools();
+    });
+  }
 
   mainWindow.on("closed", () => {
     mainWindow = null;
