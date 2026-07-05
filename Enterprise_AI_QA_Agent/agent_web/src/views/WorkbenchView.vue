@@ -68,7 +68,7 @@ onBeforeUnmount(() => {
       <Transition name="home-hero-transition">
         <div v-if="!isWorkbenchActive" class="home-hero">
           <div class="home-logo-box">
-            <i class="fa-solid fa-spider"></i>
+            <img src="/logo.svg" alt="" class="brand-logo brand-logo-home" />
           </div>
           <h1 class="home-title">{{ heroTitle }}</h1>
           <p class="home-subtitle">{{ heroSubtitle }}</p>

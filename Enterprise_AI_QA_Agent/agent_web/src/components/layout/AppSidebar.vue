@@ -26,7 +26,7 @@ const themeTitle = computed(() =>
 <template>
   <nav class="left-nav">
     <div class="left-nav-logo" title="Enterprise AI QA">
-      <i class="fa-solid fa-spider"></i>
+      <img src="/logo.svg" alt="Enterprise AI QA" class="brand-logo brand-logo-sidebar" />
     </div>
 
     <div class="left-nav-buttons">

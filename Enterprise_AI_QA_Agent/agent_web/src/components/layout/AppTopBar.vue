@@ -27,7 +27,7 @@ function statusIcon(check: ServiceCheckItem) {
 <template>
   <header class="top-status-bar">
     <div class="top-status-path">
-      <i class="fa-solid fa-spider"></i>
+      <img src="/logo.svg" alt="" class="brand-logo brand-logo-topbar" />
       <span>{{ t("home.title") }} / {{ props.label }}</span>
     </div>
     <div class="top-status-actions">

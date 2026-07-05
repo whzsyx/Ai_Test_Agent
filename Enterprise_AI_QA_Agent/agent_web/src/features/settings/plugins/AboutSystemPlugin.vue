@@ -72,7 +72,7 @@ const infoCards = [
     <header class="about-header">
       <div class="about-header__main">
         <div class="about-logo">
-          <i class="fa-solid fa-spider"></i>
+          <img src="/logo.svg" alt="" class="about-logo__img" />
         </div>
         <div class="about-title-wrapper">
           <h1 class="about-title">{{ t("about.title") }}</h1>
@@ -227,8 +227,16 @@ const infoCards = [
   background: var(--about-bg-muted);
   border: 1px solid var(--about-border);
   border-radius: 8px;
-  font-size: 18px;
-  color: var(--about-text-primary);
+}
+
+.about-logo__img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+:root[data-theme="dark"] .about-logo__img {
+  filter: brightness(0) invert(1);
 }
 
 .about-title-wrapper {
