@@ -21,8 +21,12 @@
   --console-bg: rgba(255, 255, 255, 0.96);
   --app-font-family: Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
   --app-font-size-scale: 1;
+  /* Keep naive-ui components in sync with the app font family. */
+  --n-font-family: var(--app-font-family);
   font-family: var(--app-font-family);
-  font-size: calc(14px * var(--app-font-size-scale));
+  /* Global font-size scaling is handled via root `zoom` (settings store).
+     Keep the base size fixed here to avoid double-scaling. */
+  font-size: 14px;
 }
 
 /* Reduce motion: disable all transitions and animations when user prefers */
@@ -72,9 +76,20 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-size: calc(14px * var(--app-font-size-scale));
+  font-family: var(--app-font-family);
+  font-size: 14px;
   overflow: hidden;
   transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Naive-ui teleports popups (dropdowns, dialogs, tooltips) to body level.
+   Ensure those detached layers still follow the global app font family. */
+.n-config-provider,
+.v-binder-follower-container,
+.n-modal-container,
+.n-notification-container,
+.n-message-container {
+  font-family: var(--app-font-family);
 }
 
 :root[data-reduce-motion="true"] *,
@@ -112,7 +127,11 @@ textarea {
 }
 
 .prototype-shell {
-  height: 100vh;
+  /* The global font-size zoom lives on <body>; it scales painted geometry (incl. vh)
+     of everything inside by the scale factor. Divide by that factor here so the shell
+     paints at exactly one real viewport height (no overflow / no letterboxing) at any
+     zoom level. Falls back to plain 100vh when the variable is unset. */
+  height: calc(100vh / var(--app-font-size-scale, 1));
   display: flex;
   overflow: hidden;
   background: var(--bg);

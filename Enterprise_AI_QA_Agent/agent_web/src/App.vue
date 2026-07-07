@@ -19,6 +19,7 @@ import { useSessionStore } from "./stores/session";
 
 const lightThemeOverrides: GlobalThemeOverrides = {
   common: {
+    fontFamily: "var(--app-font-family)",
     primaryColor: "#111827",
     primaryColorHover: "#000000",
     primaryColorPressed: "#000000",
@@ -38,6 +39,7 @@ const activeThemeOverrides = computed<GlobalThemeOverrides>(() => {
   if (appStore.theme === "dark") {
     return {
       common: {
+        fontFamily: "var(--app-font-family)",
         primaryColor: "#ffffff",
         primaryColorHover: "#e5e5e5",
         primaryColorPressed: "#cccccc",

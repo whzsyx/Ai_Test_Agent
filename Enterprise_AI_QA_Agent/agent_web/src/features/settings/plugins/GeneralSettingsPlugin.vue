@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { NSelect, NSlider, NModal } from "naive-ui";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { NSelect, NModal } from "naive-ui";
 
 import { useGeneralSettingsStore, type AppFontFamily, type AppFontSize, type GeneralSettingsSnapshot } from "../../../stores/generalSettings";
 import type { SettingsPluginDefinition } from "../plugins";
@@ -49,22 +49,6 @@ const fontSizeOptions = computed<Array<{ value: AppFontSize; label: string; deta
   { value: "large", label: t("settings.font_size_large"), detail: t("settings.font_size_large_desc") },
 ]);
 
-const fontFamilyMarks = computed(() => ({
-  0: t("settings.font_family_system"),
-  1: t("settings.font_family_sans"),
-  2: t("settings.font_family_chinese"),
-  3: t("settings.font_family_serif"),
-  4: t("settings.font_family_mono"),
-}));
-
-const fontSizeMarks = computed(() => ({
-  0: t("settings.font_size_small"),
-  1: t("settings.font_size_compact"),
-  2: t("settings.font_size_standard"),
-  3: t("settings.font_size_comfortable"),
-  4: t("settings.font_size_large"),
-}));
-
 const dataActions = computed(() => [
   {
     key: "backup",
@@ -86,29 +70,14 @@ const dataActions = computed(() => [
   },
 ]);
 
-const fontFamilyIndex = computed({
-  get() {
-    return Math.max(
-      0,
-      fontFamilyOptions.value.findIndex((item) => item.value === draft.value.fontFamily),
-    );
-  },
-  set(value: number) {
-    draft.value.fontFamily = fontFamilyOptions.value[Math.round(value)]?.value ?? "system";
-  },
-});
+// Index of the current selection, used to look up the active option's detail text.
+const fontFamilyIndex = computed(() =>
+  Math.max(0, fontFamilyOptions.value.findIndex((item) => item.value === draft.value.fontFamily)),
+);
 
-const fontSizeIndex = computed({
-  get() {
-    return Math.max(
-      0,
-      fontSizeOptions.value.findIndex((item) => item.value === draft.value.fontSize),
-    );
-  },
-  set(value: number) {
-    draft.value.fontSize = fontSizeOptions.value[Math.round(value)]?.value ?? "standard";
-  },
-});
+const fontSizeIndex = computed(() =>
+  Math.max(0, fontSizeOptions.value.findIndex((item) => item.value === draft.value.fontSize)),
+);
 
 const permissionLabel = computed(() => {
   const permission = settingsStore.notificationPermissionStatus;
@@ -155,6 +124,23 @@ const isDirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(se
 function syncDraftFromStore() {
   draft.value = { ...settingsStore.settingsSnapshot };
 }
+
+watch(
+  () => [draft.value.fontFamily, draft.value.fontSize, draft.value.reduceMotion] as const,
+  () => {
+    settingsStore.previewAppearance({
+      fontFamily: draft.value.fontFamily,
+      fontSize: draft.value.fontSize,
+      reduceMotion: draft.value.reduceMotion,
+    });
+  },
+);
+
+onBeforeUnmount(() => {
+  if (isDirty.value) {
+    settingsStore.restoreAppearance();
+  }
+});
 
 function saveSettings() {
   settingsStore.saveGeneralSettings(draft.value);
@@ -442,8 +428,17 @@ async function doCleanupConfirm() {
                   <span class="meta-value">{{ fontFamilyLabel }}</span>
                 </div>
                 <p>{{ fontFamilyOptions[fontFamilyIndex]?.detail }}</p>
-                <div class="slider-control">
-                  <n-slider v-model:value="fontFamilyIndex" :min="0" :max="4" :step="1" :marks="fontFamilyMarks" :tooltip="false" />
+                <div class="segmented-control" role="radiogroup" :aria-label="t('settings.font_family')">
+                  <button
+                    v-for="option in fontFamilyOptions"
+                    :key="option.value"
+                    type="button"
+                    class="segmented-option"
+                    :class="{ active: draft.fontFamily === option.value }"
+                    role="radio"
+                    :aria-checked="draft.fontFamily === option.value"
+                    @click="draft.fontFamily = option.value"
+                  >{{ option.label }}</button>
                 </div>
               </div>
             </div>
@@ -457,8 +452,17 @@ async function doCleanupConfirm() {
                   <span class="meta-value">{{ fontSizeLabel }}</span>
                 </div>
                 <p>{{ fontSizeOptions[fontSizeIndex]?.detail }}</p>
-                <div class="slider-control">
-                  <n-slider v-model:value="fontSizeIndex" :min="0" :max="4" :step="1" :marks="fontSizeMarks" :tooltip="false" />
+                <div class="segmented-control" role="radiogroup" :aria-label="t('settings.font_size')">
+                  <button
+                    v-for="option in fontSizeOptions"
+                    :key="option.value"
+                    type="button"
+                    class="segmented-option"
+                    :class="{ active: draft.fontSize === option.value }"
+                    role="radio"
+                    :aria-checked="draft.fontSize === option.value"
+                    @click="draft.fontSize = option.value"
+                  >{{ option.label }}</button>
                 </div>
               </div>
             </div>
@@ -704,7 +708,7 @@ async function doCleanupConfirm() {
   gap: 24px;
   width: 100%;
   color: var(--general-text-primary);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--app-font-family, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif);
   padding: 8px 0 32px 0;
 }
 
@@ -1134,6 +1138,53 @@ async function doCleanupConfirm() {
   padding: 0 12px 12px;
 }
 
+/* Segmented control (replaces slider for the 5 discrete font tiers).
+   Click-based, so it stays accurate under the global `zoom` used for font scaling
+   — unlike a slider, which relies on pointer-x / track-width math that zoom distorts. */
+.segmented-control {
+  display: flex;
+  margin-top: 14px;
+  padding: 4px;
+  gap: 4px;
+  border: 1px solid var(--general-border);
+  border-radius: 10px;
+  background: var(--general-bg-subtle);
+}
+
+.segmented-option {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 6px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--general-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.segmented-option:hover:not(.active) {
+  color: var(--general-text-primary);
+  background: var(--general-bg-muted);
+}
+
+.segmented-option.active {
+  background: var(--general-bg);
+  color: var(--general-text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+:root[data-theme="dark"] .segmented-option.active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
 /* Font Preview */
 .font-preview {
   display: flex;
@@ -1154,7 +1205,8 @@ async function doCleanupConfirm() {
 }
 
 .preview-text {
-  font-size: calc(16px * var(--app-font-size-scale, 1));
+  /* Whole-UI zoom already scales this text; keep base size fixed to avoid double-scaling. */
+  font-size: 16px;
   color: var(--general-text-primary);
   line-height: 1.5;
 }

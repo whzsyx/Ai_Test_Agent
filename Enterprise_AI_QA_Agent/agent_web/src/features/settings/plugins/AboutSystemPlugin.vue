@@ -184,7 +184,7 @@ const infoCards = [
   gap: 24px;
   width: 100%;
   color: var(--about-text-primary);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--app-font-family, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif);
   padding: 8px 0 32px 0;
 }
 
