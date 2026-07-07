@@ -168,19 +168,6 @@ function resetSettings() {
   notice.value = t("settings.reset_done");
 }
 
-async function requestNotificationPermission() {
-  const permission = await settingsStore.requestNotificationPermission();
-  if (permission === "granted") {
-    notice.value = t("settings.notify_granted_message");
-  } else if (permission === "denied") {
-    notice.value = t("settings.notify_denied_message");
-  } else if (permission === "unsupported") {
-    notice.value = t("settings.notify_unsupported_message");
-  } else {
-    notice.value = t("settings.notify_default_message");
-  }
-}
-
 async function handleDataAction(key: string, _title: string) {
   if (key === "backup") {
     exportOpen.value = true;
@@ -396,10 +383,6 @@ async function doCleanupConfirm() {
         <div class="section-header">
           <h2 class="section-title">{{ t("settings.notify_title") }}</h2>
           <p class="section-desc">{{ t("settings.notify_desc") }}</p>
-          <button type="button" class="action-btn" @click="requestNotificationPermission">
-            <i class="fa-regular fa-bell"></i>
-            <span>{{ t("settings.notify_request_permission") }}</span>
-          </button>
         </div>
         <div class="list-container">
           <label class="list-item switch-item">

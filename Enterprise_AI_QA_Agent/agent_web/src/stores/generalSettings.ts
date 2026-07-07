@@ -210,20 +210,6 @@ export const useGeneralSettingsStore = defineStore("generalSettings", {
       } catch { this.backendAvailable = false; }
     },
 
-    async requestNotificationPermission(): Promise<DesktopNotificationPermission> {
-      if (typeof window !== "undefined" && window.qaAgentDesktop?.isDesktop) {
-        this.notificationPermissionStatus = "granted";
-        return "granted";
-      }
-      if (typeof window === "undefined" || !("Notification" in window)) {
-        this.notificationPermissionStatus = "unsupported";
-        return "unsupported";
-      }
-      const permission = await window.Notification.requestPermission();
-      this.notificationPermissionStatus = permission;
-      return permission;
-    },
-
     async _tryMigrateToBackend(settings: GeneralSettingsSnapshot) {
       try {
         await api.saveGeneralSettings(settings as unknown as Record<string, unknown>);
