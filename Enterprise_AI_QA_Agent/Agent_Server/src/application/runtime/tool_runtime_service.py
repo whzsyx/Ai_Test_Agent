@@ -6,12 +6,10 @@ import os
 import re
 import shlex
 import shutil
-import smtplib
 import subprocess
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from email.message import EmailMessage
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -41,6 +39,8 @@ from src.application.runtime.tool_job_service import ToolJobService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.application.testing.ui_exploration_service import UIExplorationService
 from src.core.config import Settings
+from src.application.mail import MailService
+from src.application.mail.contracts import MailSendRequest
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.modes.ui_automation_mode.runtime import UIAutomationModeRuntime
 from src.modes.api_testing_mode.runtime import ApiTestingModeRuntime
@@ -116,6 +116,7 @@ class ToolRuntimeService:
         self._session_resource_service = session_resource_service
         self._model_registry = None
         self._email_config_store = MySQLEmailConfigStore(settings) if settings is not None else None
+        self._mail_service = MailService(self._email_config_store)
         self._report_template_service = ReportTemplateService()
         self._security_execution_environment = SecurityExecutionEnvironmentService(
             settings=settings,
@@ -226,6 +227,15 @@ class ToolRuntimeService:
             "perf-result-analyzer": self._run_perf_result_analyzer,
             "compatibility-test-runner": self._run_compatibility_test_runner,
             "smoke-suite-runner": self._run_smoke_suite_runner,
+            "mail-status": self._run_mail_status,
+            "mail-send": self._run_mail_send,
+            "mail-list": self._run_mail_list,
+            "mail-read": self._run_mail_read,
+            "mail-search": self._run_mail_search,
+            "mail-reply": self._run_mail_reply,
+            "mail-forward": self._run_mail_forward,
+            "mail-download-attachment": self._run_mail_download_attachment,
+            "mail-provision-inbox": self._run_mail_provision_inbox,
         }
 
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
@@ -4059,109 +4069,76 @@ class ToolRuntimeService:
         content: str,
         content_html: str,
     ) -> dict[str, Any]:
-        if self._email_config_store is None:
-            raise RuntimeError("Email config store is not available.")
-        records = self._email_config_store.list_all()
-        enabled = [item for item in records if item.enabled]
-        if not enabled:
-            raise RuntimeError("No enabled email configuration is available.")
-        record = next((item for item in enabled if item.is_default), enabled[0])
-        if record.provider == "aliyun":
-            self._send_via_aliyun_directmail(record, recipients, subject, content_html or content)
-        else:
-            self._send_via_smtp_provider(record, recipients, subject, content, content_html)
+        # Delegates to the provider-agnostic MailService. Behavior and result
+        # shape are preserved: active config resolution (enabled + default),
+        # provider dispatch (aliyun vs SMTP fallback), and the returned dict.
+        return self._mail_service.send(recipients, subject, content, content_html)
 
-        return {
-            "sent": True,
-            "provider": record.provider,
-            "from_email": record.sender_email or record.smtp_username or "",
-            "recipient_count": len(recipients),
-        }
+    # ─── mail-* tool handlers ───────────────────────────────────────────
 
-    def _send_via_smtp_provider(
-        self,
-        record,
-        recipients: list[str],
-        subject: str,
-        content: str,
-        content_html: str,
-    ) -> None:
-        if not record.smtp_host or not record.smtp_port:
-            raise RuntimeError("Selected email configuration is missing SMTP host or port.")
-        if not record.api_key:
-            raise RuntimeError("Selected email configuration is missing SMTP password.")
+    async def _run_mail_status(self, tool_input: dict, context) -> dict:
+        return self._mail_service.status()
 
-        message = EmailMessage()
-        message["Subject"] = subject
-        message["From"] = record.sender_email or record.smtp_username or ""
-        message["To"] = ", ".join(recipients)
-        if content:
-            message.set_content(content)
-        else:
-            message.set_content(" ")
-        if content_html:
-            message.add_alternative(content_html, subtype="html")
+    async def _run_mail_send(self, tool_input: dict, context) -> dict:
+        return self._mail_service.send(
+            recipients=tool_input["to"],
+            subject=tool_input["subject"],
+            content=tool_input["content"],
+            content_html=tool_input.get("content_html", ""),
+        )
 
-        username = record.smtp_username or record.sender_email
-        use_ssl = int(record.smtp_port) == 465
-        if use_ssl:
-            with smtplib.SMTP_SSL(record.smtp_host, int(record.smtp_port), timeout=15) as client:
-                client.login(username, record.api_key or "")
-                client.send_message(message)
-        else:
-            with smtplib.SMTP(record.smtp_host, int(record.smtp_port), timeout=15) as client:
-                client.ehlo()
-                try:
-                    client.starttls()
-                    client.ehlo()
-                except smtplib.SMTPException:
-                    pass
-                client.login(username, record.api_key or "")
-                client.send_message(message)
+    async def _run_mail_list(self, tool_input: dict, context) -> dict:
+        opts = {}
+        if tool_input.get("folder"):
+            opts["folder"] = tool_input["folder"]
+        if tool_input.get("limit"):
+            opts["limit"] = tool_input["limit"]
+        if tool_input.get("before"):
+            opts["before"] = tool_input["before"]
+        if tool_input.get("after"):
+            opts["after"] = tool_input["after"]
+        return self._mail_service.list_messages(options=opts or None)
 
-    def _send_via_aliyun_directmail(self, record, recipients: list[str], subject: str, html_body: str) -> None:
-        import base64
-        import hashlib
-        import hmac
-        import urllib.parse
-        import uuid
+    async def _run_mail_read(self, tool_input: dict, context) -> dict:
+        return self._mail_service.read_message(tool_input["message_id"])
 
-        import httpx
+    async def _run_mail_search(self, tool_input: dict, context) -> dict:
+        opts = None
+        if tool_input.get("limit"):
+            opts = {"limit": tool_input["limit"]}
+        return self._mail_service.search_messages(tool_input["query"], options=opts)
 
-        if not record.api_key or not record.secret_key or not record.sender_email:
-            raise RuntimeError("Selected Aliyun email configuration is incomplete.")
+    async def _run_mail_reply(self, tool_input: dict, context) -> dict:
+        request = MailSendRequest(
+            recipients=[],
+            subject="",
+            content=tool_input["content"],
+            content_html=tool_input.get("content_html", ""),
+        )
+        return self._mail_service.reply(tool_input["message_id"], request)
 
-        for recipient in recipients:
-            params = {
-                "Action": "SingleSendMail",
-                "AccountName": record.sender_email,
-                "ReplyToAddress": "false",
-                "AddressType": "1",
-                "ToAddress": recipient,
-                "Subject": subject,
-                "HtmlBody": html_body,
-                "Format": "JSON",
-                "Version": "2015-11-23",
-                "AccessKeyId": record.api_key,
-                "SignatureMethod": "HMAC-SHA1",
-                "SignatureVersion": "1.0",
-                "SignatureNonce": str(uuid.uuid4()),
-                "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            }
-            sorted_params = sorted(params.items())
-            query_string = urllib.parse.urlencode(sorted_params, quote_via=urllib.parse.quote)
-            string_to_sign = "POST&%2F&" + urllib.parse.quote(query_string, safe="")
-            sign_key = (record.secret_key + "&").encode("utf-8")
-            signature = base64.b64encode(
-                hmac.new(sign_key, string_to_sign.encode("utf-8"), hashlib.sha1).digest()
-            ).decode("utf-8")
-            params["Signature"] = signature
+    async def _run_mail_forward(self, tool_input: dict, context) -> dict:
+        request = MailSendRequest(
+            recipients=tool_input["to"],
+            subject="",
+            content=tool_input.get("comment", ""),
+            content_html="",
+        )
+        return self._mail_service.forward(tool_input["message_id"], request)
 
-            response = httpx.post("https://dm.aliyuncs.com/", data=params, timeout=15)
-            response.raise_for_status()
-            payload = response.json()
-            if "Code" in payload:
-                raise RuntimeError(f"Aliyun DirectMail failed: {payload.get('Message') or payload['Code']}")
+    async def _run_mail_download_attachment(self, tool_input: dict, context) -> dict:
+        return self._mail_service.download_attachment(
+            message_id=tool_input["message_id"],
+            attachment_id=tool_input["attachment_id"],
+        )
+
+    async def _run_mail_provision_inbox(self, tool_input: dict, context) -> dict:
+        opts = {}
+        if tool_input.get("display_name"):
+            opts["display_name"] = tool_input["display_name"]
+        if tool_input.get("prefix"):
+            opts["prefix"] = tool_input["prefix"]
+        return self._mail_service.provision_inbox(options=opts or None)
 
     def _normalize_result(
         self,

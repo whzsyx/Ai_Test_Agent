@@ -403,6 +403,49 @@ export interface EmailConfigConnectionTestResponse {
   preview?: string | null;
 }
 
+// --- Agent Mailbox types ---------------------------------------------------
+
+export type MailboxProviderKey =
+  | "tencent_agently"
+  | "agentmail"
+  | "robotomail"
+  | "openmail"
+  | "dead_simple_email"
+  | "agenticmail"
+  | "aws_agent_mailbox";
+
+export interface MailboxProviderInfo {
+  provider: string;
+  capabilities: string[];
+}
+
+export interface MailboxProviderStatus {
+  ok: boolean;
+  provider: string;
+  capabilities: string[];
+  error?: string;
+  auth_status?: string;
+  email?: string;
+  aliases?: string[];
+}
+
+export interface MailboxSendPrepareRequest {
+  recipients: string[];
+  subject: string;
+  content?: string;
+  content_html?: string;
+  config_id?: number | null;
+}
+
+export interface MailboxSendConfirmRequest {
+  confirmation_token: string;
+  config_id?: number | null;
+}
+
+export interface MailboxProvisionInboxRequest {
+  options?: Record<string, unknown>;
+}
+
 export interface ToolApprovalRequest {
   id: string;
   session_id: string;

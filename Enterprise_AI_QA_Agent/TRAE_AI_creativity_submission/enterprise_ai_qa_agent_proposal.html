@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enterprise AI QA Agent 创意提案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #536170;
+      --line: #d8e0e7;
+      --paper: #f7fafc;
+      --brand: #126e82;
+      --accent: #e25f3f;
+      --soft: #e8f4f3;
+      --gold: #f3b23c;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Inter", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.65;
+    }
+
+    header {
+      min-height: 88vh;
+      display: grid;
+      align-items: center;
+      background:
+        linear-gradient(115deg, rgba(12, 35, 43, .84), rgba(18, 110, 130, .70)),
+        url("https://images.unsplash.com/photo-1551434678-e076c223a692?auto=format&fit=crop&w=1800&q=80") center / cover;
+      color: white;
+      padding: 48px 24px;
+    }
+
+    .hero,
+    main {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      width: fit-content;
+      padding: 6px 10px;
+      border: 1px solid rgba(255, 255, 255, .42);
+      border-radius: 4px;
+      font-size: 14px;
+      letter-spacing: 0;
+      background: rgba(255, 255, 255, .12);
+    }
+
+    h1 {
+      max-width: 900px;
+      margin: 18px 0 20px;
+      font-size: clamp(42px, 7vw, 82px);
+      line-height: 1.04;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 780px;
+      font-size: clamp(18px, 2.2vw, 24px);
+      color: rgba(255, 255, 255, .9);
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .hero-meta span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, .16);
+      border: 1px solid rgba(255, 255, 255, .25);
+    }
+
+    main {
+      padding: 52px 0 72px;
+    }
+
+    section {
+      padding: 34px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: clamp(26px, 4vw, 40px);
+      line-height: 1.2;
+      letter-spacing: 0;
+      color: #113641;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 20px;
+      color: #18343d;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 22px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      padding: 20px;
+      min-height: 180px;
+      box-shadow: 0 8px 24px rgba(25, 46, 61, .06);
+    }
+
+    .number {
+      display: inline-flex;
+      width: 34px;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      margin-bottom: 12px;
+      color: white;
+      background: var(--brand);
+      font-weight: 700;
+    }
+
+    .feature {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 24px;
+      padding: 22px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .feature strong {
+      color: var(--brand);
+      font-size: 19px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .step {
+      position: relative;
+      min-height: 132px;
+      padding: 18px;
+      border-radius: 8px;
+      color: #17323b;
+      background: var(--soft);
+      border: 1px solid #c8dfdc;
+    }
+
+    .step:nth-child(2),
+    .step:nth-child(4) {
+      background: #fff3e6;
+      border-color: #f0d2af;
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+      color: #0f5a6b;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 24px;
+    }
+
+    .metric {
+      padding: 20px;
+      border-radius: 8px;
+      background: #102f3a;
+      color: white;
+    }
+
+    .metric b {
+      display: block;
+      color: var(--gold);
+      font-size: 30px;
+      line-height: 1.1;
+    }
+
+    .metric span {
+      color: rgba(255, 255, 255, .82);
+      font-size: 14px;
+    }
+
+    footer {
+      padding: 28px 24px;
+      color: white;
+      background: #102f3a;
+      text-align: center;
+    }
+
+    @media (max-width: 860px) {
+      .grid,
+      .flow,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .feature {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      header {
+        min-height: 82vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="hero">
+      <div class="eyebrow">TRAE AI 创造力大赛 · 学习工作赛道</div>
+      <h1>Enterprise AI QA Agent</h1>
+      <p class="lead">面向企业软件交付的 AI 质量保障工作台，把需求理解、测试设计、自动化执行、缺陷分析和报告沉淀串成一条可审计的智能流水线。</p>
+      <div class="hero-meta">
+        <span>FastAPI + LangGraph 后端编排</span>
+        <span>Vue 3 + Vite 工作台</span>
+        <span>多测试模式协同</span>
+        <span>面向企业 QA 团队</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>创意介绍</h2>
+      <p>现代企业应用迭代快、链路长、团队协作密集，QA 人员常常在需求澄清、用例设计、自动化脚本、环境兼容、缺陷复盘之间反复切换。Enterprise AI QA Agent 的目标是把这些分散动作汇聚成一个可协作、可追踪、可恢复的 AI 质量保障工作台。</p>
+      <p>它不是普通聊天机器人，而是一套面向真实软件交付过程的 Agent 运行骨架：后端负责会话、编排、工具调用、审批和事件流；前端提供工作台、运行状态、任务池、报告和知识视图，让团队可以看到 AI 正在做什么、为什么这样做、产出了哪些证据。</p>
+    </section>
+
+    <section>
+      <h2>目标用户与痛点</h2>
+      <div class="grid">
+        <article class="card">
+          <span class="number">1</span>
+          <h3>QA 工程师</h3>
+          <p>每天要从需求、接口文档、页面行为和历史缺陷里整理测试重点，重复劳动多，经验难沉淀。</p>
+        </article>
+        <article class="card">
+          <span class="number">2</span>
+          <h3>研发与测试负责人</h3>
+          <p>需要跨项目掌握质量风险、执行进度和测试证据，但传统报告滞后且口径不统一。</p>
+        </article>
+        <article class="card">
+          <span class="number">3</span>
+          <h3>企业交付团队</h3>
+          <p>接口、UI、兼容、安全、性能测试工具割裂，自动化结果难以串联到同一个决策视图。</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>核心能力</h2>
+      <div class="feature">
+        <strong>多 Agent 编排</strong>
+        <p>使用 LangGraph 构建可恢复的执行链路，让需求分析、测试方向识别、工具执行、结果解释和报告生成可以被统一调度。</p>
+      </div>
+      <div class="feature">
+        <strong>测试模式矩阵</strong>
+        <p>围绕 UI 自动化、接口测试、冒烟测试、兼容性测试、安全测试、性能测试和代码审查等场景提供可扩展模式。</p>
+      </div>
+      <div class="feature">
+        <strong>运行时可观测</strong>
+        <p>通过事件流、审批面板、任务状态、工具日志和报告中心，把 AI 执行过程变成团队可以追踪和复盘的工程资产。</p>
+      </div>
+      <div class="feature">
+        <strong>知识与证据沉淀</strong>
+        <p>支持把页面结构、接口文档、测试发现、执行报告和项目知识持续沉淀，减少下次测试从零开始的成本。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>使用流程</h2>
+      <div class="flow">
+        <div class="step"><b>1. 输入任务</b>提交需求、页面、接口文档或质量目标。</div>
+        <div class="step"><b>2. 识别方向</b>AI 判断适合的测试模式和执行策略。</div>
+        <div class="step"><b>3. 调度工具</b>调用浏览器、接口、扫描、脚本或知识检索能力。</div>
+        <div class="step"><b>4. 汇总证据</b>记录事件流、截图、日志、断言和风险点。</div>
+        <div class="step"><b>5. 生成报告</b>输出面向团队协作的测试结论和后续建议。</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>价值与意义</h2>
+      <p>从商业价值看，它能缩短企业从需求到测试结论的周期，让 QA 团队把更多时间投入到风险判断和质量策略，而不是机械整理材料。从效率提升看，它把多工具、多流程、多报告口径整合为一个工作台，降低新人上手门槛，也让资深经验可以被系统化复用。</p>
+      <div class="metrics">
+        <div class="metric"><b>1 个</b><span>统一 QA Agent 工作台</span></div>
+        <div class="metric"><b>7 类</b><span>可扩展测试模式</span></div>
+        <div class="metric"><b>全链路</b><span>事件与证据追踪</span></div>
+        <div class="metric"><b>可复用</b><span>知识、用例与报告资产</span></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Enterprise AI QA Agent · 让企业质量保障从“人找工具”走向“AI 协同交付”
+  </footer>
+</body>
+</html>

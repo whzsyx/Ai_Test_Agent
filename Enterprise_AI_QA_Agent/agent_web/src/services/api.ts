@@ -265,6 +265,41 @@ export const api = {
       method: "DELETE",
     });
   },
+
+  // --- Agent Mailbox API ---------------------------------------------------
+
+  listMailProviders(): Promise<{ providers: Array<{ provider: string; capabilities: string[] }> }> {
+    return request("/api/v1/mail/providers");
+  },
+  mailProviderStatus(provider: string): Promise<Record<string, unknown>> {
+    return request(`/api/v1/mail/providers/${provider}/status`, {
+      method: "POST",
+    });
+  },
+  mailProviderSetupAction(provider: string, action: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return request(`/api/v1/mail/providers/${provider}/setup-action`, {
+      method: "POST",
+      body: JSON.stringify({ action, payload }),
+    });
+  },
+  mailProvisionInbox(provider: string, options: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return request(`/api/v1/mail/providers/${provider}/provision-inbox`, {
+      method: "POST",
+      body: JSON.stringify({ options }),
+    });
+  },
+  mailTestSendPrepare(payload: { recipients: string[]; subject: string; content?: string; content_html?: string; config_id?: number | null }): Promise<Record<string, unknown>> {
+    return request("/api/v1/mail/test-send/prepare", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  mailTestSendConfirm(payload: { confirmation_token: string; config_id?: number | null }): Promise<Record<string, unknown>> {
+    return request("/api/v1/mail/test-send/confirm", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
   createSession(
     title = "Enterprise Intelligent QA Session",
     modeKey = "default",

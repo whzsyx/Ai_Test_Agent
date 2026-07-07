@@ -24,6 +24,7 @@ from src.api.routes.oauth import router as oauth_router
 from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
+from src.api.routes.mail import router as mail_router
 from src.application.model_adapters import build_default_adapter_registry
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
@@ -258,6 +259,7 @@ async def lifespan(app: FastAPI):
     app.state.model_runtime_service = model_runtime_service
     app.state.model_adapter_registry = adapter_registry
     app.state.tool_runtime_service = tool_runtime_service
+    app.state.mail_service = tool_runtime_service._mail_service
     app.state.compatibility_runner_service = compatibility_runner_service
     app.state.runtime_service = runtime_service
     session_service = SessionService(
@@ -329,6 +331,7 @@ app.include_router(integrations_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
 app.include_router(oauth_router, prefix=settings.api_v1_prefix)
+app.include_router(mail_router, prefix=settings.api_v1_prefix)
 
 
 if __name__ == "__main__":

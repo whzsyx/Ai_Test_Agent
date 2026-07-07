@@ -81,6 +81,22 @@ class SkillRegistry:
                 recommended_agents=["coordinator", "report-analyst"],
                 tags=["reporting"],
             ),
+            "agently-mail": SkillDescriptor(
+                key="agently-mail",
+                name="Tencent Agent Mail",
+                summary="Send, receive, read, search, reply, and forward email via agently-cli.",
+                description="Provides Agent Mailbox capabilities backed by agently-cli with two-phase send confirmation.",
+                recommended_agents=["coordinator", "ops-executor"],
+                tags=["mail", "communication"],
+            ),
+            "mail-capability": SkillDescriptor(
+                key="mail-capability",
+                name="Mail Capability",
+                summary="Safety skill for all Agent Mailbox tool invocations.",
+                description="Enforces confirmation, credential hygiene, and attachment safety rules for mail-* tools.",
+                recommended_agents=["coordinator", "ops-executor"],
+                tags=["mail", "safety", "communication"],
+            ),
         }
         self._skills: dict[str, SkillDescriptor] = {
             "requirements-analysis": SkillDescriptor(

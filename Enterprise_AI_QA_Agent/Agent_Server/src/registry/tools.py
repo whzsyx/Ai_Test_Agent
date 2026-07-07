@@ -1820,6 +1820,187 @@ class ToolRegistry:
                 ),
                 handler_key="smoke-suite-runner",
             ),
+            "mail-status": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-status",
+                    name="Mail Status",
+                    description="Check the status and capabilities of the active Agent Mailbox provider.",
+                    category="communication",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "provider": {"type": "string", "description": "Optional provider key override."},
+                        },
+                    },
+                    output_schema={"ok": "boolean", "provider": "string", "capabilities": "array"},
+                    tags=["mail", "mailbox", "status"],
+                ),
+                handler_key="mail-status",
+            ),
+            "mail-send": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-send",
+                    name="Mail Send",
+                    description="Send an email via the active Agent Mailbox provider. Requires user confirmation.",
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "to": {"type": "array", "items": {"type": "string"}, "description": "Recipient addresses."},
+                            "subject": {"type": "string", "description": "Email subject."},
+                            "content": {"type": "string", "description": "Plain text body."},
+                            "content_html": {"type": "string", "description": "Optional HTML body."},
+                        },
+                        "required": ["to", "subject", "content"],
+                    },
+                    output_schema={"ok": "boolean", "message_id": "string"},
+                    tags=["mail", "mailbox", "send"],
+                ),
+                handler_key="mail-send",
+            ),
+            "mail-list": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-list",
+                    name="Mail List",
+                    description="List messages in the Agent Mailbox inbox.",
+                    category="communication",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "folder": {"type": "string", "description": "Folder name.", "default": "inbox"},
+                            "limit": {"type": "integer", "description": "Max messages to return.", "default": 20},
+                            "before": {"type": "string", "description": "ISO timestamp upper bound."},
+                            "after": {"type": "string", "description": "ISO timestamp lower bound."},
+                        },
+                    },
+                    output_schema={"messages": "array"},
+                    tags=["mail", "mailbox", "list"],
+                ),
+                handler_key="mail-list",
+            ),
+            "mail-read": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-read",
+                    name="Mail Read",
+                    description="Read a single message by ID from the Agent Mailbox.",
+                    category="communication",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string", "description": "Message identifier."},
+                        },
+                        "required": ["message_id"],
+                    },
+                    output_schema={"message": "object"},
+                    tags=["mail", "mailbox", "read"],
+                ),
+                handler_key="mail-read",
+            ),
+            "mail-search": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-search",
+                    name="Mail Search",
+                    description="Search messages in the Agent Mailbox by query string.",
+                    category="communication",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query."},
+                            "limit": {"type": "integer", "description": "Max results.", "default": 20},
+                        },
+                        "required": ["query"],
+                    },
+                    output_schema={"messages": "array"},
+                    tags=["mail", "mailbox", "search"],
+                ),
+                handler_key="mail-search",
+            ),
+            "mail-reply": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-reply",
+                    name="Mail Reply",
+                    description="Reply to a message in the Agent Mailbox. Requires user confirmation.",
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string", "description": "Original message ID to reply to."},
+                            "content": {"type": "string", "description": "Reply body text."},
+                            "content_html": {"type": "string", "description": "Optional HTML reply body."},
+                        },
+                        "required": ["message_id", "content"],
+                    },
+                    output_schema={"ok": "boolean", "message_id": "string"},
+                    tags=["mail", "mailbox", "reply"],
+                ),
+                handler_key="mail-reply",
+            ),
+            "mail-forward": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-forward",
+                    name="Mail Forward",
+                    description="Forward a message from the Agent Mailbox. Requires user confirmation.",
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string", "description": "Message ID to forward."},
+                            "to": {"type": "array", "items": {"type": "string"}, "description": "Forward recipients."},
+                            "comment": {"type": "string", "description": "Optional note prepended to the forwarded message."},
+                        },
+                        "required": ["message_id", "to"],
+                    },
+                    output_schema={"ok": "boolean", "message_id": "string"},
+                    tags=["mail", "mailbox", "forward"],
+                ),
+                handler_key="mail-forward",
+            ),
+            "mail-download-attachment": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-download-attachment",
+                    name="Mail Download Attachment",
+                    description="Download an attachment from a mailbox message.",
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string", "description": "Parent message ID."},
+                            "attachment_id": {"type": "string", "description": "Attachment identifier."},
+                        },
+                        "required": ["message_id", "attachment_id"],
+                    },
+                    output_schema={"ok": "boolean", "path": "string", "size_bytes": "integer"},
+                    tags=["mail", "mailbox", "attachment"],
+                ),
+                handler_key="mail-download-attachment",
+            ),
+            "mail-provision-inbox": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-provision-inbox",
+                    name="Mail Provision Inbox",
+                    description="Provision a new inbox address on the Agent Mailbox provider.",
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "display_name": {"type": "string", "description": "Display name for the new inbox."},
+                            "prefix": {"type": "string", "description": "Optional local-part prefix."},
+                        },
+                    },
+                    output_schema={"ok": "boolean", "address": "string"},
+                    tags=["mail", "mailbox", "provision"],
+                ),
+                handler_key="mail-provision-inbox",
+            ),
         }
         self._dynamic_tools: dict[str, ToolModule] = {}
 

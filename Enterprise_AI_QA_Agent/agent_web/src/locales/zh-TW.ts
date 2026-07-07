@@ -147,6 +147,7 @@ export default {
   "settings.general": "通用設定",
   "settings.models": "模型設定",
   "settings.email": "郵件設定",
+  "settings.mailbox": "Agent 信箱",
   "settings.integrations": "管理平台接入",
   "settings.channels": "通訊頻道設定",
   "settings.storage": "儲存設定",

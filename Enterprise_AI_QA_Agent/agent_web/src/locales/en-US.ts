@@ -147,6 +147,7 @@ export default {
   "settings.general": "General Settings",
   "settings.models": "Model Settings",
   "settings.email": "Email Settings",
+  "settings.mailbox": "Agent Mailbox",
   "settings.integrations": "Platform Integrations",
   "settings.channels": "Communication Channel Settings",
   "settings.storage": "Storage Settings",

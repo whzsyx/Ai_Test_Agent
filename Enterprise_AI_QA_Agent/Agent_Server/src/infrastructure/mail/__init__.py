@@ -1,0 +1,1 @@
+"""Concrete mail provider adapters."""
