@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, Notification, shell } from "electron";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { extname, join, normalize, resolve } from "node:path";
@@ -9,15 +9,34 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const appRoot = resolve(__dirname, "..");
 const rendererRoot = join(appRoot, "dist");
 const iconPath = join(appRoot, "desktop-assets", process.platform === "win32" ? "logo.ico" : "logo.png");
+const APP_NAME = "御策天检";
+const APP_USER_MODEL_ID = "com.enterprise-ai-qa-agent.desktop";
 const backendOrigin = process.env.QA_AGENT_API_ORIGIN || "http://127.0.0.1:1032";
 const desktopDebugEnabled = !app.isPackaged || process.env.QA_AGENT_DESKTOP_DEBUG === "1";
-const windowsAppUserModelId = app.isPackaged ? "com.enterprise-ai-qa-agent.desktop" : process.execPath;
 
 let mainWindow = null;
 let staticServer = null;
 
-if (process.platform === "win32") {
-  app.setAppUserModelId(windowsAppUserModelId);
+function ensureWindowsShortcut() {
+  if (process.platform !== "win32") return;
+
+  const programsPath = join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs");
+  const shortcutPath = join(programsPath, `${APP_NAME}.lnk`);
+  if (existsSync(shortcutPath)) return;
+
+  try {
+    mkdirSync(programsPath, { recursive: true });
+    shell.writeShortcutLink(shortcutPath, "create", {
+      target: process.execPath,
+      args: process.argv.slice(1).join(" "),
+      cwd: process.cwd(),
+      description: APP_NAME,
+      icon: existsSync(iconPath) ? iconPath : undefined,
+      appUserModelId: APP_USER_MODEL_ID,
+    });
+  } catch (err) {
+    console.warn("[Desktop] Failed to create start menu shortcut:", err);
+  }
 }
 
 const mimeTypes = new Map([
@@ -200,7 +219,7 @@ async function createMainWindow() {
     height: 960,
     minWidth: 1100,
     minHeight: 720,
-    title: "御策天检",
+    title: APP_NAME,
     icon: existsSync(iconPath) ? iconPath : undefined,
     autoHideMenuBar: true,
     webPreferences: {
@@ -240,6 +259,10 @@ async function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === "win32") {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+    ensureWindowsShortcut();
+  }
   registerDesktopIpc();
   return createMainWindow();
 });

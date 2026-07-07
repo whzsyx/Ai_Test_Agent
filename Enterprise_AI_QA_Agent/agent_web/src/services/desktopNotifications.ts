@@ -103,7 +103,12 @@ async function sendNotification(title: string, options?: NotificationOptions): P
   }
 }
 
-export function notifySessionComplete(sessionId: string, title?: string): void {
+export interface SessionNotificationOptions {
+  title?: string;
+  body?: string;
+}
+
+export function notifySessionComplete(sessionId: string, options?: SessionNotificationOptions): void {
   const settings = useGeneralSettingsStore();
 
   if (!settings.notifySessionCompleteWhenAway) return;
@@ -114,8 +119,11 @@ export function notifySessionComplete(sessionId: string, title?: string): void {
   if (notifiedIds.has(notifyKey)) return;
   notifiedIds.add(notifyKey);
 
-  void sendNotification("会话执行完成", {
-    body: title || `会话 ${sessionId.slice(0, 8)} 已完成执行。`,
+  const notifyTitle = options?.title || "会话执行完成";
+  const notifyBody = options?.body || `会话 ${sessionId.slice(0, 8)} 已完成执行。`;
+
+  void sendNotification(notifyTitle, {
+    body: notifyBody,
     tag: notifyKey,
   });
 }

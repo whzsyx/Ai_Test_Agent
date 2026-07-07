@@ -1,4 +1,4 @@
-﻿import { defineStore } from "pinia";
+import { defineStore } from "pinia";
 
 import { api } from "../services/api";
 import { serverDateTimestamp } from "../utils/datetime";
@@ -685,7 +685,15 @@ export const useSessionStore = defineStore("session", {
           // Desktop notifications for key events.
           if (event.type === "turn.completed" || event.type === "turn.failed") {
             import("../services/desktopNotifications").then(({ notifySessionComplete }) => {
-              notifySessionComplete(event.session_id, `会话执行${event.type === "turn.completed" ? "完成" : "失败"}`);
+              const sessionTitle = this.session?.title?.trim() || `会话 ${event.session_id.slice(0, 8)}`;
+              const lastMessage = [...this.messages]
+                .reverse()
+                .find((m) => String(m.content || "").trim());
+              const statusLabel = event.type === "turn.completed" ? "已完成" : "执行失败";
+              const bodyPreview = lastMessage
+                ? `${statusLabel} · ${String(lastMessage.content).trim().slice(0, 60)}`
+                : `会话${statusLabel}`;
+              notifySessionComplete(event.session_id, { title: sessionTitle, body: bodyPreview });
             });
           }
           if (event.type === "approval.created") {
