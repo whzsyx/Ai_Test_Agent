@@ -45,7 +45,7 @@ const infoCards = [
   {
     icon: "fa-solid fa-user-astronaut",
     title: t("about.author_title"),
-    value: "eighteendreamer",
+    value: "程序员Eighteen",
     detail: t("about.author_detail"),
   },
   {
