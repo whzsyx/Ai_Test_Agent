@@ -917,12 +917,20 @@ async function doCleanupConfirm() {
   border: 1px solid var(--general-border);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition:
+    background-color var(--motion-duration-fast) ease,
+    border-color var(--motion-duration-fast) ease,
+    color var(--motion-duration-fast) ease,
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .action-btn:hover:not(:disabled) {
   background: var(--general-bg-subtle);
   border-color: var(--general-border-hover);
+}
+
+.action-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .action-btn.primary {
@@ -1166,7 +1174,15 @@ async function doCleanupConfirm() {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  transition:
+    background-color var(--motion-duration-normal) ease,
+    color var(--motion-duration-normal) ease,
+    box-shadow var(--motion-duration-normal) ease,
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.segmented-option:active:not(.active) {
+  transform: scale(0.98);
 }
 
 .segmented-option:hover:not(.active) {

@@ -241,10 +241,12 @@ onBeforeUnmount(() => {
     </nav>
 
     <div class="tools-content-area">
-      <component
-        :is="activePlugin.component"
-        :key="activePlugin.key === 'skills' ? `skills-${skillsRefreshKey}` : activePlugin.key"
-      />
+      <Transition name="panel-fade" mode="out-in">
+        <component
+          :is="activePlugin.component"
+          :key="activePlugin.key === 'skills' ? `skills-${skillsRefreshKey}` : activePlugin.key"
+        />
+      </Transition>
     </div>
 
     <div v-if="marketplaceOpen" class="tools-modal-backdrop" @click.self="closeMarketplace">
@@ -434,7 +436,10 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  transition: color 0.2s, border-color 0.2s;
+  transition:
+    color var(--motion-duration-fast) ease,
+    border-color var(--motion-duration-fast) ease,
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
   margin-bottom: -1px;
 }
 
@@ -454,6 +459,8 @@ onBeforeUnmount(() => {
 .tools-content-area {
   flex: 1;
   overflow-y: auto;
+  position: relative;
+  min-height: 0;
 }
 
 .tools-modal-backdrop {

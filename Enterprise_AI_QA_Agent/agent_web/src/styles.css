@@ -27,15 +27,31 @@
   /* Global font-size scaling is handled via root `zoom` (settings store).
      Keep the base size fixed here to avoid double-scaling. */
   font-size: 14px;
+  /* Motion design tokens — referenced by page/panel transitions and press feedback. */
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 200ms;
+  --motion-duration-slow: 320ms;
+  --motion-duration-page: 260ms;
+  --motion-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-out: cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* Reduce motion: disable all transitions and animations when user prefers */
+/* Reduce motion: zero tokens and neutralize transitions/animations when opted in. */
+:root[data-reduce-motion="true"] {
+  --motion-duration-fast: 0.01ms;
+  --motion-duration-normal: 0.01ms;
+  --motion-duration-slow: 0.01ms;
+  --motion-duration-page: 0.01ms;
+}
+
 :root[data-reduce-motion="true"] *,
 :root[data-reduce-motion="true"] *::before,
 :root[data-reduce-motion="true"] *::after {
   animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
   scroll-behavior: auto !important;
 }
 
@@ -90,15 +106,6 @@ body {
 .n-notification-container,
 .n-message-container {
   font-family: var(--app-font-family);
-}
-
-:root[data-reduce-motion="true"] *,
-:root[data-reduce-motion="true"] *::before,
-:root[data-reduce-motion="true"] *::after {
-  animation-duration: 0.001ms !important;
-  animation-iteration-count: 1 !important;
-  scroll-behavior: auto !important;
-  transition-duration: 0.001ms !important;
 }
 
 button,
@@ -235,6 +242,10 @@ textarea {
   transform: translateY(-1px);
 }
 
+.left-nav-btn:active {
+  transform: translateY(0) scale(0.94);
+}
+
 .left-nav-theme-btn {
   width: 40px;
   height: 40px;
@@ -270,6 +281,10 @@ textarea {
   background: var(--surface-muted);
   border-color: var(--border-strong);
   transform: translateY(-1px);
+}
+
+.left-nav-theme-btn:active {
+  transform: translateY(0) scale(0.94);
 }
 
 .left-nav-user {
@@ -315,6 +330,10 @@ textarea {
 
 .left-nav-user-link:hover {
   transform: translateY(-1px);
+}
+
+.left-nav-user-link:active {
+  transform: translateY(0) scale(0.94);
 }
 
 .prototype-main {
@@ -1585,11 +1604,31 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color var(--motion-duration-fast) ease,
+    border-color var(--motion-duration-fast) ease,
+    color var(--motion-duration-fast) ease,
+    opacity var(--motion-duration-fast) ease,
+    transform var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) ease;
   font-family: inherit;
   font-weight: 500;
   user-select: none;
   white-space: nowrap;
+}
+
+.quick-run-btn:not(:disabled):active,
+.primary-btn:not(:disabled):active,
+.secondary-btn:not(:disabled):active,
+.danger-btn:not(:disabled):active,
+.dashed-btn:not(:disabled):active,
+.icon-btn:not(:disabled):active,
+.home-tool-btn:not(:disabled):active,
+.home-send-btn:not(:disabled):active,
+.runtime-action-btn:not(:disabled):active,
+.runtime-console-tab:not(:disabled):active,
+.tools-tab-btn:not(:disabled):active {
+  transform: scale(0.97);
 }
 
 .quick-run-btn,
@@ -1675,6 +1714,46 @@ textarea {
   background: #fff;
   display: flex;
   flex-direction: column;
+  position: relative;
+  min-height: 0;
+}
+
+/* Route page transition (App.vue RouterView) */
+.route-page-enter-active {
+  transition:
+    opacity var(--motion-duration-page) var(--motion-ease-standard),
+    transform var(--motion-duration-page) var(--motion-ease-standard);
+}
+
+.route-page-leave-active {
+  transition:
+    opacity calc(var(--motion-duration-page) * 0.7) var(--motion-ease-out),
+    transform calc(var(--motion-duration-page) * 0.7) var(--motion-ease-out);
+}
+
+.route-page-enter-from,
+.route-page-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+/* Tab/panel content transition (Settings, Tools, etc.) */
+.panel-fade-enter-active {
+  transition:
+    opacity var(--motion-duration-normal) var(--motion-ease-standard),
+    transform var(--motion-duration-normal) var(--motion-ease-standard);
+}
+
+.panel-fade-leave-active {
+  transition:
+    opacity calc(var(--motion-duration-normal) * 0.75) var(--motion-ease-out),
+    transform calc(var(--motion-duration-normal) * 0.75) var(--motion-ease-out);
+}
+
+.panel-fade-enter-from,
+.panel-fade-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
 }
 
 .view-home {
@@ -4561,8 +4640,13 @@ textarea {
   justify-content: center;
   cursor: pointer;
   transition:
-    background-color 0.15s ease,
-    color 0.15s ease;
+    background-color var(--motion-duration-fast) ease,
+    color var(--motion-duration-fast) ease,
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.settings-section-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .settings-section-btn-head {
@@ -4617,6 +4701,7 @@ textarea {
   overflow: auto;
   min-height: 0;
   scrollbar-gutter: stable;
+  position: relative;
 }
 
 .settings-page-notice {
@@ -5152,7 +5237,7 @@ textarea {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  transition: height 0.3s ease;
+  transition: height var(--motion-duration-slow) var(--motion-ease-standard);
   position: relative;
   z-index: 20;
 }

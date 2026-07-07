@@ -169,7 +169,11 @@ onBeforeUnmount(() => {
         <main class="prototype-main">
           <AppTopBar :label="pageLabel" :system-status="appStore.systemStatus" />
           <div class="prototype-content">
-            <RouterView />
+            <RouterView v-slot="{ Component, route: viewRoute }">
+              <Transition name="route-page" mode="out-in">
+                <component :is="Component" :key="viewRoute.path" />
+              </Transition>
+            </RouterView>
           </div>
           <section v-if="showRuntimeConsole" :class="['log-panel', { expanded: logExpanded }]">
             <header class="log-panel-head" @click="logExpanded = !logExpanded">
