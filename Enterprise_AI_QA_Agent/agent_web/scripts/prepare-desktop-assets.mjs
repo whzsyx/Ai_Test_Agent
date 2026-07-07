@@ -21,16 +21,24 @@ cpSync(sourceLogo, publicLogo);
 cpSync(sourceLogo, logoSvg);
 
 const svg = readFileSync(sourceLogo);
-const resvg = new Resvg(svg, {
-  fitTo: {
-    mode: "width",
-    value: 512,
-  },
+
+// 生成一个较大的 PNG 供应用内使用
+const largeResvg = new Resvg(svg, {
+  fitTo: { mode: "width", value: 512 },
   background: "rgba(0, 0, 0, 0)",
 });
-const png = resvg.render().asPng();
+const largePng = largeResvg.render().asPng();
+writeFileSync(logoPng, largePng);
 
-writeFileSync(logoPng, png);
-writeFileSync(logoIco, await pngToIco([png]));
+// 生成多尺寸 PNG 并合成标准 Windows ico，避免单张大图导致图标过大/加载失败。
+const iconSizes = [16, 32, 48, 64, 128, 256];
+const iconPngs = iconSizes.map((size) => {
+  const resvg = new Resvg(svg, {
+    fitTo: { mode: "width", value: size },
+    background: "rgba(0, 0, 0, 0)",
+  });
+  return resvg.render().asPng();
+});
+writeFileSync(logoIco, await pngToIco(iconPngs));
 
 console.log(`Desktop icons generated at ${assetsRoot}`);

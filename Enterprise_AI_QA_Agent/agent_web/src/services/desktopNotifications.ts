@@ -6,6 +6,7 @@
  * fallback.
  */
 import { useGeneralSettingsStore } from "../stores/generalSettings";
+import removeMarkdown from "remove-markdown";
 
 const notifiedIds = new Set<string>();
 let swRegistration: ServiceWorkerRegistration | null = null;
@@ -54,12 +55,19 @@ function isUserAway(_sessionId?: string): boolean {
   return !path.endsWith("/") && path !== "/" && !path.includes("/home");
 }
 
+function stripMarkdownBody(body?: string): string | undefined {
+  if (typeof body !== "string" || !body.trim()) return undefined;
+  return removeMarkdown(body, { gfm: true, useImgAltText: true }).trim();
+}
+
 async function sendNotification(title: string, options?: NotificationOptions): Promise<void> {
+  const plainBody = stripMarkdownBody(options?.body);
+
   if (hasDesktopBridge()) {
     try {
       await window.qaAgentDesktop?.notify({
         title,
-        body: typeof options?.body === "string" ? options.body : undefined,
+        body: plainBody,
         tag: options?.tag,
         silent: options?.silent,
       });
@@ -77,10 +85,11 @@ async function sendNotification(title: string, options?: NotificationOptions): P
   if (reg) {
     try {
       await reg.showNotification(title, {
-        icon: "/logo.svg",
+        // 不设置 icon，避免在通知左侧显示大图标。
         badge: "/logo.svg",
         tag: options?.tag || "default",
         ...options,
+        body: plainBody,
       } as NotificationOptions);
       return;
     } catch {
@@ -90,8 +99,9 @@ async function sendNotification(title: string, options?: NotificationOptions): P
 
   try {
     const notification = new Notification(title, {
-      icon: "/logo.svg",
+      // 不设置 icon，避免在通知左侧显示大图标。
       ...options,
+      body: plainBody,
     });
     notification.onclick = () => {
       window.focus();

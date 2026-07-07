@@ -1,16 +1,19 @@
 import { app, BrowserWindow, ipcMain, Menu, Notification, shell } from "electron";
-import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import removeMarkdown from "remove-markdown";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const appRoot = resolve(__dirname, "..");
 const rendererRoot = join(appRoot, "dist");
 const iconPath = join(appRoot, "desktop-assets", process.platform === "win32" ? "logo.ico" : "logo.png");
 const APP_NAME = "御策天检";
-const APP_USER_MODEL_ID = "com.enterprise-ai-qa-agent.desktop";
+// Windows 通知/任务栏共用同一个 AppUserModelId。
+// 使用英文 ID 避免中文编码问题；通知显示的中文名由快捷方式 description 提供。
+const APP_USER_MODEL_ID = "御策天检";
 const backendOrigin = process.env.QA_AGENT_API_ORIGIN || "http://127.0.0.1:1032";
 const desktopDebugEnabled = !app.isPackaged || process.env.QA_AGENT_DESKTOP_DEBUG === "1";
 
@@ -21,19 +24,27 @@ function ensureWindowsShortcut() {
   if (process.platform !== "win32") return;
 
   const programsPath = join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs");
-  const shortcutPath = join(programsPath, `${APP_NAME}.lnk`);
-  if (existsSync(shortcutPath)) return;
+  // 使用英文文件名避免 Electron shell API 的 Unicode 路径问题；
+  // 通知中心显示的应用名由 description / AppUserModelId 决定，不受文件名影响。
+  const shortcutPath = join(programsPath, "YuceTianjian.lnk");
+  const legacyShortcutPath = join(programsPath, `${APP_NAME}.lnk`);
 
   try {
     mkdirSync(programsPath, { recursive: true });
-    shell.writeShortcutLink(shortcutPath, "create", {
+    // 清理旧的中文/乱码快捷方式，避免冲突。
+    if (legacyShortcutPath !== shortcutPath && existsSync(legacyShortcutPath)) {
+      rmSync(legacyShortcutPath);
+      console.log("[Desktop] Removed legacy shortcut:", legacyShortcutPath);
+    }
+    shell.writeShortcutLink(shortcutPath, "replace", {
       target: process.execPath,
       args: process.argv.slice(1).join(" "),
       cwd: process.cwd(),
       description: APP_NAME,
-      icon: existsSync(iconPath) ? iconPath : undefined,
+      icon: existsSync(iconPath) ? `${iconPath},0` : undefined,
       appUserModelId: APP_USER_MODEL_ID,
     });
+    console.log("[Desktop] Start menu shortcut ensured:", shortcutPath);
   } catch (err) {
     console.warn("[Desktop] Failed to create start menu shortcut:", err);
   }
@@ -166,7 +177,9 @@ function toggleDetachedDevTools(webContents) {
 function normalizeNotificationPayload(payload) {
   const record = payload && typeof payload === "object" ? payload : {};
   const title = typeof record.title === "string" ? record.title.trim().slice(0, 120) : "";
-  const body = typeof record.body === "string" ? record.body.trim().slice(0, 500) : "";
+  const rawBody = typeof record.body === "string" ? record.body.trim() : "";
+  const plainBody = rawBody ? removeMarkdown(rawBody, { gfm: true, useImgAltText: true }).trim() : "";
+  const body = plainBody.slice(0, 500);
   const tag = typeof record.tag === "string" ? record.tag.trim().slice(0, 120) : undefined;
 
   if (!title) {
@@ -200,9 +213,13 @@ function registerDesktopIpc() {
       return false;
     }
 
+    // 不设置 icon，避免 Windows 通知左侧显示大图标。
+    // 顶部“御策天检”旁边的小图标由开始菜单快捷方式提供。
     const notification = new Notification({
-      ...normalized,
-      icon: existsSync(iconPath) ? iconPath : undefined,
+      title: normalized.title,
+      body: normalized.body,
+      tag: normalized.tag,
+      silent: normalized.silent,
     });
     notification.on("click", focusMainWindow);
     notification.show();
