@@ -1,16 +1,20 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
-from src.application.permissions.permission_service import PermissionService
+from src.application.permissions.permission_service import PermissionPolicyContext, PermissionService
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.runtime.tool_runtime_service import ToolExecutionContext, ToolRuntimeService
+from src.application.skills.skill_runtime_service import SkillRuntimeService
 from src.graph.state import AgentGraphState
 from src.infrastructure.storage_utils import make_json_safe
 from src.registry.tools import ToolRegistry
+from src.registry.skills import SkillRegistry
 from src.runtime.execution_logging import append_graph_event
 from src.schemas.tool_runtime import ModelToolCall, ToolExecutionRecord
+from src.schemas.session import MessageKind, RuntimeMode, SessionMode
 
 
 def build_tool_executor_node(
@@ -18,6 +22,8 @@ def build_tool_executor_node(
     permission_service: PermissionService,
     tool_runtime_service: ToolRuntimeService,
     tool_job_service: ToolJobService | None = None,
+    skill_registry: SkillRegistry | None = None,
+    skill_runtime_service: SkillRuntimeService | None = None,
 ):
     async def tool_executor(state: AgentGraphState) -> AgentGraphState:
         append_graph_event(
@@ -65,6 +71,8 @@ def build_tool_executor_node(
                 tool_runtime_service=tool_runtime_service,
                 tool_job_service=tool_job_service,
                 tool_context=tool_context,
+                skill_registry=skill_registry,
+                skill_runtime_service=skill_runtime_service,
             )
             tool_results.append(execution_record["tool_result"])
             if execution_record["tool_message"]:
@@ -98,6 +106,7 @@ def build_tool_executor_node(
                 "active_mcp_servers": state["active_mcp_servers"],
                 "mcp_prompt_blocks": state["mcp_prompt_blocks"],
                 "available_tool_keys": state["available_tool_keys"],
+                "deferred_tool_keys": state["deferred_tool_keys"],
                 "model_visible_tool_keys": state["model_visible_tool_keys"],
                 "allowed_tool_keys": state["allowed_tool_keys"],
                 "approval_required_tool_keys": state["approval_required_tool_keys"],
@@ -153,25 +162,28 @@ async def _resolve_tool_call(
     tool_runtime_service: ToolRuntimeService,
     tool_job_service: ToolJobService | None,
     tool_context: ToolExecutionContext,
+    skill_registry: SkillRegistry | None = None,
+    skill_runtime_service: SkillRuntimeService | None = None,
 ) -> dict[str, Any]:
     permission_decision = _find_permission_decision(state, tool_call.name)
     try:
         tool = tool_registry.get(tool_call.name)
     except KeyError:
+        unknown_output = _build_unknown_tool_output(state, tool_call.name)
         result = ToolExecutionRecord(
             call_id=tool_call.id,
             tool_key=tool_call.name,
             tool_name=tool_call.name,
             status="failed",
-            summary=f"Model requested unknown tool '{tool_call.name}'.",
+            summary=str(unknown_output.get("summary") or f"Model requested unknown tool '{tool_call.name}'."),
             input=tool_call.arguments,
-            output={"error": "unknown_tool"},
+            output=unknown_output,
         )
         append_graph_event(
             state,
             "tool.execution_failed",
             "tool_executor",
-            f"Model requested unknown tool '{tool_call.name}'.",
+            result.summary,
             tool_key=tool_call.name,
             call_id=tool_call.id,
             status="failed",
@@ -215,6 +227,41 @@ async def _resolve_tool_call(
             permission_source=(permission_decision or {}).get("source", "static_policy"),
             permission_reason=denial_reason,
             permission_reason_code=(permission_decision or {}).get("reason_code", "restricted_default_deny"),
+        )
+        return {
+            "tool_result": result.model_dump(mode="python"),
+            "tool_message": build_tool_message(result),
+            "approval": None,
+        }
+
+    if tool.key == "skill":
+        result = _run_skill_loader(
+            state=state,
+            tool_call=tool_call,
+            tool_registry=tool_registry,
+            permission_service=permission_service,
+            skill_registry=skill_registry,
+            skill_runtime_service=skill_runtime_service,
+        )
+        return {
+            "tool_result": result.model_dump(mode="python"),
+            "tool_message": build_tool_message(result),
+            "approval": None,
+        }
+
+    validation_errors = _validate_tool_input(tool.input_schema, tool_call.arguments)
+    if validation_errors:
+        result = ToolExecutionRecord(
+            call_id=tool_call.id,
+            tool_key=tool.key,
+            tool_name=tool.name,
+            status="failed",
+            summary=(
+                f"Tool '{tool.key}' arguments are invalid. Ask the user for missing or invalid values "
+                "instead of retrying with guessed data."
+            ),
+            input=tool_call.arguments,
+            output={"error": "invalid_tool_arguments", "validation_errors": validation_errors},
         )
         return {
             "tool_result": result.model_dump(mode="python"),
@@ -391,3 +438,225 @@ def _find_permission_decision(state: AgentGraphState, tool_key: str) -> dict[str
         if item.get("tool_key") == tool_key:
             return item
     return None
+
+
+def _run_skill_loader(
+    *,
+    state: AgentGraphState,
+    tool_call: ModelToolCall,
+    tool_registry: ToolRegistry,
+    permission_service: PermissionService,
+    skill_registry: SkillRegistry | None,
+    skill_runtime_service: SkillRuntimeService | None,
+) -> ToolExecutionRecord:
+    if skill_registry is None or skill_runtime_service is None:
+        return ToolExecutionRecord(
+            call_id=tool_call.id,
+            tool_key="skill",
+            tool_name="Skill Loader",
+            status="failed",
+            summary="Skill runtime is not configured.",
+            input=tool_call.arguments,
+            output={"error": "skill_runtime_unavailable"},
+        )
+
+    arguments = dict(tool_call.arguments or {})
+    action = str(arguments.get("action") or "load").strip().lower()
+    requested_keys = [str(item).strip() for item in arguments.get("skill_keys", []) if str(item).strip()]
+    query = str(arguments.get("query") or "").strip()
+    catalog = skill_registry.list()
+    matched = skill_registry.get_many(requested_keys) or _match_skills(catalog, query)
+    matched_payload = [
+        {
+            "key": item.key,
+            "name": item.name,
+            "description": item.description,
+            "tags": item.tags,
+            "tool_keys": item.tool_keys,
+        }
+        for item in matched
+    ]
+
+    if action == "search":
+        return ToolExecutionRecord(
+            call_id=tool_call.id,
+            tool_key="skill",
+            tool_name="Skill Loader",
+            status="completed",
+            summary=f"Found {len(matched_payload)} matching Skill(s).",
+            input=arguments,
+            output={"matched_skills": matched_payload, "loaded_skills": [], "loaded_tools": []},
+        )
+
+    tool_keys = [tool_key for item in matched for tool_key in item.tool_keys]
+    if query:
+        tool_keys.extend(_match_deferred_tools(tool_registry, state.get("deferred_tool_keys", []), query))
+    tool_keys = list(dict.fromkeys(tool_keys))
+    valid_tool_keys = [key for key in tool_keys if key in state.get("deferred_tool_keys", [])]
+    evaluation = permission_service.evaluate(
+        policy_context=_permission_context_from_state(state),
+        tools=tool_registry.get_many(valid_tool_keys),
+    )
+
+    state["available_tool_keys"] = list(dict.fromkeys([*state.get("available_tool_keys", []), *valid_tool_keys]))
+    state["deferred_tool_keys"] = [key for key in state.get("deferred_tool_keys", []) if key not in valid_tool_keys]
+    state["allowed_tool_keys"] = list(dict.fromkeys([*state.get("allowed_tool_keys", []), *evaluation.allowed_tool_keys]))
+    state["approval_required_tool_keys"] = list(
+        dict.fromkeys([*state.get("approval_required_tool_keys", []), *evaluation.approval_required_tool_keys])
+    )
+    state["denied_tool_keys"] = list(dict.fromkeys([*state.get("denied_tool_keys", []), *evaluation.denied_tool_keys]))
+    state["model_visible_tool_keys"] = list(
+        dict.fromkeys([*state.get("model_visible_tool_keys", []), *evaluation.model_visible_tool_keys])
+    )
+    state["permission_decisions"] = [
+        *state.get("permission_decisions", []),
+        *[item.to_payload() for item in evaluation.decisions],
+    ]
+    loaded_skill_keys = [item.key for item in matched]
+    state["requested_skill_keys"] = list(dict.fromkeys([*state.get("requested_skill_keys", []), *loaded_skill_keys]))
+    state["resolved_skill_keys"] = list(dict.fromkeys([*state.get("resolved_skill_keys", []), *loaded_skill_keys]))
+    instructions = skill_runtime_service.build_prompt_blocks(loaded_skill_keys)
+    state["skill_prompt_blocks"] = list(dict.fromkeys([*state.get("skill_prompt_blocks", []), *instructions]))
+
+    return ToolExecutionRecord(
+        call_id=tool_call.id,
+        tool_key="skill",
+        tool_name="Skill Loader",
+        status="completed",
+        summary=(
+            f"Loaded {len(loaded_skill_keys)} Skill(s) and exposed "
+            f"{len(evaluation.model_visible_tool_keys)} permitted tool(s) for the next turn."
+        ),
+        input=arguments,
+        output={
+            "matched_skills": matched_payload,
+            "loaded_skills": loaded_skill_keys,
+            "loaded_tools": evaluation.model_visible_tool_keys,
+            "denied_tools": evaluation.denied_tool_keys,
+            "instructions": instructions,
+        },
+    )
+
+
+def _match_skills(catalog: list[Any], query: str) -> list[Any]:
+    terms = _search_terms(query)
+    if not terms:
+        return []
+    scored: list[tuple[int, Any]] = []
+    for skill in catalog:
+        haystack = " ".join([skill.key, skill.name, skill.summary, skill.description, *skill.tags]).lower()
+        score = sum(3 if term in skill.key.lower() else 1 for term in terms if term in haystack)
+        if score:
+            scored.append((score, skill))
+    return [item for _, item in sorted(scored, key=lambda pair: (-pair[0], pair[1].key))[:3]]
+
+
+def _match_deferred_tools(tool_registry: ToolRegistry, deferred_keys: list[str], query: str) -> list[str]:
+    terms = _search_terms(query)
+    scored: list[tuple[int, str]] = []
+    for tool in tool_registry.get_many(deferred_keys):
+        haystack = " ".join([tool.key, tool.name, tool.description, tool.category, *tool.tags]).lower()
+        score = sum(3 if term in tool.key.lower() else 1 for term in terms if term in haystack)
+        if score:
+            scored.append((score, tool.key))
+    return [key for _, key in sorted(scored, key=lambda pair: (-pair[0], pair[1]))[:12]]
+
+
+def _search_terms(query: str) -> list[str]:
+    return [item for item in re.split(r"[^\w\u4e00-\u9fff]+", query.lower()) if len(item) > 1]
+
+
+def _permission_context_from_state(state: AgentGraphState) -> PermissionPolicyContext:
+    input_envelope = dict(state.get("context_bundle", {}).get("input_envelope") or {})
+    input_routing = dict(state.get("context_bundle", {}).get("input_routing") or {})
+    return PermissionPolicyContext(
+        session_mode=SessionMode(state["session_mode"]),
+        runtime_mode=RuntimeMode(state["runtime_mode"]),
+        selected_agent_key=state["selected_agent_key"],
+        message_kind=MessageKind(input_envelope.get("message_kind", MessageKind.user_input.value)),
+        submit_mode=str(input_envelope.get("submit_mode") or "immediate"),
+        execution_lane=str(input_routing.get("execution_lane") or "conversation_turn"),
+        source=str(input_envelope.get("source") or "session.send_message"),
+    )
+
+
+def _validate_tool_input(schema: dict[str, Any], arguments: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    properties = dict(schema.get("properties") or {})
+    for key in schema.get("required") or []:
+        if key not in arguments or arguments.get(key) is None or arguments.get(key) == "" or arguments.get(key) == []:
+            errors.append(f"Missing required field: {key}")
+    for key, value in arguments.items():
+        rule = properties.get(key)
+        if not isinstance(rule, dict) or value is None:
+            continue
+        expected = rule.get("type")
+        if expected == "array" and not isinstance(value, list):
+            errors.append(f"Field '{key}' must be an array.")
+            continue
+        if expected == "string" and not isinstance(value, str):
+            errors.append(f"Field '{key}' must be a string.")
+            continue
+        if expected == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+            errors.append(f"Field '{key}' must be an integer.")
+            continue
+        if expected == "boolean" and not isinstance(value, bool):
+            errors.append(f"Field '{key}' must be a boolean.")
+            continue
+        if expected == "array" and len(value) < int(rule.get("minItems") or 0):
+            errors.append(f"Field '{key}' must contain at least {rule.get('minItems')} item(s).")
+        item_rule = rule.get("items") if expected == "array" else None
+        if isinstance(item_rule, dict) and item_rule.get("format") == "email":
+            invalid = [item for item in value if not _is_email_address(item)]
+            if invalid:
+                errors.append(f"Field '{key}' contains invalid email address values.")
+    return errors
+
+
+def _is_email_address(value: Any) -> bool:
+    return bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", str(value or "").strip()))
+
+
+def _build_unknown_tool_output(state: AgentGraphState, requested_name: str) -> dict[str, Any]:
+    available_skills = [
+        item
+        for item in dict(state.get("context_bundle") or {}).get("available_skills", [])
+        if isinstance(item, dict)
+    ]
+    skill_catalog = {
+        str(item.get("key") or "").strip(): item
+        for item in available_skills
+        if str(item.get("key") or "").strip()
+    }
+    model_visible_tools = [str(item).strip() for item in state.get("model_visible_tool_keys", []) if str(item).strip()]
+
+    suggested_tools = _suggest_tool_names(requested_name, model_visible_tools)
+    skill_match = skill_catalog.get(requested_name)
+
+    if skill_match is not None:
+        return {
+            "error": "unknown_tool",
+            "error_kind": "skill_invoked_as_tool",
+            "skill_key": requested_name,
+            "skill_name": str(skill_match.get("name") or requested_name),
+            "summary": (
+                f"'{requested_name}' is a skill, not a callable tool. "
+                "Call the registered 'skill' tool with this key to load it."
+            ),
+            "suggested_tools": suggested_tools,
+            "model_visible_tools": model_visible_tools,
+        }
+
+    return {
+        "error": "unknown_tool",
+        "error_kind": "unregistered_tool_name",
+        "requested_tool": requested_name,
+        "summary": f"Model requested unknown tool '{requested_name}'.",
+        "suggested_tools": suggested_tools,
+        "model_visible_tools": model_visible_tools,
+    }
+
+
+def _suggest_tool_names(requested_name: str, model_visible_tools: list[str]) -> list[str]:
+    del requested_name
+    return list(dict.fromkeys(["skill", *model_visible_tools]))[:8]

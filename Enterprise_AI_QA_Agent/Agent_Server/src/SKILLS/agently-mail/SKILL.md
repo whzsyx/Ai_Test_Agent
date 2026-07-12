@@ -1,6 +1,7 @@
 ---
 name: agently-mail
 description: Tencent Agent Mail skill - provides email sending, receiving, reading, searching, replying and forwarding via agently-cli.
+tools: mail-status, mail-send, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-download-attachment, mail-provision-inbox
 ---
 
 # Tencent Agent Mail

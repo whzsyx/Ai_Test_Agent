@@ -29,6 +29,7 @@ class AgentGraphState(TypedDict):
     active_mcp_servers: list[dict[str, Any]]
     mcp_prompt_blocks: list[str]
     available_tool_keys: list[str]
+    deferred_tool_keys: list[str]
     model_visible_tool_keys: list[str]
     allowed_tool_keys: list[str]
     approval_required_tool_keys: list[str]

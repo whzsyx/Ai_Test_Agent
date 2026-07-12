@@ -102,6 +102,47 @@ COMPATIBILITY_RUNNER_OUTPUT_SCHEMA = {
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolModule] = {
+            "skill": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="skill",
+                    name="Skill Loader",
+                    description=(
+                        "Search or load a registered Skill on demand. Loading a Skill returns its instructions "
+                        "and makes only its associated tools available on the next model turn. Use this before "
+                        "attempting a capability whose concrete tools are not currently visible."
+                    ),
+                    category="system",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["search", "load"],
+                                "description": "Search the catalog or load matching Skills and their tools.",
+                                "default": "load",
+                            },
+                            "skill_keys": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Exact Skill keys to load when already known.",
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Capability description used to find matching Skills and deferred tools.",
+                            },
+                        },
+                    },
+                    output_schema={
+                        "matched_skills": "array",
+                        "loaded_skills": "array",
+                        "loaded_tools": "array",
+                        "instructions": "array",
+                    },
+                    tags=["core", "skills", "deferred-tools"],
+                ),
+                handler_key="graph-skill-loader",
+            ),
             "workflow-router": ToolModule(
                 descriptor=ToolDescriptor(
                     key="workflow-router",
@@ -1848,7 +1889,12 @@ class ToolRegistry:
                     input_schema={
                         "type": "object",
                         "properties": {
-                            "to": {"type": "array", "items": {"type": "string"}, "description": "Recipient addresses."},
+                            "to": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "email"},
+                                "minItems": 1,
+                                "description": "Real recipient email addresses explicitly supplied by the user. Never invent recipients.",
+                            },
                             "subject": {"type": "string", "description": "Email subject."},
                             "content": {"type": "string", "description": "Plain text body."},
                             "content_html": {"type": "string", "description": "Optional HTML body."},

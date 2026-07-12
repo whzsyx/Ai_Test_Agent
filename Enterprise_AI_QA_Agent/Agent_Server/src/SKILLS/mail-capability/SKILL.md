@@ -1,3 +1,9 @@
+---
+name: mail-capability
+description: Safety rules for all Agent Mailbox tool invocations.
+tools: mail-status, mail-send, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-download-attachment, mail-provision-inbox
+---
+
 # mail-capability
 
 ## Purpose

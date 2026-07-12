@@ -16,6 +16,7 @@ class SkillRegistry:
                 description="Normalizes user intent into structured requirements and constraints.",
                 recommended_agents=["coordinator", "qa-planner"],
                 tags=["planning"],
+                tool_keys=["knowledge-rag", "api-docs-library", "attachment-reader"],
             ),
             "risk-scoping": SkillDescriptor(
                 key="risk-scoping",
@@ -24,6 +25,7 @@ class SkillRegistry:
                 description="Prioritizes what to validate first for a given task or release scope.",
                 recommended_agents=["coordinator", "qa-planner"],
                 tags=["risk", "planning"],
+                tool_keys=["knowledge-rag", "observation-search", "session-history"],
             ),
             "case-design": SkillDescriptor(
                 key="case-design",
@@ -32,6 +34,7 @@ class SkillRegistry:
                 description="Transforms scenarios into structured QA cases with expected outcomes.",
                 recommended_agents=["qa-planner"],
                 tags=["qa"],
+                tool_keys=["knowledge-rag", "report-writer"],
             ),
             "ui-exploration": SkillDescriptor(
                 key="ui-exploration",
@@ -40,6 +43,7 @@ class SkillRegistry:
                 description="Guides the runtime while inspecting or traversing browser interfaces.",
                 recommended_agents=["ui-executor"],
                 tags=["ui", "automation"],
+                tool_keys=["ui-page-explorer", "browser-control", "dom-inspector"],
             ),
             "playwright-cli": SkillDescriptor(
                 key="playwright-cli",
@@ -48,6 +52,7 @@ class SkillRegistry:
                 description="Loads the local SKILLS/playwright-cli/SKILL.md instructions and maps commands to the Agent_Server Python Playwright runtime.",
                 recommended_agents=["ui-executor"],
                 tags=["ui", "automation", "playwright", "skill-file"],
+                tool_keys=["browser-automation", "browser-control"],
             ),
             "artifact-collection": SkillDescriptor(
                 key="artifact-collection",
@@ -56,6 +61,7 @@ class SkillRegistry:
                 description="Collects QA artifacts in a structured way for later replay or reporting.",
                 recommended_agents=["ui-executor", "report-analyst"],
                 tags=["artifact"],
+                tool_keys=["file-artifact-manager", "attachment-reader"],
             ),
             "api-validation": SkillDescriptor(
                 key="api-validation",
@@ -64,6 +70,7 @@ class SkillRegistry:
                 description="Shapes API checks into reproducible verification steps.",
                 recommended_agents=["api-verifier"],
                 tags=["api", "verification"],
+                tool_keys=["api-test-runner", "api-tester", "api-docs-library"],
             ),
             "assertion-design": SkillDescriptor(
                 key="assertion-design",
@@ -72,6 +79,7 @@ class SkillRegistry:
                 description="Defines structured assertions for UI, API, and report outputs.",
                 recommended_agents=["api-verifier", "qa-planner"],
                 tags=["verification"],
+                tool_keys=["api-tester", "observation-search"],
             ),
             "report-synthesis": SkillDescriptor(
                 key="report-synthesis",
@@ -80,6 +88,7 @@ class SkillRegistry:
                 description="Converts runtime evidence into human-readable reports and conclusions.",
                 recommended_agents=["coordinator", "report-analyst"],
                 tags=["reporting"],
+                tool_keys=["report-writer", "session-history", "session-timeline", "observation-search"],
             ),
             "agently-mail": SkillDescriptor(
                 key="agently-mail",
@@ -88,6 +97,10 @@ class SkillRegistry:
                 description="Provides Agent Mailbox capabilities backed by agently-cli with two-phase send confirmation.",
                 recommended_agents=["coordinator", "ops-executor"],
                 tags=["mail", "communication"],
+                tool_keys=[
+                    "mail-status", "mail-send", "mail-list", "mail-read", "mail-search",
+                    "mail-reply", "mail-forward", "mail-download-attachment", "mail-provision-inbox",
+                ],
             ),
             "mail-capability": SkillDescriptor(
                 key="mail-capability",
@@ -96,6 +109,10 @@ class SkillRegistry:
                 description="Enforces confirmation, credential hygiene, and attachment safety rules for mail-* tools.",
                 recommended_agents=["coordinator", "ops-executor"],
                 tags=["mail", "safety", "communication"],
+                tool_keys=[
+                    "mail-status", "mail-send", "mail-list", "mail-read", "mail-search",
+                    "mail-reply", "mail-forward", "mail-download-attachment", "mail-provision-inbox",
+                ],
             ),
         }
         self._skills: dict[str, SkillDescriptor] = {
@@ -206,6 +223,7 @@ class SkillRegistry:
                 description=description,
                 recommended_agents=existing.recommended_agents if existing else ["coordinator"],
                 tags=list(dict.fromkeys([*(existing.tags if existing else []), "skill-file"])),
+                tool_keys=self._parse_list(frontmatter.get("tools")) or (existing.tool_keys if existing else []),
             )
 
     def _parse_skill_file(self, path: Path) -> tuple[dict[str, str], str]:
@@ -228,3 +246,8 @@ class SkillRegistry:
             if stripped:
                 return stripped[:180]
         return ""
+
+    @staticmethod
+    def _parse_list(value: str | None) -> list[str]:
+        raw = str(value or "").strip().strip("[]")
+        return [item.strip().strip('"').strip("'") for item in raw.split(",") if item.strip()]

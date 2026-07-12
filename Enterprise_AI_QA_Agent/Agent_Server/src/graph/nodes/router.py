@@ -35,16 +35,15 @@ def build_router_node(
         resolved_skills = [
             skill.key
             for skill in skill_registry.get_many(state["requested_skill_keys"])
-            if skill.key in agent.supported_skills
         ]
 
-        tools = tool_registry.get_many(agent.supported_tools)
-        dynamic_mcp_tools = [
-            tool
-            for tool in tool_registry.list()
-            if tool.category == "mcp" and tool.key not in {item.key for item in tools}
+        loaded_skill_tools = [
+            tool_key
+            for skill in skill_registry.get_many(resolved_skills)
+            for tool_key in skill.tool_keys
         ]
-        tools = [*tools, *dynamic_mcp_tools]
+        initial_tool_keys = list(dict.fromkeys(["skill", *loaded_skill_tools]))
+        tools = tool_registry.get_many(initial_tool_keys)
         state["selected_agent_key"] = agent.key
         state["selected_agent_name"] = agent.name
         state["selected_model_key"] = selected_model.key
@@ -66,6 +65,9 @@ def build_router_node(
         state["active_mcp_servers"] = mcp_runtime_service.list_active_servers()
         state["mcp_prompt_blocks"] = mcp_runtime_service.build_prompt_blocks(state["active_mcp_servers"])
         state["available_tool_keys"] = [tool.key for tool in tools]
+        state["deferred_tool_keys"] = [
+            tool.key for tool in tool_registry.list() if tool.key not in state["available_tool_keys"]
+        ]
         context_bundle = dict(state.get("context_bundle") or {})
         context_bundle["available_skills"] = [
             skill.model_dump(mode="python")
@@ -89,6 +91,7 @@ def build_router_node(
             memory_hit_count=len(state["memory_hits"]),
             active_mcp_count=len(state["active_mcp_servers"]),
             available_tools=",".join(state["available_tool_keys"]) or "none",
+            deferred_tool_count=len(state["deferred_tool_keys"]),
         )
         return state
 

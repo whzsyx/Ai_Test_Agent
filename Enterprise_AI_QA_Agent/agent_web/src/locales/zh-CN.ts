@@ -692,6 +692,8 @@ export default {
   "skills.editor_title": "Skill 编辑器",
   "skills.install_name": "安装名",
   "skills.content_label": "描述与内容 (Markdown)",
+  "skills.tool_keys_label": "关联工具（延迟加载）",
+  "skills.tool_keys_hint": "填写工具 key，多个用逗号分隔。Skill 被加载时才会向模型开放这些工具。",
   "skills.saving": "保存中...",
   "skills.save_create": "保存 / 创建",
   "skills.delete_title": "删除 Skill",

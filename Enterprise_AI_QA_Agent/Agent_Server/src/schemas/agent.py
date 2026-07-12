@@ -39,6 +39,7 @@ class SkillDescriptor(BaseModel):
     description: str
     recommended_agents: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    tool_keys: list[str] = Field(default_factory=list)
 
 
 class MCPServerDescriptor(BaseModel):

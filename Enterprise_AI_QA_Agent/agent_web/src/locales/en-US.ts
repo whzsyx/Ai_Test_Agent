@@ -691,6 +691,8 @@ export default {
   "skills.editor_title": "Skill Editor",
   "skills.install_name": "Installation Name",
   "skills.content_label": "Description & Content (Markdown)",
+  "skills.tool_keys_label": "Associated Tools (Deferred)",
+  "skills.tool_keys_hint": "Comma-separated tool keys. These tools are exposed only after the Skill is loaded.",
   "skills.saving": "Saving...",
   "skills.save_create": "Save / Create",
   "skills.delete_title": "Delete Skill",

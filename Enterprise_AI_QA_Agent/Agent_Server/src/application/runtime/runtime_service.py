@@ -338,6 +338,7 @@ class RuntimeService:
             "active_mcp_servers": [],
             "mcp_prompt_blocks": [],
             "available_tool_keys": [],
+            "deferred_tool_keys": [],
             "model_visible_tool_keys": [],
             "allowed_tool_keys": [],
             "approval_required_tool_keys": [],
@@ -526,6 +527,7 @@ class RuntimeService:
             "active_mcp_servers": list(graph_state.get("active_mcp_servers") or fallback_pending_turn.get("active_mcp_servers") or []),
             "mcp_prompt_blocks": list(graph_state.get("mcp_prompt_blocks") or fallback_pending_turn.get("mcp_prompt_blocks") or []),
             "available_tool_keys": list(graph_state.get("available_tool_keys") or fallback_pending_turn.get("available_tool_keys") or []),
+            "deferred_tool_keys": list(graph_state.get("deferred_tool_keys") or fallback_pending_turn.get("deferred_tool_keys") or []),
             "model_visible_tool_keys": list(
                 graph_state.get("model_visible_tool_keys")
                 or fallback_pending_turn.get("model_visible_tool_keys")
@@ -654,6 +656,7 @@ class RuntimeService:
             "active_mcp_servers": state["active_mcp_servers"],
             "mcp_prompt_blocks": state["mcp_prompt_blocks"],
             "available_tool_keys": state["available_tool_keys"],
+            "deferred_tool_keys": state["deferred_tool_keys"],
             "model_visible_tool_keys": state["model_visible_tool_keys"],
             "allowed_tool_keys": state["allowed_tool_keys"],
             "approval_required_tool_keys": state["approval_required_tool_keys"],
@@ -725,6 +728,7 @@ class RuntimeService:
             "active_mcp_servers": state["active_mcp_servers"],
             "mcp_prompt_blocks": state["mcp_prompt_blocks"],
             "available_tool_keys": state["available_tool_keys"],
+            "deferred_tool_keys": state["deferred_tool_keys"],
             "model_visible_tool_keys": state["model_visible_tool_keys"],
             "allowed_tool_keys": state["allowed_tool_keys"],
             "approval_required_tool_keys": state["approval_required_tool_keys"],
@@ -770,6 +774,7 @@ class RuntimeService:
                 "active_mcp_servers": state["active_mcp_servers"],
                 "mcp_prompt_blocks": state["mcp_prompt_blocks"],
                 "available_tool_keys": state["available_tool_keys"],
+                "deferred_tool_keys": state["deferred_tool_keys"],
                 "model_visible_tool_keys": state["model_visible_tool_keys"],
                 "allowed_tool_keys": state["allowed_tool_keys"],
                 "approval_required_tool_keys": state["approval_required_tool_keys"],

@@ -14,6 +14,7 @@ const errorMessage = ref("");
 const successMessage = ref("");
 const editorKey = ref("");
 const editorContent = ref("");
+const editorToolKeys = ref("");
 const deleteConfirmOpen = ref(false);
 const skillPendingDelete = ref<SkillDescriptor | null>(null);
 const editorOpen = ref(false);
@@ -35,6 +36,7 @@ async function selectSkill(skill: SkillDescriptor) {
   selectedSkill.value = await api.getSkill(skill.key);
   editorKey.value = selectedSkill.value.key;
   editorContent.value = selectedSkill.value.content || "";
+  editorToolKeys.value = (selectedSkill.value.tool_keys || []).join(", ");
   editorOpen.value = true;
 }
 
@@ -42,6 +44,7 @@ function openNewSkillEditor() {
   selectedSkill.value = null;
   editorKey.value = "";
   editorContent.value = "";
+  editorToolKeys.value = "";
   editorOpen.value = true;
 }
 
@@ -54,7 +57,9 @@ async function saveSkill() {
   errorMessage.value = "";
   successMessage.value = "";
   try {
-    const saved = await api.upsertSkill(editorKey.value.trim(), { content: editorContent.value });
+    const saved = await api.upsertSkill(editorKey.value.trim(), {
+      content: withToolMetadata(editorContent.value, editorToolKeys.value),
+    });
     successMessage.value = `${t("skills.saved_prefix")} ${saved.key}`;
     await loadSkills();
     await selectSkill(saved);
@@ -98,6 +103,7 @@ async function confirmDeleteSkill() {
       selectedSkill.value = null;
       editorKey.value = "";
       editorContent.value = "";
+      editorToolKeys.value = "";
     }
     await loadSkills();
     deleteConfirmOpen.value = false;
@@ -107,6 +113,25 @@ async function confirmDeleteSkill() {
   } finally {
     deletingSkillKey.value = "";
   }
+}
+
+function withToolMetadata(content: string, rawToolKeys: string): string {
+  const tools = rawToolKeys
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item, index, all) => all.indexOf(item) === index);
+  const line = `tools: ${tools.join(", ")}`;
+  const normalized = content.replace(/\r\n/g, "\n");
+  const frontmatter = normalized.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatter) {
+    return normalized;
+  }
+  const body = frontmatter[1];
+  const updatedBody = /^tools\s*:/m.test(body)
+    ? body.replace(/^tools\s*:.*$/m, line)
+    : `${body}\n${line}`;
+  return normalized.replace(frontmatter[0], `---\n${updatedBody}\n---`);
 }
 
 onMounted(loadSkills);
@@ -172,6 +197,11 @@ onMounted(loadSkills);
             <label class="editor-field">
               {{ t("skills.install_name") }}
               <input v-model="editorKey" placeholder="例如 playwright-cli">
+            </label>
+            <label class="editor-field">
+              {{ t("skills.tool_keys_label") }}
+              <input v-model="editorToolKeys" placeholder="mail-status, mail-send, mail-list">
+              <span class="field-hint">{{ t("skills.tool_keys_hint") }}</span>
             </label>
             <label class="editor-field editor-field-grow">
               {{ t("skills.content_label") }}
@@ -336,6 +366,13 @@ onMounted(loadSkills);
   border-color: var(--text);
   outline: none;
   box-shadow: 0 0 0 1px var(--text);
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
 }
 
 .editor-field textarea {

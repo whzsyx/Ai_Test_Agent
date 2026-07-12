@@ -86,6 +86,8 @@ def build_agent_graph(
             permission_service=permission_service,
             tool_runtime_service=tool_runtime_service,
             tool_job_service=tool_job_service,
+            skill_registry=skill_registry,
+            skill_runtime_service=skill_runtime_service,
         ),
     )
     graph.add_node(

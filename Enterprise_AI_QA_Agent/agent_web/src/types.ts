@@ -77,6 +77,7 @@ export interface SkillDescriptor {
   description: string;
   recommended_agents: string[];
   tags: string[];
+  tool_keys: string[];
   installed?: boolean;
   managed_root?: string;
   path?: string;
