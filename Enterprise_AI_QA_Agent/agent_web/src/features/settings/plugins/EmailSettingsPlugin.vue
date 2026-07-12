@@ -17,6 +17,7 @@ const providers = ref<MailboxProviderInfo[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const showCreate = ref(false);
+const creatingMailbox = ref<EmailConfigPublic | null>(null);
 const toast = useMessage();
 const busy = ref<Record<string, boolean>>({});
 const setupById = reactive<Record<number, Setup>>({});
@@ -36,7 +37,7 @@ const isAgentMailDraft = computed(() => draft.provider === "agentmail");
 function setup(id: number) {
   return setupById[id] ||= {
     authorizationUrl: "",
-    authStatus: "未检查",
+    authStatus: "检查中...",
     sessionId: "",
     polling: false,
     pollStartedAt: 0,
@@ -63,11 +64,13 @@ async function loadSettings() {
     mailboxes.value = configs;
     providers.value = catalog.providers;
     if (!providerMap.value.has(draft.provider)) draft.provider = providers.value[0]?.provider || "tencent_agently";
+    for (const item of configs) void syncMailboxStatus(item);
   } catch (error) { message("error", error instanceof Error ? error.message : "加载邮箱失败"); }
   finally { loading.value = false; }
 }
 
 function openCreate() {
+  creatingMailbox.value = null;
   Object.assign(draft, { config_name: "", provider: "tencent_agently", sender_email: "", api_key: "", base_url: "", mailbox_id: "", routes_json: "", description: "" });
   showCreate.value = true;
 }
@@ -90,30 +93,32 @@ async function createMailbox() {
   };
   saving.value = true;
   try {
-    await api.createEmailConfig(payload);
+    const created = await api.createEmailConfig(payload);
+    if (created.provider === "tencent_agently") {
+      creatingMailbox.value = created;
+      await startAuth(created);
+      return;
+    }
     showCreate.value = false;
-    message("success", "邮箱配置已创建。完成授权或连通性检查后，再设为全局当前邮箱。");
+    message("success", "邮箱配置已创建，可在列表中设为当前邮箱");
     await loadSettings();
   } catch (error) { message("error", error instanceof Error ? error.message : "创建失败"); }
   finally { saving.value = false; }
 }
 
-async function checkStatus(item: EmailConfigPublic) {
-  await action(item.id, "status", async () => {
+async function syncMailboxStatus(item: EmailConfigPublic) {
+  const state = setup(item.id);
+  state.authStatus = "检查中...";
+  try {
     const result = await api.mailProviderSetupAction(item.provider, item.provider === "tencent_agently" ? "auth_status" : "status", { config_id: item.id });
-    const state = setup(item.id);
     if (item.provider === "tencent_agently") {
-      if (result.logged_in !== true) {
-        state.authStatus = String(result.auth_status || result.error || "未授权");
-        throw new Error(state.authStatus);
-      }
-      await completeAuth(item, state);
+      state.authStatus = result.logged_in === true ? "可用" : String(result.auth_status || result.error || "未授权");
       return;
     }
     state.authStatus = result.ok === true ? "可用" : String(result.error || "不可用");
-    if (result.ok !== true) throw new Error(state.authStatus);
-    message("success", `${item.config_name} 配置检查通过`);
-  });
+  } catch (error) {
+    state.authStatus = error instanceof Error ? error.message : "状态检查失败";
+  }
 }
 
 async function startAuth(item: EmailConfigPublic) {
@@ -163,6 +168,7 @@ async function pollAuth(item: EmailConfigPublic) {
   }
   try {
     const result = await api.mailProviderSetupAction(item.provider, "auth_login_status", { config_id: item.id, session_id: state.sessionId });
+    if (!state.polling) return;
     if (result.ok === false || result.status === "failed") {
       throw new Error(String(result.error || "OAuth 授权失败"));
     }
@@ -183,23 +189,49 @@ async function pollAuth(item: EmailConfigPublic) {
 
 async function completeAuth(item: EmailConfigPublic, state: Setup) {
   stopAuthPolling(item.id);
-  const email = await loadIdentity(item);
+  const isCreating = creatingMailbox.value?.id === item.id;
+  const email = await loadIdentity(item, !isCreating);
   state.authStatus = "可用";
   state.authorizationUrl = "";
   state.sessionId = "";
+  if (isCreating) {
+    creatingMailbox.value = null;
+    showCreate.value = false;
+    await loadSettings();
+  }
   message("success", email ? `邮箱 ${email} 已授权成功` : "邮箱已授权成功");
 }
 
-async function loadIdentity(item: EmailConfigPublic): Promise<string> {
+async function loadIdentity(item: EmailConfigPublic, reloadOnChange = true): Promise<string> {
   const result = await api.mailProviderSetupAction(item.provider, "whoami", { config_id: item.id });
   if (result.ok === false) throw new Error(String(result.error || "读取邮箱身份失败"));
   const email = String(result.email || (result.primary_alias as Record<string, unknown> | undefined)?.email || "").trim();
   setup(item.id).authStatus = "可用";
   if (email && email !== item.sender_email) {
     await api.updateEmailConfig(item.id, { config_name: item.config_name, provider: item.provider, sender_email: email, api_key: null, enabled: item.enabled, is_default: item.is_default, description: item.description || null, extra_config: {} });
-    await loadSettings();
+    if (reloadOnChange) await loadSettings();
   }
   return email;
+}
+
+async function cancelCreate() {
+  if (saving.value) return;
+  const pending = creatingMailbox.value;
+  if (pending) {
+    stopAuthPolling(pending.id);
+    creatingMailbox.value = null;
+    saving.value = true;
+    try {
+      await api.deleteEmailConfig(pending.id);
+    } catch (error) {
+      creatingMailbox.value = pending;
+      message("error", error instanceof Error ? error.message : "取消创建失败");
+      return;
+    } finally {
+      saving.value = false;
+    }
+  }
+  showCreate.value = false;
 }
 
 async function provision(item: EmailConfigPublic) {
@@ -230,6 +262,8 @@ onMounted(loadSettings);
 onBeforeUnmount(() => {
   for (const timer of authPollTimers.values()) window.clearTimeout(timer);
   authPollTimers.clear();
+  const pending = creatingMailbox.value;
+  if (pending) void api.deleteEmailConfig(pending.id);
 });
 </script>
 
@@ -251,8 +285,7 @@ onBeforeUnmount(() => {
         </dl>
         <div v-if="setup(item.id).authorizationUrl" class="auth-box"><p>请点击或复制以下链接在浏览器中完成授权：</p><code>{{ setup(item.id).authorizationUrl }}</code><div class="actions"><a :href="setup(item.id).authorizationUrl" target="_blank" rel="noopener noreferrer">打开链接</a><button type="button" @click="copyUrl(item)">复制</button><span v-if="setup(item.id).polling" class="polling-hint">正在自动检测授权结果...</span></div></div>
         <div class="actions wrap">
-          <button v-if="item.provider === 'tencent_agently'" type="button" :disabled="isBusy(item.id, 'auth') || setup(item.id).polling" @click="startAuth(item)">{{ setup(item.id).polling ? "等待授权..." : "开始授权" }}</button>
-          <button type="button" :disabled="isBusy(item.id, 'status')" @click="checkStatus(item)">检查配置</button>
+          <button v-if="item.provider === 'tencent_agently' && !['可用', '检查中...'].includes(setup(item.id).authStatus)" type="button" :disabled="isBusy(item.id, 'auth') || setup(item.id).polling" @click="startAuth(item)">{{ setup(item.id).polling ? "等待授权..." : "重新授权" }}</button>
           <button v-if="providerMap.get(item.provider)?.capabilities.includes('provision_inbox')" type="button" @click="provision(item)">创建厂商邮箱</button>
           <button v-if="!item.enabled" class="primary-outline" type="button" @click="activate(item)">设为当前</button>
           <button class="danger" type="button" @click="remove(item)">删除</button>
@@ -260,24 +293,39 @@ onBeforeUnmount(() => {
       </article>
     </div>
 
-    <div v-if="showCreate" class="modal-mask" @click.self="showCreate = false"><form class="modal" @submit.prevent="createMailbox">
-      <h3>新建全局 Agent 邮箱</h3>
-      <label>供应商<select v-model="draft.provider"><option v-for="item in providers" :key="item.provider" :value="item.provider">{{ item.display_name }}</option></select></label>
-      <label>配置名称<input v-model="draft.config_name" placeholder="例如：备用 AgentMail" /></label>
-      <template v-if="!isTencentDraft">
-        <label>API Key<input v-model="draft.api_key" type="password" autocomplete="new-password" placeholder="保存在后端，不会回显" /></label>
-        <label>API Base URL<input v-model="draft.base_url" :placeholder="String(selectedProvider?.default_base_url || 'https://...')" /></label>
-        <label>Mailbox ID<input v-model="draft.mailbox_id" :placeholder="isAgentMailDraft ? '可留空，创建后再生成 Inbox' : '厂商邮箱 ID'" /></label>
-        <label v-if="!isAgentMailDraft">路由映射 JSON<textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea></label>
+    <div v-if="showCreate" class="modal-mask" @click.self="cancelCreate"><form class="modal" @submit.prevent="createMailbox">
+      <h3>{{ creatingMailbox ? "正在创建 Agent 邮箱" : "新建全局 Agent 邮箱" }}</h3>
+      <template v-if="!creatingMailbox">
+        <label>供应商<select v-model="draft.provider"><option v-for="item in providers" :key="item.provider" :value="item.provider">{{ item.display_name }}</option></select></label>
+        <label>配置名称<input v-model="draft.config_name" placeholder="例如：备用 AgentMail" /></label>
+        <template v-if="!isTencentDraft">
+          <label>API Key<input v-model="draft.api_key" type="password" autocomplete="new-password" placeholder="保存在后端，不会回显" /></label>
+          <label>API Base URL<input v-model="draft.base_url" :placeholder="String(selectedProvider?.default_base_url || 'https://...')" /></label>
+          <label>Mailbox ID<input v-model="draft.mailbox_id" :placeholder="isAgentMailDraft ? '可留空，创建后再生成 Inbox' : '厂商邮箱 ID'" /></label>
+          <label v-if="!isAgentMailDraft">路由映射 JSON<textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea></label>
+          <label>邮箱地址<input v-model="draft.sender_email" placeholder="厂商邮箱地址" /></label>
+        </template>
+        <label>说明<textarea v-model="draft.description" rows="2" placeholder="可选"></textarea></label>
+        <p class="hint">{{ isTencentDraft ? "创建过程中会直接进入 OAuth 授权，授权成功后才生成邮箱。" : "保存后可在列表中设为全局当前邮箱。" }}</p>
+        <div class="actions end"><button type="button" @click="cancelCreate">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "处理中..." : (isTencentDraft ? "创建并授权" : "创建配置") }}</button></div>
       </template>
-      <label>邮箱地址<input v-model="draft.sender_email" placeholder="授权或创建后可自动回填" /></label>
-      <label>说明<textarea v-model="draft.description" rows="2" placeholder="可选"></textarea></label>
-      <p class="hint">新建配置不会自动替换当前邮箱。确认新邮箱可用后，点击“设为当前”完成全局切换。</p>
-      <div class="actions end"><button type="button" @click="showCreate = false">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "创建中..." : "创建配置" }}</button></div>
+      <template v-else>
+        <div class="creation-progress">
+          <strong>{{ creatingMailbox.config_name }}</strong>
+          <span>状态：{{ setup(creatingMailbox.id).authStatus }}</span>
+          <template v-if="setup(creatingMailbox.id).authorizationUrl">
+            <p>请点击以下链接在浏览器中完成授权，系统会自动检测结果：</p>
+            <code>{{ setup(creatingMailbox.id).authorizationUrl }}</code>
+            <div class="actions"><a :href="setup(creatingMailbox.id).authorizationUrl" target="_blank" rel="noopener noreferrer">打开授权页面</a><button type="button" @click="copyUrl(creatingMailbox)">复制链接</button></div>
+          </template>
+          <span v-if="setup(creatingMailbox.id).polling" class="polling-hint">正在自动检测授权结果...</span>
+        </div>
+        <div class="actions end"><button type="button" :disabled="saving" @click="cancelCreate">取消创建</button></div>
+      </template>
     </form></div>
   </section>
 </template>
 
 <style scoped>
-.mailbox-settings{padding:24px 28px;color:var(--text-primary,#172033)}.page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #e6eaf0}.page-header h2{margin:0 0 8px;font-size:22px}.page-header p,.card-top p{margin:0;color:#718096}button,select,input,textarea{font:inherit}button{border:1px solid #d8dee9;border-radius:9px;background:#fff;padding:9px 14px;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.primary{border-color:#4f7cff;background:#4f7cff;color:#fff}.primary-outline{border-color:#4f7cff;color:#315fd1}.danger{border-color:#ffd2d7;color:#d9364f;background:#fff6f7}.empty{margin-top:24px;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:1px dashed #d8dee9;border-radius:14px;color:#718096}.mailbox-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px;margin-top:22px}.mailbox-card{border:1px solid #dfe5ee;border-radius:16px;padding:20px;background:#fff;box-shadow:0 8px 28px rgba(30,45,75,.05)}.mailbox-card.active{border-color:#88d9ae;box-shadow:0 8px 28px rgba(8,116,67,.1)}.card-top{display:flex;align-items:center;gap:12px}.card-top h3{margin:0 0 4px;font-size:17px}.mail-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#edf3ff;color:#3f6be8;font-size:20px}.state{margin-left:auto;padding:4px 9px;border-radius:999px;background:#f1f3f6;color:#667085;font-size:12px}.state.enabled{background:#e9fbf1;color:#087443}dl{margin:18px 0;display:grid;gap:10px}dl div{display:grid;grid-template-columns:88px 1fr;gap:10px}dt{color:#8490a4}dd{margin:0;overflow-wrap:anywhere}.auth-box{margin:14px 0;padding:13px;border-radius:10px;background:#f7f9fc}.auth-box p{margin:0 0 8px}.auth-box code{display:block;max-height:90px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.polling-hint{color:#3867d6;font-size:13px}.actions{display:flex;align-items:center;gap:9px;margin-top:12px}.actions.wrap{flex-wrap:wrap}.actions.end{justify-content:flex-end}.actions a{color:#3867d6;text-decoration:none}.modal-mask{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:20px;background:rgba(15,23,42,.44)}.modal{width:min(560px,100%);max-height:90vh;overflow:auto;padding:24px;border-radius:16px;background:#fff;box-shadow:0 24px 80px rgba(0,0,0,.2)}.modal h3{margin:0 0 20px}.modal label{display:grid;gap:7px;margin-bottom:15px;color:#4a5568}.modal input,.modal select,.modal textarea{width:100%;box-sizing:border-box;border:1px solid #d8dee9;border-radius:9px;padding:10px 11px;background:#fff}.hint{color:#718096;font-size:13px;line-height:1.6}@media(max-width:720px){.page-header{flex-direction:column}.mailbox-grid{grid-template-columns:1fr}.mailbox-settings{padding:18px}}
+.mailbox-settings{padding:24px 28px;color:var(--text-primary,#172033)}.page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #e6eaf0}.page-header h2{margin:0 0 8px;font-size:22px}.page-header p,.card-top p{margin:0;color:#718096}button,select,input,textarea{font:inherit}button{border:1px solid #d8dee9;border-radius:9px;background:#fff;padding:9px 14px;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.primary{border-color:#4f7cff;background:#4f7cff;color:#fff}.primary-outline{border-color:#4f7cff;color:#315fd1}.danger{border-color:#ffd2d7;color:#d9364f;background:#fff6f7}.empty{margin-top:24px;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:1px dashed #d8dee9;border-radius:14px;color:#718096}.mailbox-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px;margin-top:22px}.mailbox-card{border:1px solid #dfe5ee;border-radius:16px;padding:20px;background:#fff;box-shadow:0 8px 28px rgba(30,45,75,.05)}.mailbox-card.active{border-color:#88d9ae;box-shadow:0 8px 28px rgba(8,116,67,.1)}.card-top{display:flex;align-items:center;gap:12px}.card-top h3{margin:0 0 4px;font-size:17px}.mail-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#edf3ff;color:#3f6be8;font-size:20px}.state{margin-left:auto;padding:4px 9px;border-radius:999px;background:#f1f3f6;color:#667085;font-size:12px}.state.enabled{background:#e9fbf1;color:#087443}dl{margin:18px 0;display:grid;gap:10px}dl div{display:grid;grid-template-columns:88px 1fr;gap:10px}dt{color:#8490a4}dd{margin:0;overflow-wrap:anywhere}.auth-box{margin:14px 0;padding:13px;border-radius:10px;background:#f7f9fc}.auth-box p{margin:0 0 8px}.auth-box code,.creation-progress code{display:block;max-height:90px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.polling-hint{color:#3867d6;font-size:13px}.actions{display:flex;align-items:center;gap:9px;margin-top:12px}.actions.wrap{flex-wrap:wrap}.actions.end{justify-content:flex-end}.actions a{color:#3867d6;text-decoration:none}.modal-mask{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:20px;background:rgba(15,23,42,.44)}.modal{width:min(560px,100%);max-height:90vh;overflow:auto;padding:24px;border-radius:16px;background:#fff;box-shadow:0 24px 80px rgba(0,0,0,.2)}.modal h3{margin:0 0 20px}.modal label{display:grid;gap:7px;margin-bottom:15px;color:#4a5568}.modal input,.modal select,.modal textarea{width:100%;box-sizing:border-box;border:1px solid #d8dee9;border-radius:9px;padding:10px 11px;background:#fff}.creation-progress{display:grid;gap:12px;padding:16px;border-radius:12px;background:#f7f9fc}.creation-progress p{margin:0;color:#4a5568}.hint{color:#718096;font-size:13px;line-height:1.6}@media(max-width:720px){.page-header{flex-direction:column}.mailbox-grid{grid-template-columns:1fr}.mailbox-settings{padding:18px}}
 </style>
