@@ -9,11 +9,11 @@ import type {
   EmailConfigPublic,
   EmailConfigCreateRequest,
   EmailConfigActionResponse,
-  EmailConfigConnectionTestResponse,
   EmailConfigUpdateRequest,
   ExecutionEvent,
   HealthResponse,
   ModeDescriptor,
+  MailboxProviderInfo,
   MailboxSendConfirmRequest,
   ModelConfigActionResponse,
   ModelConfigConnectionTestResponse,
@@ -256,11 +256,6 @@ export const api = {
       method: "POST",
     });
   },
-  testEmailConfigConnection(configId: number): Promise<EmailConfigConnectionTestResponse> {
-    return request(`/api/v1/settings/email/${configId}/test-connection`, {
-      method: "POST",
-    });
-  },
   deleteEmailConfig(configId: number): Promise<EmailConfigActionResponse> {
     return request(`/api/v1/settings/email/${configId}`, {
       method: "DELETE",
@@ -269,7 +264,7 @@ export const api = {
 
   // --- Agent Mailbox API ---------------------------------------------------
 
-  listMailProviders(): Promise<{ providers: Array<{ provider: string; capabilities: string[] }> }> {
+  listMailProviders(): Promise<{ providers: MailboxProviderInfo[] }> {
     return request("/api/v1/mail/providers");
   },
   mailProviderStatus(provider: string): Promise<Record<string, unknown>> {
@@ -281,12 +276,6 @@ export const api = {
     return request(`/api/v1/mail/providers/${provider}/setup-action`, {
       method: "POST",
       body: JSON.stringify({ action, payload }),
-    });
-  },
-  mailProvisionInbox(provider: string, options: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-    return request(`/api/v1/mail/providers/${provider}/provision-inbox`, {
-      method: "POST",
-      body: JSON.stringify({ options }),
     });
   },
   mailTestSendPrepare(payload: { recipients: string[]; subject: string; content?: string; content_html?: string; config_id?: number | null }): Promise<Record<string, unknown>> {

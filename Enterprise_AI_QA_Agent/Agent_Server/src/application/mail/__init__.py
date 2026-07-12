@@ -1,8 +1,7 @@
 """Public mail capability layer.
 
-Provides a provider-agnostic MailService that wraps transactional send
-providers (SMTP, Aliyun DirectMail) and Agent Mailbox providers behind a
-single capability-based interface.
+Provides the native Agent Mail capability layer backed exclusively by the
+Tencent agently-cli adapter.
 """
 
 from __future__ import annotations

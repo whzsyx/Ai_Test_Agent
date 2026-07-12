@@ -480,14 +480,14 @@ def _build_summary_prompt(
     email_block = (
         "- 最终交付：仅保留本地 artifact 报告。\n"
         "- 使用 report-writer，并指定 template_key=code_review_debate。\n"
-        "- 本地 artifact 交付时不要调用 message-dispatch，report-writer 会自动落库 Markdown 和 HTML artifact。\n"
+        "- report-writer 会自动落库 Markdown 和 HTML artifact。\n"
         if delivery_channel != "email" or not email_recipients
         else (
             "- 最终交付：先调用 report-writer，并指定 template_key=code_review_debate，保存 Markdown 和 HTML artifact。\n"
-            "- 然后调用一次 send-email，发送同一份报告内容。\n"
+            "- 然后通过 skill 加载 mail-capability，调用 mail-send 使用全局当前邮箱准备同一份报告邮件。\n"
+            "- 展示确认摘要并停止本轮；用户明确确认后，下一轮调用 mail-confirm。\n"
             f"- 邮件收件人：{', '.join(email_recipients)}\n"
             f"- 邮件主题：{email_subject}\n"
-            "- 除非用户明确要求额外交付渠道，否则不要调用 message-dispatch。\n"
         )
     )
     return (

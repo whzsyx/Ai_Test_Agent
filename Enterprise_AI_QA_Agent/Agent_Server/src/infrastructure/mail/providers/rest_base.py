@@ -1,40 +1,49 @@
-"""Base class for REST API-backed Agent Mailbox providers."""
+"""Shared transport and normalization for HTTP Agent Mail providers."""
 
 from __future__ import annotations
 
+import base64
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from src.application.mail.contracts import (
-    MailCapability,
-    MailMessage,
-    MailProviderAdapter,
-    MailSendRequest,
-    MailSendResult,
-)
+from src.application.mail.contracts import MailMessage, MailProviderAdapter, MailSendResult
 
 if TYPE_CHECKING:
     from src.schemas.email_config import EmailConfigRecord
 
 
 class RestMailAdapterBase(MailProviderAdapter):
-    """Shared HTTP transport for REST-based Agent Mailbox providers."""
+    default_base_url = ""
+    default_timeout = 30
+    configuration_fields = ["api_key", "base_url", "mailbox_id"]
 
-    default_base_url: str = ""
-    default_timeout: int = 20
+    def descriptor(self) -> dict[str, Any]:
+        data = super().descriptor()
+        data["configuration_fields"] = list(self.configuration_fields)
+        data["default_base_url"] = self.default_base_url
+        return data
 
     def _base_url(self, record: "EmailConfigRecord") -> str:
-        return (
-            (record.extra_config or {}).get("base_url")
-            or self.default_base_url
-        ).rstrip("/")
+        value = str((record.extra_config or {}).get("base_url") or self.default_base_url).strip()
+        if not value:
+            raise RuntimeError(f"Provider '{self.provider_key}' requires extra_config.base_url.")
+        return value.rstrip("/")
+
+    @staticmethod
+    def _mailbox_id(record: "EmailConfigRecord") -> str:
+        value = str((record.extra_config or {}).get("mailbox_id") or "").strip()
+        if not value:
+            raise RuntimeError("The active mailbox config requires extra_config.mailbox_id.")
+        return value
 
     def _headers(self, record: "EmailConfigRecord") -> dict[str, str]:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if record.api_key:
-            headers["Authorization"] = "Bearer " + record.api_key
-        return headers
+        if not record.api_key:
+            raise RuntimeError(f"Provider '{self.provider_key}' requires an API key.")
+        header_name = str((record.extra_config or {}).get("auth_header") or "Authorization")
+        scheme = str((record.extra_config or {}).get("auth_scheme") or "Bearer").strip()
+        token = f"{scheme} {record.api_key}".strip()
+        return {"Content-Type": "application/json", header_name: token}
 
     def _request(
         self,
@@ -42,42 +51,98 @@ class RestMailAdapterBase(MailProviderAdapter):
         record: "EmailConfigRecord",
         path: str,
         *,
-        json_body: dict | None = None,
-        params: dict | None = None,
-        timeout: int | None = None,
-    ) -> dict[str, Any]:
-        url = self._base_url(record) + path
-        resp = httpx.request(
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        response = httpx.request(
             method,
-            url,
+            self._base_url(record) + path,
             headers=self._headers(record),
             json=json_body,
             params=params,
-            timeout=timeout or self.default_timeout,
+            timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
         )
-        resp.raise_for_status()
-        return resp.json()
+        response.raise_for_status()
+        if not response.content:
+            return {}
+        return response.json()
 
-    def _to_mail_message(self, raw: dict[str, Any]) -> MailMessage:
+    def _request_binary(self, record: "EmailConfigRecord", path: str) -> dict[str, Any]:
+        response = httpx.get(
+            self._base_url(record) + path,
+            headers=self._headers(record),
+            timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
+        )
+        response.raise_for_status()
+        disposition = response.headers.get("content-disposition", "")
+        filename = ""
+        if "filename=" in disposition:
+            filename = disposition.split("filename=", 1)[1].strip().strip('"')
+        return {
+            "ok": True,
+            "filename": filename,
+            "content_type": response.headers.get("content-type", "application/octet-stream"),
+            "content_base64": base64.b64encode(response.content).decode("ascii"),
+            "size": len(response.content),
+        }
+
+    @staticmethod
+    def _items(data: Any, *keys: str) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in keys:
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _message(raw: dict[str, Any]) -> MailMessage:
+        sender = raw.get("from") or raw.get("from_email") or raw.get("sender") or ""
+        if isinstance(sender, dict):
+            sender = sender.get("email") or sender.get("address") or ""
+        recipients = raw.get("to") or raw.get("recipients") or []
+        if isinstance(recipients, str):
+            recipients = [recipients]
         return MailMessage(
-            message_id=raw.get("message_id") or raw.get("id") or "",
-            thread_id=raw.get("thread_id"),
-            subject=raw.get("subject") or "",
-            from_email=raw.get("from") or raw.get("from_email") or "",
-            to=raw.get("to") or [],
-            snippet=raw.get("snippet") or raw.get("preview") or "",
-            body_text=raw.get("body_text") or raw.get("body") or "",
-            body_html=raw.get("body_html") or "",
-            received_at=raw.get("received_at") or raw.get("date") or None,
-            attachments=raw.get("attachments") or [],
+            message_id=str(raw.get("message_id") or raw.get("id") or ""),
+            thread_id=str(raw.get("thread_id") or "") or None,
+            subject=str(raw.get("subject") or ""),
+            from_email=str(sender),
+            to=[str(item.get("email") or item.get("address") or "") if isinstance(item, dict) else str(item) for item in recipients],
+            snippet=str(raw.get("snippet") or raw.get("preview") or raw.get("text") or "")[:500],
+            body_text=str(raw.get("text") or raw.get("body_text") or raw.get("body") or ""),
+            body_html=str(raw.get("html") or raw.get("body_html") or ""),
+            received_at=str(raw.get("timestamp") or raw.get("received_at") or raw.get("created_at") or "") or None,
+            attachments=list(raw.get("attachments") or []),
             raw=raw,
         )
 
-    def _build_send_result(self, record: "EmailConfigRecord", data: dict) -> MailSendResult:
+    def _send_result(self, record: "EmailConfigRecord", data: Any, recipients: int) -> MailSendResult:
+        payload = data if isinstance(data, dict) else {}
         return MailSendResult(
-            sent=data.get("sent", True),
+            sent=True,
             provider=self.provider_key,
-            from_email=data.get("from", record.sender_email or ""),
-            recipient_count=data.get("recipient_count", 0),
-            message_id=data.get("message_id"),
+            from_email=record.sender_email,
+            recipient_count=recipients,
+            message_id=str(payload.get("message_id") or payload.get("id") or "") or None,
         )
+
+    def status(self, record: "EmailConfigRecord") -> dict[str, Any]:
+        try:
+            self._base_url(record)
+            self._headers(record)
+            self._mailbox_id(record)
+            configured = True
+            error = ""
+        except RuntimeError as exc:
+            configured = False
+            error = str(exc)
+        return {
+            "ok": configured,
+            "configured": configured,
+            "provider": self.provider_key,
+            "capabilities": sorted(cap.value for cap in self.capabilities()),
+            "error": error,
+        }

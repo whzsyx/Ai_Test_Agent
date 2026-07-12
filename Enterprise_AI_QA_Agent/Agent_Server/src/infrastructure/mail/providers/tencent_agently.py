@@ -43,6 +43,8 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
     """Full Agent Mailbox provider backed by agently-cli."""
 
     provider_key = "tencent_agently"
+    display_name = "腾讯 Agent Mail"
+    auth_type = "oauth_cli"
 
     def capabilities(self) -> set[MailCapability]:
         return {
@@ -52,28 +54,17 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             MailCapability.SEARCH,
             MailCapability.REPLY,
             MailCapability.FORWARD,
+            MailCapability.TRASH,
             MailCapability.ATTACHMENTS,
         }
 
     # --- CLI helpers --------------------------------------------------------
 
     def _cli_path(self, record: "EmailConfigRecord") -> str:
-        configured = str((record.extra_config or {}).get("cli_path") or "").strip()
-        cli_name = configured or "agently-cli"
-        if self._looks_like_explicit_path(cli_name):
-            return cli_name
-
-        resolved = self._resolve_cli_from_path(cli_name)
-        return resolved or cli_name
-
-    @staticmethod
-    def _looks_like_explicit_path(value: str) -> bool:
-        return (
-            os.path.isabs(value)
-            or "\\" in value
-            or "/" in value
-            or bool(os.path.splitext(value)[1])
-        )
+        # The CLI is a backend deployment dependency. Never persist or trust a
+        # workstation-specific executable path from mailbox configuration.
+        resolved = self._resolve_cli_from_path("agently-cli")
+        return resolved or "agently-cli"
 
     @staticmethod
     def _resolve_cli_from_path(cli_name: str) -> str | None:
@@ -94,7 +85,13 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         cmd = [cli] + args
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout,
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                env=self._cli_env(record),
             )
         except FileNotFoundError:
             raise RuntimeError(self._cli_not_found_message(cli))
@@ -130,6 +127,18 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         return payload
 
     @staticmethod
+    def _cli_env(record: "EmailConfigRecord") -> dict[str, str]:
+        env = os.environ.copy()
+        extra = record.extra_config or {}
+        configured = str(extra.get("config_dir") or "").strip()
+        if configured:
+            config_dir = Path(configured).expanduser().resolve()
+            config_dir.mkdir(parents=True, exist_ok=True)
+            env["AGENTLY_CLI_CONFIG_DIR"] = str(config_dir)
+        env.setdefault("AGENTLY_CLI_NO_UPDATE_NOTIFIER", "1")
+        return env
+
+    @staticmethod
     def _parse_cli_json(text: str | None) -> dict[str, Any] | None:
         raw = str(text or "").strip()
         if not raw:
@@ -147,7 +156,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
     def _cli_not_found_message(cli: str) -> str:
         return (
             f"agently-cli not found at '{cli}'. "
-            "Install it, add it to PATH, or set extra_config.cli_path."
+            "Install @tencent-qqmail/agently-cli on the Agent Server and add it to PATH."
         )
 
     @staticmethod
@@ -192,8 +201,11 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 creationflags=creationflags,
+                env=self._cli_env(record),
             )
         except FileNotFoundError:
             raise RuntimeError(self._cli_not_found_message(cli))
@@ -204,6 +216,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             "provider": self.provider_key,
             "action": "auth_login",
             "session_id": session_id,
+            "record_id": record.id,
             "cli_path": cli,
             "status": "starting",
             "authorization_url": None,
@@ -302,7 +315,6 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
     def auth_login_session_status(
         self, record: "EmailConfigRecord", session_id: str
     ) -> dict[str, Any]:
-        _ = record
         with _AUTH_LOGIN_LOCK:
             session = _AUTH_LOGIN_SESSIONS.get(session_id)
             if session is None:
@@ -312,6 +324,14 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                     "action": "auth_login",
                     "session_id": session_id,
                     "error": "auth_login_session_not_found",
+                }
+            if session.get("record_id") != record.id:
+                return {
+                    "ok": False,
+                    "provider": self.provider_key,
+                    "action": "auth_login",
+                    "session_id": session_id,
+                    "error": "auth_login_session_mailbox_mismatch",
                 }
 
             output_lines = list(session.get("output_lines") or [])
@@ -345,7 +365,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         if result.confirmation_required:
             result.recipient_count = result.recipient_count or len(request.recipients)
             result.confirmation_summary = self._send_confirmation_summary(request)
-            self._remember_confirmation(result.confirmation_token, "send", args)
+            self._remember_confirmation(result.confirmation_token, "send", args, record)
         else:
             self._cleanup_confirmation_files({"args": args})
         return result
@@ -387,7 +407,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         confirmation_token: str,
     ) -> MailSendResult:
         """Phase 2: commit a prepared send with the confirmation token."""
-        args = self._confirmation_args(confirmation_token, "send")
+        args = self._confirmation_args(confirmation_token, "send", record)
         data = self._run_cli(record, args)
         result = self._build_send_result(record, data)
         return self._finish_confirmation(confirmation_token, result)
@@ -423,6 +443,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         token: str | None,
         operation: str,
         args: list[str],
+        record: "EmailConfigRecord",
     ) -> None:
         if not token:
             return
@@ -439,11 +460,16 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             _PENDING_CONFIRMATIONS[token] = {
                 "operation": operation,
                 "args": list(args),
+                "record_id": record.id,
                 "created_at": time.time(),
             }
 
     @staticmethod
-    def _confirmation_args(token: str, operation: str) -> list[str]:
+    def _confirmation_args(
+        token: str,
+        operation: str,
+        record: "EmailConfigRecord",
+    ) -> list[str]:
         with _PENDING_CONFIRMATIONS_LOCK:
             pending = _PENDING_CONFIRMATIONS.get(token)
         if not pending or time.time() - float(pending.get("created_at") or 0) > 300:
@@ -452,6 +478,8 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             )
         if pending.get("operation") != operation:
             raise RuntimeError("Mail confirmation operation does not match the prepared request.")
+        if pending.get("record_id") != record.id:
+            raise RuntimeError("Mail confirmation does not belong to this mailbox configuration.")
         return [*list(pending.get("args") or []), "--confirmation-token", token]
 
     @staticmethod
@@ -558,7 +586,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             self._cleanup_confirmation_files({"args": args})
             raise
         result = self._build_send_result(record, data)
-        self._remember_confirmation(result.confirmation_token, "reply", args)
+        self._remember_confirmation(result.confirmation_token, "reply", args, record)
         if not result.confirmation_required:
             self._cleanup_confirmation_files({"args": args})
         return result
@@ -584,7 +612,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         confirmation_token: str,
     ) -> MailSendResult:
         """Phase 2 for reply."""
-        args = self._confirmation_args(confirmation_token, "reply")
+        args = self._confirmation_args(confirmation_token, "reply", record)
         data = self._run_cli(record, args)
         return self._finish_confirmation(confirmation_token, self._build_send_result(record, data))
 
@@ -603,7 +631,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             self._cleanup_confirmation_files({"args": args})
             raise
         result = self._build_send_result(record, data)
-        self._remember_confirmation(result.confirmation_token, "forward", args)
+        self._remember_confirmation(result.confirmation_token, "forward", args, record)
         if not result.confirmation_required:
             self._cleanup_confirmation_files({"args": args})
         return result
@@ -631,7 +659,27 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         confirmation_token: str,
     ) -> MailSendResult:
         """Phase 2 for forward."""
-        args = self._confirmation_args(confirmation_token, "forward")
+        args = self._confirmation_args(confirmation_token, "forward", record)
+        data = self._run_cli(record, args)
+        return self._finish_confirmation(confirmation_token, self._build_send_result(record, data))
+
+    # --- trash (two-phase) --------------------------------------------------
+
+    def trash(self, record: "EmailConfigRecord", message_id: str) -> MailSendResult:
+        args = ["message", "+trash", "--id", message_id]
+        data = self._run_cli(record, args)
+        result = self._build_send_result(record, data)
+        if result.confirmation_required:
+            result.confirmation_summary = f"Move message {message_id} to trash."
+            self._remember_confirmation(result.confirmation_token, "trash", args, record)
+        return result
+
+    def trash_confirm(
+        self,
+        record: "EmailConfigRecord",
+        confirmation_token: str,
+    ) -> MailSendResult:
+        args = self._confirmation_args(confirmation_token, "trash", record)
         data = self._run_cli(record, args)
         return self._finish_confirmation(confirmation_token, self._build_send_result(record, data))
 

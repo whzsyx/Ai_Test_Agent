@@ -90,28 +90,16 @@ class SkillRegistry:
                 tags=["reporting"],
                 tool_keys=["report-writer", "session-history", "session-timeline", "observation-search"],
             ),
-            "agently-mail": SkillDescriptor(
-                key="agently-mail",
-                name="Tencent Agent Mail",
-                summary="Send, receive, read, search, reply, and forward email via agently-cli.",
-                description="Provides Agent Mailbox capabilities backed by agently-cli with two-phase send confirmation.",
-                recommended_agents=["coordinator", "ops-executor"],
-                tags=["mail", "communication"],
-                tool_keys=[
-                    "mail-status", "mail-send", "mail-confirm", "mail-list", "mail-read", "mail-search",
-                    "mail-reply", "mail-forward", "mail-download-attachment", "mail-provision-inbox",
-                ],
-            ),
             "mail-capability": SkillDescriptor(
                 key="mail-capability",
                 name="Mail Capability",
                 summary="Safety skill for all Agent Mailbox tool invocations.",
-                description="Enforces confirmation, credential hygiene, and attachment safety rules for mail-* tools.",
+                description="Provides one provider-neutral API and enforces confirmation, credential hygiene, and attachment safety for the globally active mailbox.",
                 recommended_agents=["coordinator", "ops-executor"],
                 tags=["mail", "safety", "communication"],
                 tool_keys=[
                     "mail-status", "mail-send", "mail-confirm", "mail-list", "mail-read", "mail-search",
-                    "mail-reply", "mail-forward", "mail-download-attachment", "mail-provision-inbox",
+                    "mail-reply", "mail-forward", "mail-trash", "mail-download-attachment",
                 ],
             ),
         }

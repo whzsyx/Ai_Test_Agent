@@ -44,8 +44,8 @@ function approvalKindLabel(approval: ToolApprovalRequest) {
     case "api-caller":
     case "api-tester":
       return t("approvalPanel.kind_api");
-    case "send-email":
-    case "message-dispatch":
+    case "mail-confirm":
+    case "mail-download-attachment":
       return t("approvalPanel.kind_message");
     case "filesystem":
     case "file-artifact-manager":
@@ -135,8 +135,8 @@ function approvalHint(approval: ToolApprovalRequest) {
     case "api-caller":
     case "api-tester":
       return t("approvalPanel.hint_api");
-    case "send-email":
-    case "message-dispatch":
+    case "mail-confirm":
+    case "mail-download-attachment":
       return t("approvalPanel.hint_message");
     case "filesystem":
     case "file-artifact-manager":

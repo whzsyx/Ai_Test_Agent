@@ -341,15 +341,10 @@ export interface EmailConfigPublic {
   enabled: boolean;
   is_default: boolean;
   sender_email: string;
-  test_email?: string | null;
-  test_mode: boolean;
+  has_api_key?: boolean;
+  has_secret_key?: boolean;
   description?: string | null;
-  smtp_host?: string | null;
-  smtp_port?: number | null;
-  smtp_username?: string | null;
   extra_config?: Record<string, unknown>;
-  has_api_key: boolean;
-  has_secret_key: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -359,15 +354,10 @@ export interface EmailConfigCreateRequest {
   provider: string;
   enabled: boolean;
   is_default: boolean;
+  sender_email: string;
   api_key?: string | null;
   secret_key?: string | null;
-  sender_email: string;
-  test_email?: string | null;
-  test_mode: boolean;
   description?: string | null;
-  smtp_host?: string | null;
-  smtp_port?: number | null;
-  smtp_username?: string | null;
   extra_config?: Record<string, unknown>;
 }
 
@@ -376,15 +366,10 @@ export interface EmailConfigUpdateRequest {
   provider: string;
   enabled: boolean;
   is_default: boolean;
+  sender_email: string;
   api_key?: string | null;
   secret_key?: string | null;
-  sender_email: string;
-  test_email?: string | null;
-  test_mode: boolean;
   description?: string | null;
-  smtp_host?: string | null;
-  smtp_port?: number | null;
-  smtp_username?: string | null;
   extra_config?: Record<string, unknown>;
 }
 
@@ -394,30 +379,17 @@ export interface EmailConfigActionResponse {
   item?: EmailConfigPublic | null;
 }
 
-export interface EmailConfigConnectionTestResponse {
-  ok: boolean;
-  message: string;
-  item: EmailConfigPublic;
-  smtp_host?: string | null;
-  smtp_port?: number | null;
-  latency_ms?: number | null;
-  preview?: string | null;
-}
-
 // --- Agent Mailbox types ---------------------------------------------------
 
-export type MailboxProviderKey =
-  | "tencent_agently"
-  | "agentmail"
-  | "robotomail"
-  | "openmail"
-  | "dead_simple_email"
-  | "agenticmail"
-  | "aws_agent_mailbox";
+export type MailboxProviderKey = string;
 
 export interface MailboxProviderInfo {
   provider: string;
+  display_name: string;
+  auth_type: string;
   capabilities: string[];
+  configuration_fields?: string[];
+  default_base_url?: string;
 }
 
 export interface MailboxProviderStatus {

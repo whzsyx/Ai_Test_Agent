@@ -198,8 +198,6 @@ class ToolRuntimeService:
             "api-tester": self._run_api_tester,
             "cli-executor": self._run_cli_executor,
             "file-artifact-manager": self._run_file_artifact_manager,
-            "message-dispatch": self._run_message_dispatch,
-            "send-email": self._run_send_email,
             "report-writer": self._run_report_writer,
             "project-source-loader": self._run_project_source_loader,
             "project-tree-scanner": self._run_project_tree_scanner,
@@ -235,8 +233,8 @@ class ToolRuntimeService:
             "mail-search": self._run_mail_search,
             "mail-reply": self._run_mail_reply,
             "mail-forward": self._run_mail_forward,
+            "mail-trash": self._run_mail_trash,
             "mail-download-attachment": self._run_mail_download_attachment,
-            "mail-provision-inbox": self._run_mail_provision_inbox,
         }
 
     def set_coordinator_runtime_service(self, coordinator_runtime_service) -> None:
@@ -1458,166 +1456,12 @@ class ToolRuntimeService:
             asdict(context),
         )
 
-    async def _run_message_dispatch(
-        self,
-        arguments: dict[str, Any],
-        context: ToolExecutionContext,
-    ) -> dict[str, Any]:
-        arguments = self._coerce_message_dispatch_arguments(arguments)
-        channel = str(arguments.get("channel") or "artifact").strip().lower()
-        subject = str(arguments.get("subject") or "Runtime Notification").strip()
-        content = str(arguments.get("content") or "").strip()
-        content_markdown = str(arguments.get("content_markdown") or "").strip()
-        content_html = str(arguments.get("content_html") or "").strip()
-        sender = str(arguments.get("sender") or context.selected_agent_key or "Enterprise AI QA Agent").strip() or "Enterprise AI QA Agent"
-        template_key = str(arguments.get("template_key") or "default").strip() or "default"
-        template_context = arguments.get("template_context") if isinstance(arguments.get("template_context"), dict) else {}
-        artifact_dir = self._prepare_local_artifact_dir(context, "message-dispatch")
-
-        if not content and not content_html and not content_markdown:
-            raw_payload = str(arguments.get("raw") or "").strip()
-            if raw_payload:
-                # Keep artifact delivery moving even when the model emitted a
-                # single raw payload blob instead of fully structured fields.
-                content = raw_payload
-
-        if not content and not content_html and not content_markdown:
-            return {
-                "status": "failed",
-                "ok": False,
-                "summary": "Message Dispatch requires content, content_markdown, or content_html.",
-                "error": "missing_content",
-            }
-
-        if content_markdown and not content_html:
-            content_html = self._report_template_service.render_report_html(
-                title=subject,
-                time_label=str(arguments.get("time_label") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
-                sender=sender,
-                markdown_content=content_markdown,
-                template_key=template_key,
-                template_context=template_context,
-            )
-            if not content:
-                content = content_markdown
-
-        recipients = [
-            str(item).strip()
-            for item in (arguments.get("to") if isinstance(arguments.get("to"), list) else [])
-            if str(item).strip()
-        ]
-
-        delivery_record = {
-            "channel": channel,
-            "subject": subject,
-            "recipients": recipients,
-            "content": content,
-            "content_markdown": content_markdown,
-            "content_html": content_html,
-            "sender": sender,
-            "template_key": template_key,
-            "template_context": template_context,
-            "session_id": context.session_id,
-            "turn_id": context.turn_id,
-            "trace_id": context.trace_id,
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        artifact_name = _slug(str(arguments.get("file_name") or subject or "message")) or "message"
-        artifact_path = artifact_dir / f"{artifact_name}.json"
-        artifact_path.write_text(json.dumps(delivery_record, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        if channel == "artifact":
-            return {
-                "summary": f"Persisted local message artifact '{artifact_path.name}'.",
-                "delivery": {"channel": "artifact", "artifact_path": str(artifact_path), "sent": False},
-                "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
-            }
-
-        if channel == "email":
-            if not recipients:
-                return {
-                    "status": "failed",
-                    "ok": False,
-                    "summary": "Email delivery requires at least one recipient in 'to'.",
-                    "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
-                    "error": "missing_recipients",
-                }
-            try:
-                email_result = await asyncio.to_thread(
-                    self._send_email_message,
-                    recipients,
-                    subject,
-                    content,
-                    content_html,
-                )
-            except Exception as exc:
-                return {
-                    "status": "failed",
-                    "ok": False,
-                    "summary": f"Email delivery failed: {exc}",
-                    "delivery": {
-                        "channel": "email",
-                        "sent": False,
-                        "recipients": recipients,
-                        "error": str(exc),
-                    },
-                    "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
-                    "error": str(exc),
-                }
-            return {
-                "summary": f"Delivered email notification to {len(recipients)} recipient(s).",
-                "delivery": {"channel": "email", **email_result},
-                "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
-            }
-
-        return {
-            "status": "failed",
-            "ok": False,
-            "summary": f"Unsupported message channel '{channel}'.",
-            "artifacts": [{"type": "message_artifact", "path": str(artifact_path)}],
-            "error": "unsupported_channel",
-        }
-
-    def _coerce_message_dispatch_arguments(
-        self,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        normalized = dict(arguments)
-        raw_payload = normalized.get("raw")
-        if not isinstance(raw_payload, str) or not raw_payload.strip():
-            return normalized
-        if any(
-            str(normalized.get(key) or "").strip()
-            for key in ("content", "content_markdown", "content_html")
-        ):
-            return normalized
-        try:
-            parsed = json.loads(raw_payload)
-        except Exception:
-            return normalized
-        if not isinstance(parsed, dict):
-            return normalized
-        for key, value in parsed.items():
-            normalized.setdefault(key, value)
-        return normalized
-
-    async def _run_send_email(
-        self,
-        arguments: dict[str, Any],
-        context: ToolExecutionContext,
-    ) -> dict[str, Any]:
-        email_arguments = dict(arguments)
-        email_arguments["channel"] = "email"
-        if not str(email_arguments.get("subject") or "").strip():
-            email_arguments["subject"] = "Runtime Notification"
-        return await self._run_message_dispatch(email_arguments, context)
-
     async def _deliver_security_testing_report(
         self,
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
-        return await self._run_send_email(arguments, context)
+        return await self._run_mail_send(arguments, context)
 
     async def _run_report_writer(
         self,
@@ -4063,18 +3907,6 @@ class ToolRuntimeService:
         artifact_dir.mkdir(parents=True, exist_ok=True)
         return artifact_dir
 
-    def _send_email_message(
-        self,
-        recipients: list[str],
-        subject: str,
-        content: str,
-        content_html: str,
-    ) -> dict[str, Any]:
-        # Delegates to the provider-agnostic MailService. Behavior and result
-        # shape are preserved: active config resolution (enabled + default),
-        # provider dispatch (aliyun vs SMTP fallback), and the returned dict.
-        return self._mail_service.send(recipients, subject, content, content_html)
-
     # ─── mail-* tool handlers ───────────────────────────────────────────
 
     async def _run_mail_status(self, tool_input: dict, context) -> dict:
@@ -4124,23 +3956,30 @@ class ToolRuntimeService:
     async def _run_mail_list(self, tool_input: dict, context) -> dict:
         opts = {}
         if tool_input.get("folder"):
-            opts["folder"] = tool_input["folder"]
+            opts["dir"] = tool_input["folder"]
         if tool_input.get("limit"):
             opts["limit"] = tool_input["limit"]
         if tool_input.get("before"):
             opts["before"] = tool_input["before"]
         if tool_input.get("after"):
             opts["after"] = tool_input["after"]
-        return self._mail_service.list_messages(options=opts or None)
+        return self._mail_service.list_messages(
+            options=opts or None,
+        )
 
     async def _run_mail_read(self, tool_input: dict, context) -> dict:
-        return self._mail_service.read_message(tool_input["message_id"])
+        return self._mail_service.read_message(
+            tool_input["message_id"],
+        )
 
     async def _run_mail_search(self, tool_input: dict, context) -> dict:
         opts = None
         if tool_input.get("limit"):
             opts = {"limit": tool_input["limit"]}
-        return self._mail_service.search_messages(tool_input["query"], options=opts)
+        return self._mail_service.search_messages(
+            tool_input["query"],
+            options=opts,
+        )
 
     async def _run_mail_reply(self, tool_input: dict, context) -> dict:
         request = MailSendRequest(
@@ -4149,7 +3988,10 @@ class ToolRuntimeService:
             content=tool_input["content"],
             content_html=tool_input.get("content_html", ""),
         )
-        return self._mail_service.reply(tool_input["message_id"], request)
+        return self._mail_service.reply(
+            tool_input["message_id"],
+            request,
+        )
 
     async def _run_mail_forward(self, tool_input: dict, context) -> dict:
         request = MailSendRequest(
@@ -4158,7 +4000,10 @@ class ToolRuntimeService:
             content=tool_input.get("comment", ""),
             content_html="",
         )
-        return self._mail_service.forward(tool_input["message_id"], request)
+        return self._mail_service.forward(
+            tool_input["message_id"],
+            request,
+        )
 
     async def _run_mail_download_attachment(self, tool_input: dict, context) -> dict:
         return self._mail_service.download_attachment(
@@ -4166,13 +4011,10 @@ class ToolRuntimeService:
             attachment_id=tool_input["attachment_id"],
         )
 
-    async def _run_mail_provision_inbox(self, tool_input: dict, context) -> dict:
-        opts = {}
-        if tool_input.get("display_name"):
-            opts["display_name"] = tool_input["display_name"]
-        if tool_input.get("prefix"):
-            opts["prefix"] = tool_input["prefix"]
-        return self._mail_service.provision_inbox(options=opts or None)
+    async def _run_mail_trash(self, tool_input: dict, context) -> dict:
+        return self._mail_service.trash(
+            tool_input["message_id"],
+        )
 
     def _normalize_result(
         self,

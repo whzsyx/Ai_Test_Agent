@@ -10,5 +10,4 @@ DEFAULT_MODE_TOOL_KEYS = [
     "observation-search",
     "cli-executor",
     "report-writer",
-    "send-email",
 ]

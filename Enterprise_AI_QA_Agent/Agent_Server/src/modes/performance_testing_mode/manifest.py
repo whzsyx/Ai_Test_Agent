@@ -35,8 +35,6 @@ MODE_MANIFEST = {
         "knowledge-rag",
         "api-docs-library",
         "report-writer",
-        "message-dispatch",
-        "send-email",
         "file-artifact-manager",
         "cli-executor",
         "subagent-dispatch",

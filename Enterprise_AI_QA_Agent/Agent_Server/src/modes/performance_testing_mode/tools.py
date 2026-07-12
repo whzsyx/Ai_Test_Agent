@@ -7,8 +7,6 @@ COORDINATOR_TOOL_KEYS = [
     "api-docs-library",
     "api-docs-ingest",
     "report-writer",
-    "message-dispatch",
-    "send-email",
     "file-artifact-manager",
     "subagent-dispatch",
 ]

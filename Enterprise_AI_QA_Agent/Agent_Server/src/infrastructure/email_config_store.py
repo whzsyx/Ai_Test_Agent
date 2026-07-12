@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+from pathlib import Path
+import uuid
 
 from src.core.config import Settings
 from src.infrastructure.sqlalchemy_runtime import mysql_raw_connection
@@ -12,21 +14,16 @@ from src.schemas.email_config import (
     EmailConfigUpdateRequest,
 )
 
-DEFAULT_CYBERMAIL_HOST = "mail.cyberpersons.com"
-DEFAULT_CYBERMAIL_PORT = 587
-
-PROVIDER_DEFAULT_NAMES = {
-    "aliyun": "阿里云邮件推送",
-    "cybermail": "CyberMail SMTP",
-    "tencent_ses": "腾讯云 SES",
-    "sendgrid": "SendGrid",
-    "mailgun": "Mailgun",
-    "postmark": "Postmark",
-    "resend": "Resend",
-    "brevo": "Brevo",
-    "mailchimp": "Mailchimp",
-    "zoho_campaigns": "Zoho Campaigns",
-}
+AGENT_MAIL_PROVIDERS = (
+    "tencent_agently",
+    "agentmail",
+    "robotomail",
+    "openmail",
+    "dead_simple_email",
+    "agenticmail",
+    "aws_agent_mailbox",
+)
+AGENT_MAIL_PROVIDER_SQL = ", ".join(f"'{key}'" for key in AGENT_MAIL_PROVIDERS)
 
 
 class MySQLEmailConfigStore:
@@ -55,10 +52,11 @@ class MySQLEmailConfigStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, config_name, provider, api_key, secret_key, sender_email, test_email,
+                    SELECT id, config_name, provider, owner_agent_key, api_key, secret_key, sender_email, test_email,
                            test_mode, enabled, is_default, description, smtp_host, smtp_port,
                            smtp_username, extra_config_json, created_at, updated_at
                     FROM `{self._settings.email_config_table}`
+                    WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL})
                     ORDER BY is_default DESC, enabled DESC, id ASC
                     """
                 )
@@ -70,11 +68,11 @@ class MySQLEmailConfigStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    SELECT id, config_name, provider, api_key, secret_key, sender_email, test_email,
+                    SELECT id, config_name, provider, owner_agent_key, api_key, secret_key, sender_email, test_email,
                            test_mode, enabled, is_default, description, smtp_host, smtp_port,
                            smtp_username, extra_config_json, created_at, updated_at
                     FROM `{self._settings.email_config_table}`
-                    WHERE id=%s
+                    WHERE id=%s AND provider IN ({AGENT_MAIL_PROVIDER_SQL})
                     """,
                     (config_id,),
                 )
@@ -89,14 +87,18 @@ class MySQLEmailConfigStore:
             with conn.cursor() as cur:
                 if payload.is_default:
                     cur.execute(
-                        f"UPDATE `{self._settings.email_config_table}` SET enabled=0, is_default=0"
+                        f"""
+                        UPDATE `{self._settings.email_config_table}`
+                        SET enabled=0, is_default=0
+                        WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL})
+                        """,
                     )
                 cur.execute(
                     f"""
                     INSERT INTO `{self._settings.email_config_table}`
-                    (config_name, provider, api_key, secret_key, sender_email, test_email, test_mode,
+                    (config_name, provider, owner_agent_key, api_key, secret_key, sender_email, test_email, test_mode,
                      enabled, is_default, description, smtp_host, smtp_port, smtp_username, extra_config_json)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     values,
                 )
@@ -112,13 +114,19 @@ class MySQLEmailConfigStore:
             with conn.cursor() as cur:
                 if merged.is_default:
                     cur.execute(
-                        f"UPDATE `{self._settings.email_config_table}` SET enabled=0, is_default=0"
+                        f"""
+                        UPDATE `{self._settings.email_config_table}`
+                        SET enabled=0, is_default=0
+                        WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL}) AND id<>%s
+                        """,
+                        (config_id,),
                     )
                 cur.execute(
                     f"""
                     UPDATE `{self._settings.email_config_table}`
                     SET config_name=%s,
                         provider=%s,
+                        owner_agent_key=%s,
                         api_key=%s,
                         secret_key=%s,
                         sender_email=%s,
@@ -136,6 +144,7 @@ class MySQLEmailConfigStore:
                     (
                         merged.config_name,
                         merged.provider,
+                        merged.owner_agent_key,
                         merged.api_key,
                         merged.secret_key,
                         merged.sender_email,
@@ -155,11 +164,15 @@ class MySQLEmailConfigStore:
         return self.get_by_id(config_id)
 
     def activate(self, config_id: int) -> EmailConfigRecord:
-        self.get_by_id(config_id)
+        record = self.get_by_id(config_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE `{self._settings.email_config_table}` SET enabled=0, is_default=0"
+                    f"""
+                    UPDATE `{self._settings.email_config_table}`
+                    SET enabled=0, is_default=0
+                    WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL})
+                    """,
                 )
                 cur.execute(
                     f"""
@@ -174,38 +187,26 @@ class MySQLEmailConfigStore:
 
     def delete(self, config_id: int) -> tuple[EmailConfigRecord, EmailConfigRecord | None]:
         deleted = self.get_by_id(config_id)
-        replacement: EmailConfigRecord | None = None
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"DELETE FROM `{self._settings.email_config_table}` WHERE id=%s",
                     (config_id,),
                 )
-                if deleted.is_default:
-                    cur.execute(
-                        f"""
-                        SELECT id
-                        FROM `{self._settings.email_config_table}`
-                        ORDER BY id ASC
-                        LIMIT 1
-                        """
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        next_id = int(row["id"])
-                        cur.execute(
-                            f"""
-                            UPDATE `{self._settings.email_config_table}`
-                            SET enabled=1, is_default=1
-                            WHERE id=%s
-                            """,
-                            (next_id,),
-                        )
-                        replacement = self.get_by_id(next_id)
             conn.commit()
-        return deleted, replacement
+        return deleted, None
 
     def to_public(self, record: EmailConfigRecord) -> EmailConfigPublic:
+        public_extra = {
+            key: value
+            for key, value in (record.extra_config or {}).items()
+            if key not in {"cli_path", "config_dir", "webhook_secret", "access_token", "refresh_token", "secret"}
+        }
+        public_extra["credential_scope"] = (
+            "mailbox_isolated"
+            if str((record.extra_config or {}).get("config_dir") or "").strip()
+            else "server_default"
+        )
         return EmailConfigPublic(
             id=int(record.id or 0),
             config_name=record.config_name,
@@ -213,15 +214,10 @@ class MySQLEmailConfigStore:
             enabled=record.enabled,
             is_default=record.is_default,
             sender_email=record.sender_email,
-            test_email=record.test_email,
-            test_mode=record.test_mode,
-            description=record.description,
-            smtp_host=record.smtp_host,
-            smtp_port=record.smtp_port,
-            smtp_username=record.smtp_username,
-            extra_config=record.extra_config,
             has_api_key=bool(record.api_key),
             has_secret_key=bool(record.secret_key),
+            description=record.description,
+            extra_config=public_extra,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )
@@ -255,6 +251,7 @@ class MySQLEmailConfigStore:
                 `id` BIGINT NOT NULL AUTO_INCREMENT,
                 `config_name` VARCHAR(120) NOT NULL,
                 `provider` VARCHAR(64) NOT NULL,
+                `owner_agent_key` VARCHAR(120) NOT NULL DEFAULT 'global',
                 `api_key` VARCHAR(255) NULL,
                 `secret_key` VARCHAR(255) NULL,
                 `sender_email` VARCHAR(255) NOT NULL,
@@ -279,6 +276,7 @@ class MySQLEmailConfigStore:
         required_columns = {
             "id": "ALTER TABLE `{table}` ADD COLUMN `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST",
             "config_name": "ALTER TABLE `{table}` ADD COLUMN `config_name` VARCHAR(120) NOT NULL DEFAULT '' AFTER `id`",
+            "owner_agent_key": "ALTER TABLE `{table}` ADD COLUMN `owner_agent_key` VARCHAR(120) NOT NULL DEFAULT 'global' AFTER `provider`",
             "api_key": "ALTER TABLE `{table}` ADD COLUMN `api_key` VARCHAR(255) NULL AFTER `provider`",
             "secret_key": "ALTER TABLE `{table}` ADD COLUMN `secret_key` VARCHAR(255) NULL AFTER `api_key`",
             "sender_email": "ALTER TABLE `{table}` ADD COLUMN `sender_email` VARCHAR(255) NOT NULL DEFAULT '' AFTER `secret_key`",
@@ -304,6 +302,41 @@ class MySQLEmailConfigStore:
             END
             """
         )
+        cur.execute(
+            f"""
+            UPDATE `{self._settings.email_config_table}`
+            SET enabled=0, is_default=0
+            WHERE provider NOT IN ({AGENT_MAIL_PROVIDER_SQL})
+            """
+        )
+        cur.execute(
+            f"""
+            UPDATE `{self._settings.email_config_table}`
+            SET owner_agent_key='global'
+            WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL})
+            """
+        )
+        cur.execute(
+            f"""
+            SELECT id
+            FROM `{self._settings.email_config_table}`
+            WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL}) AND enabled=1
+            ORDER BY is_default DESC, id ASC
+            LIMIT 1
+            """
+        )
+        active = cur.fetchone()
+        if active:
+            active_id = int(active["id"])
+            cur.execute(
+                f"""
+                UPDATE `{self._settings.email_config_table}`
+                SET enabled=CASE WHEN id=%s THEN 1 ELSE 0 END,
+                    is_default=CASE WHEN id=%s THEN 1 ELSE 0 END
+                WHERE provider IN ({AGENT_MAIL_PROVIDER_SQL})
+                """,
+                (active_id, active_id),
+            )
 
     def _migrate_legacy_table(self, cur) -> None:
         legacy_rows = self._fetch_legacy_rows(cur)
@@ -313,7 +346,8 @@ class MySQLEmailConfigStore:
         cur.execute(f"RENAME TABLE `{self._settings.email_config_table}` TO `{backup_name}`")
         self._create_table(cur)
         for row in legacy_rows:
-            self._insert_record(cur, self._legacy_row_to_record(row))
+            if str(row.get("provider") or "").strip().lower() in AGENT_MAIL_PROVIDERS:
+                self._insert_record(cur, self._legacy_row_to_record(row))
 
     def _fetch_legacy_rows(self, cur) -> list[dict]:
         cur.execute(
@@ -329,26 +363,21 @@ class MySQLEmailConfigStore:
         config = json.loads(row.get("config_json") or "{}")
         provider = str(row["provider"]).strip().lower()
         return EmailConfigRecord(
-            config_name=PROVIDER_DEFAULT_NAMES.get(provider, provider),
+            config_name="Agent 原生邮箱",
             provider=provider,
-            api_key=_clean_str(config.get("access_key_id")) or _clean_str(config.get("smtp_password")),
-            secret_key=_clean_str(config.get("access_key_secret")),
+            owner_agent_key="global",
+            api_key=_clean_str(payload.api_key) or existing.api_key,
+            secret_key=_clean_str(payload.secret_key) or existing.secret_key,
             sender_email=row.get("from_email") or "",
             test_email=None,
             test_mode=False,
             enabled=bool(row.get("enabled")),
             is_default=bool(row.get("is_default")),
             description=None,
-            smtp_host=_clean_str(config.get("smtp_host")) or (
-                DEFAULT_CYBERMAIL_HOST if provider == "cybermail" else None
-            ),
-            smtp_port=(
-                int(config.get("smtp_port") or DEFAULT_CYBERMAIL_PORT)
-                if provider == "cybermail" or config.get("smtp_port")
-                else None
-            ),
-            smtp_username=_clean_str(config.get("smtp_username")),
-            extra_config=_extract_legacy_extra_config(provider, config),
+            smtp_host=None,
+            smtp_port=None,
+            smtp_username=None,
+            extra_config={},
             created_at=_to_datetime(row.get("created_at")),
             updated_at=_to_datetime(row.get("updated_at")),
         )
@@ -357,13 +386,14 @@ class MySQLEmailConfigStore:
         cur.execute(
             f"""
             INSERT INTO `{self._settings.email_config_table}`
-            (config_name, provider, api_key, secret_key, sender_email, test_email, test_mode,
+            (config_name, provider, owner_agent_key, api_key, secret_key, sender_email, test_email, test_mode,
              enabled, is_default, description, smtp_host, smtp_port, smtp_username, extra_config_json, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 record.config_name,
                 record.provider,
+                record.owner_agent_key,
                 record.api_key,
                 record.secret_key,
                 record.sender_email,
@@ -382,61 +412,56 @@ class MySQLEmailConfigStore:
         )
 
     def _merge_update(self, existing: EmailConfigRecord, payload: EmailConfigUpdateRequest) -> EmailConfigRecord:
-        if payload.provider == "cybermail":
-            smtp_host = _clean_str(payload.smtp_host) or DEFAULT_CYBERMAIL_HOST
-            smtp_port = int(payload.smtp_port or DEFAULT_CYBERMAIL_PORT)
-            smtp_username = _clean_str(payload.smtp_username)
-        else:
-            smtp_host = None
-            smtp_port = None
-            smtp_username = None
+        extra_config = _clean_extra_config(payload.extra_config)
+        extra_config.pop("cli_path", None)
+        if not extra_config.get("config_dir"):
+            existing_config_dir = str((existing.extra_config or {}).get("config_dir") or "").strip()
+            if existing_config_dir:
+                extra_config["config_dir"] = existing_config_dir
 
         return EmailConfigRecord(
             id=existing.id,
             config_name=payload.config_name.strip(),
             provider=payload.provider,
-            api_key=payload.api_key.strip() if payload.api_key else existing.api_key,
-            secret_key=payload.secret_key.strip() if payload.secret_key else existing.secret_key,
+            owner_agent_key="global",
+            api_key=None,
+            secret_key=None,
             sender_email=payload.sender_email.strip(),
-            test_email=_clean_str(payload.test_email),
-            test_mode=bool(payload.test_mode),
+            test_email=None,
+            test_mode=False,
             enabled=bool(payload.enabled or payload.is_default),
             is_default=bool(payload.is_default),
             description=_clean_str(payload.description),
-            smtp_host=smtp_host,
-            smtp_port=smtp_port,
-            smtp_username=smtp_username,
-            extra_config=_clean_extra_config(payload.extra_config),
+            smtp_host=None,
+            smtp_port=None,
+            smtp_username=None,
+            extra_config=extra_config,
             created_at=existing.created_at,
             updated_at=existing.updated_at,
         )
 
     def _payload_to_values(self, payload: EmailConfigCreateRequest):
-        if payload.provider == "cybermail":
-            smtp_host = _clean_str(payload.smtp_host) or DEFAULT_CYBERMAIL_HOST
-            smtp_port = int(payload.smtp_port or DEFAULT_CYBERMAIL_PORT)
-            smtp_username = _clean_str(payload.smtp_username)
-        else:
-            smtp_host = None
-            smtp_port = None
-            smtp_username = None
-
+        extra_config = _clean_extra_config(payload.extra_config)
+        extra_config.pop("cli_path", None)
+        if payload.provider == "tencent_agently":
+            extra_config["config_dir"] = str(_mailbox_config_dir(uuid.uuid4().hex))
         enabled = bool(payload.enabled or payload.is_default)
         return (
             payload.config_name.strip(),
             payload.provider,
+            "global",
             _clean_str(payload.api_key),
             _clean_str(payload.secret_key),
             payload.sender_email.strip(),
-            _clean_str(payload.test_email),
-            int(payload.test_mode),
+            None,
+            0,
             int(enabled),
             int(payload.is_default),
             _clean_str(payload.description),
-            smtp_host,
-            smtp_port,
-            smtp_username,
-            json.dumps(_clean_extra_config(payload.extra_config), ensure_ascii=False),
+            None,
+            None,
+            None,
+            json.dumps(extra_config, ensure_ascii=False),
         )
 
     def _row_to_record(self, row: dict | None) -> EmailConfigRecord:
@@ -444,18 +469,11 @@ class MySQLEmailConfigStore:
             raise KeyError("email config row not found")
 
         provider = str(row["provider"]).strip().lower()
-        smtp_host = _clean_str(row.get("smtp_host"))
-        smtp_port = row.get("smtp_port")
-        smtp_username = _clean_str(row.get("smtp_username"))
-
-        if provider == "cybermail":
-            smtp_host = smtp_host or DEFAULT_CYBERMAIL_HOST
-            smtp_port = int(smtp_port or DEFAULT_CYBERMAIL_PORT)
-
         return EmailConfigRecord(
             id=int(row["id"]),
-            config_name=row.get("config_name") or PROVIDER_DEFAULT_NAMES.get(provider, provider),
+            config_name=row.get("config_name") or "Agent 原生邮箱",
             provider=provider,
+            owner_agent_key="global",
             api_key=_clean_str(row.get("api_key")),
             secret_key=_clean_str(row.get("secret_key")),
             sender_email=row.get("sender_email") or "",
@@ -464,9 +482,9 @@ class MySQLEmailConfigStore:
             enabled=bool(row.get("enabled")),
             is_default=bool(row.get("is_default")),
             description=_clean_str(row.get("description")),
-            smtp_host=smtp_host,
-            smtp_port=int(smtp_port) if smtp_port is not None else None,
-            smtp_username=smtp_username,
+            smtp_host=None,
+            smtp_port=None,
+            smtp_username=None,
             extra_config=_parse_extra_config(row.get("extra_config_json")),
             created_at=_to_datetime(row.get("created_at")),
             updated_at=_to_datetime(row.get("updated_at")),
@@ -489,6 +507,10 @@ def _clean_extra_config(value):
     return {str(key): item for key, item in value.items()}
 
 
+def _mailbox_config_dir(profile_key: str) -> Path:
+    return (Path(__file__).resolve().parents[1] / "data" / "agently_mail_profiles" / profile_key).resolve()
+
+
 def _parse_extra_config(value):
     if not value:
         return {}
@@ -498,19 +520,6 @@ def _parse_extra_config(value):
         return _clean_extra_config(json.loads(str(value)))
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
-
-
-def _extract_legacy_extra_config(provider: str, config: dict) -> dict:
-    if provider == "aliyun":
-        return {
-            "mode": "directmail_api",
-            "domain": config.get("domain"),
-        }
-    if provider == "cybermail":
-        return {
-            "mode": "smtp",
-        }
-    return {}
 
 
 def _to_datetime(value):

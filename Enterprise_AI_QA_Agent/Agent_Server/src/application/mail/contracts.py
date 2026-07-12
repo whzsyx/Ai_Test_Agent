@@ -24,6 +24,7 @@ class MailCapability(str, Enum):
     SEARCH = "search"
     REPLY = "reply"
     FORWARD = "forward"
+    TRASH = "trash"
     ATTACHMENTS = "attachments"
     PROVISION_INBOX = "provision_inbox"
     WEBHOOK = "webhook"
@@ -124,14 +125,23 @@ class MailMessage:
 class MailProviderAdapter(ABC):
     """Base class for every mail provider.
 
-    Subclasses set ``provider_key`` and declare their supported capabilities
-    via :meth:`capabilities`. Send-only providers (SMTP, Aliyun) implement
-    :meth:`send`; Agent Mailbox providers additionally implement the inbound
-    methods. Every non-send method defaults to raising
+    The native mailbox adapter declares its supported capabilities via
+    :meth:`capabilities`. Every optional method defaults to raising
     :class:`CapabilityNotSupported`, so a provider only overrides what it can do.
     """
 
     provider_key: str = ""
+    display_name: str = ""
+    auth_type: str = "api_key"
+
+    def descriptor(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider_key,
+            "display_name": self.display_name or self.provider_key,
+            "auth_type": self.auth_type,
+            "capabilities": sorted(cap.value for cap in self.capabilities()),
+            "configuration_fields": [],
+        }
 
     def capabilities(self) -> set[MailCapability]:
         """Return the set of capabilities this provider supports."""
@@ -150,12 +160,6 @@ class MailProviderAdapter(ABC):
         raise NotImplementedError
 
     # --- Agent Mailbox capabilities (opt-in) --------------------------------
-
-    def provision_inbox(
-        self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        self._require(MailCapability.PROVISION_INBOX)
-        raise NotImplementedError
 
     def list_messages(
         self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
@@ -188,10 +192,20 @@ class MailProviderAdapter(ABC):
         self._require(MailCapability.FORWARD)
         raise NotImplementedError
 
+    def trash(self, record: "EmailConfigRecord", message_id: str) -> MailSendResult:
+        self._require(MailCapability.TRASH)
+        raise NotImplementedError
+
     def download_attachment(
         self, record: "EmailConfigRecord", message_id: str, attachment_id: str
     ) -> dict[str, Any]:
         self._require(MailCapability.ATTACHMENTS)
+        raise NotImplementedError
+
+    def provision_inbox(
+        self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        self._require(MailCapability.PROVISION_INBOX)
         raise NotImplementedError
 
     def status(self, record: "EmailConfigRecord") -> dict[str, Any]:

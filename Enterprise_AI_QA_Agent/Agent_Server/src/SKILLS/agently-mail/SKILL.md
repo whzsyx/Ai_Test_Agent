@@ -1,7 +1,7 @@
 ---
 name: agently-mail
 description: Tencent Agent Mail skill - provides email sending, receiving, reading, searching, replying and forwarding via agently-cli.
-tools: mail-status, mail-send, mail-confirm, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-download-attachment, mail-provision-inbox
+tools: mail-status, mail-send, mail-confirm, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-trash, mail-download-attachment
 ---
 
 # Tencent Agent Mail
@@ -16,6 +16,7 @@ Use this skill when the user needs to interact with their Tencent Agent Mailbox.
 - Search messages by keyword, sender, recipient, date range
 - Reply to messages (two-phase confirmation)
 - Forward messages to new recipients (two-phase confirmation)
+- Move messages to trash (two-phase confirmation)
 - Download attachments
 
 ## Security Rules

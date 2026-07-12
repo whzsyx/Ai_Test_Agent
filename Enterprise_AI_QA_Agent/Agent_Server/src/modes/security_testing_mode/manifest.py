@@ -36,7 +36,6 @@ MODE_MANIFEST = {
         "exploit-workbench-runner",
         "knowledge-rag",
         "report-writer",
-        "send-email",
         "observation-search",
         "session-history",
     ],

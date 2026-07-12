@@ -32,8 +32,6 @@ MODE_MANIFEST = {
         "session-history",
         "observation-search",
         "knowledge-rag",
-        "message-dispatch",
-        "send-email",
         "report-writer",
         "subagent-dispatch",
     ],

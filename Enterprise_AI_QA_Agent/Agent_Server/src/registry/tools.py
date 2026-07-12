@@ -693,73 +693,6 @@ class ToolRegistry:
                 ),
                 handler_key="file-artifact-manager",
             ),
-            "message-dispatch": ToolModule(
-                descriptor=ToolDescriptor(
-                    key="message-dispatch",
-                    name="Message Dispatch",
-                    description="Send execution notifications as email using the active email channel, or persist message payloads as local delivery artifacts.",
-                    category="communication",
-                    permission_level="ask",
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "channel": {
-                                "type": "string",
-                                "description": "Delivery channel, such as email or artifact.",
-                                "default": "artifact",
-                            },
-                            "to": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "One or more recipients for external delivery.",
-                            },
-                            "subject": {"type": "string", "description": "Message subject or title."},
-                            "content": {"type": "string", "description": "Plain text message content."},
-                            "content_markdown": {"type": "string", "description": "Markdown content that should be rendered into the report HTML template."},
-                            "content_html": {"type": "string", "description": "Optional HTML content for email delivery."},
-                            "sender": {"type": "string", "description": "Display sender name used by the report template."},
-                            "time_label": {"type": "string", "description": "Optional time label rendered in the report template."},
-                            "template_key": {"type": "string", "description": "Optional report template key, such as default or code_review_debate."},
-                            "template_context": {"type": "object", "description": "Optional template-specific context used during HTML rendering."},
-                            "file_name": {"type": "string", "description": "Optional artifact file name for local delivery."},
-                        },
-                    },
-                    output_schema={"delivery": "object", "artifacts": "array"},
-                    tags=["message", "notification", "email"],
-                ),
-                handler_key="message-dispatch",
-            ),
-            "send-email": ToolModule(
-                descriptor=ToolDescriptor(
-                    key="send-email",
-                    name="Send Email",
-                    description="Send an email through the currently active email channel without specifying provider details.",
-                    category="communication",
-                    permission_level="ask",
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "to": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "One or more recipient email addresses.",
-                            },
-                            "subject": {"type": "string", "description": "Email subject line."},
-                            "content": {"type": "string", "description": "Plain text email body."},
-                            "content_markdown": {"type": "string", "description": "Markdown body rendered with the report HTML template when content_html is absent."},
-                            "content_html": {"type": "string", "description": "Optional HTML email body."},
-                            "sender": {"type": "string", "description": "Display sender name used by the report template."},
-                            "time_label": {"type": "string", "description": "Optional time label rendered in the report template."},
-                            "template_key": {"type": "string", "description": "Optional report template key, such as default or code_review_debate."},
-                            "template_context": {"type": "object", "description": "Optional template-specific context used during HTML rendering."},
-                        },
-                        "required": ["to", "subject"],
-                    },
-                    output_schema={"delivery": "object", "artifacts": "array"},
-                    tags=["email", "message", "notification"],
-                ),
-                handler_key="send-email",
-            ),
             "report-writer": ToolModule(
                 descriptor=ToolDescriptor(
                     key="report-writer",
@@ -1940,7 +1873,7 @@ class ToolRegistry:
                         "properties": {
                             "operation": {
                                 "type": "string",
-                                "enum": ["send", "reply", "forward"],
+                                "enum": ["send", "reply", "forward", "trash"],
                                 "description": "Prepared operation type.",
                             },
                             "confirmation_token": {
@@ -2057,6 +1990,29 @@ class ToolRegistry:
                 ),
                 handler_key="mail-forward",
             ),
+            "mail-trash": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-trash",
+                    name="Mail Trash Prepare",
+                    description="Prepare moving a mailbox message to trash and return confirmation details.",
+                    category="communication",
+                    permission_level="safe",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string", "description": "Message ID to move to trash."},
+                        },
+                        "required": ["message_id"],
+                    },
+                    output_schema={
+                        "confirmation_required": "boolean",
+                        "confirmation_token": "string",
+                        "confirmation_summary": "string",
+                    },
+                    tags=["mail", "mailbox", "trash", "write"],
+                ),
+                handler_key="mail-trash",
+            ),
             "mail-download-attachment": ToolModule(
                 descriptor=ToolDescriptor(
                     key="mail-download-attachment",
@@ -2076,25 +2032,6 @@ class ToolRegistry:
                     tags=["mail", "mailbox", "attachment"],
                 ),
                 handler_key="mail-download-attachment",
-            ),
-            "mail-provision-inbox": ToolModule(
-                descriptor=ToolDescriptor(
-                    key="mail-provision-inbox",
-                    name="Mail Provision Inbox",
-                    description="Provision a new inbox address on the Agent Mailbox provider.",
-                    category="communication",
-                    permission_level="ask",
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "display_name": {"type": "string", "description": "Display name for the new inbox."},
-                            "prefix": {"type": "string", "description": "Optional local-part prefix."},
-                        },
-                    },
-                    output_schema={"ok": "boolean", "address": "string"},
-                    tags=["mail", "mailbox", "provision"],
-                ),
-                handler_key="mail-provision-inbox",
             ),
         }
         self._dynamic_tools: dict[str, ToolModule] = {}

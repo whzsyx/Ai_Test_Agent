@@ -1,15 +1,10 @@
-"""AgentMail Agent Mailbox adapter."""
+"""AgentMail adapter using the official v0 inbox-scoped HTTP API."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from src.application.mail.contracts import (
-    MailCapability,
-    MailMessage,
-    MailSendRequest,
-    MailSendResult,
-)
+from src.application.mail.contracts import MailCapability, MailMessage, MailSendRequest, MailSendResult
 from src.infrastructure.mail.providers.rest_base import RestMailAdapterBase
 
 if TYPE_CHECKING:
@@ -17,79 +12,77 @@ if TYPE_CHECKING:
 
 
 class AgentMailAdapter(RestMailAdapterBase):
-    """AgentMail provider - REST API adapter."""
-
     provider_key = "agentmail"
-    default_base_url = "https://api.agentmail.to/v1"
+    display_name = "AgentMail"
+    auth_type = "api_key"
+    default_base_url = "https://api.agentmail.to"
+    configuration_fields = ["api_key", "mailbox_id", "base_url"]
 
     def capabilities(self) -> set[MailCapability]:
         return {
-            MailCapability.SEND,
-            MailCapability.LIST,
-            MailCapability.READ,
-            MailCapability.SEARCH,
-            MailCapability.REPLY,
-            MailCapability.FORWARD,
-            MailCapability.ATTACHMENTS,
-            MailCapability.PROVISION_INBOX,
-            MailCapability.WEBHOOK,
+            MailCapability.SEND, MailCapability.LIST, MailCapability.READ,
+            MailCapability.SEARCH, MailCapability.REPLY, MailCapability.FORWARD,
+            MailCapability.TRASH, MailCapability.ATTACHMENTS,
+            MailCapability.PROVISION_INBOX, MailCapability.WEBHOOK,
         }
 
+    def _messages_path(self, record: "EmailConfigRecord") -> str:
+        return f"/v0/inboxes/{self._mailbox_id(record)}/messages"
+
     def send(self, record: "EmailConfigRecord", request: MailSendRequest) -> MailSendResult:
-        data = self._request("POST", record, "/messages/send", json_body={
+        body: dict[str, Any] = {
             "to": request.recipients,
             "subject": request.subject,
-            "body": request.content_html or request.content,
+            "text": request.content,
+            "html": request.content_html,
             "cc": request.cc,
             "bcc": request.bcc,
-        })
-        return self._build_send_result(record, data)
+            "attachments": request.attachments,
+        }
+        if request.reply_to:
+            body["reply_to"] = request.reply_to
+        body = {key: value for key, value in body.items() if value not in (None, "", [])}
+        data = self._request("POST", record, self._messages_path(record) + "/send", json_body=body)
+        return self._send_result(record, data, len(request.recipients))
 
-    def list_messages(
-        self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
-    ) -> list[MailMessage]:
-        opts = options or {}
-        data = self._request("GET", record, "/messages", params=opts)
-        return [self._to_mail_message(m) for m in (data.get("messages") or [])]
+    def list_messages(self, record: "EmailConfigRecord", options: dict[str, Any] | None = None) -> list[MailMessage]:
+        data = self._request("GET", record, self._messages_path(record), params=options or {})
+        return [self._message(item) for item in self._items(data, "messages")]
 
     def read_message(self, record: "EmailConfigRecord", message_id: str) -> MailMessage:
-        data = self._request("GET", record, f"/messages/{message_id}")
-        return self._to_mail_message(data.get("message") or data)
+        data = self._request("GET", record, f"{self._messages_path(record)}/{message_id}")
+        raw = data.get("message", data) if isinstance(data, dict) else {}
+        return self._message(raw)
 
-    def search_messages(
-        self, record: "EmailConfigRecord", query: str, options: dict[str, Any] | None = None
-    ) -> list[MailMessage]:
-        opts = dict(options or {})
-        opts["q"] = query
-        data = self._request("GET", record, "/messages/search", params=opts)
-        return [self._to_mail_message(m) for m in (data.get("messages") or [])]
+    def search_messages(self, record: "EmailConfigRecord", query: str, options: dict[str, Any] | None = None) -> list[MailMessage]:
+        params = {**(options or {}), "query": query}
+        data = self._request("GET", record, self._messages_path(record) + "/search", params=params)
+        return [self._message(item) for item in self._items(data, "messages")]
 
-    def reply(
-        self, record: "EmailConfigRecord", message_id: str, request: MailSendRequest
-    ) -> MailSendResult:
-        data = self._request("POST", record, f"/messages/{message_id}/reply", json_body={
-            "body": request.content_html or request.content,
-            "cc": request.cc,
-        })
-        return self._build_send_result(record, data)
+    def reply(self, record: "EmailConfigRecord", message_id: str, request: MailSendRequest) -> MailSendResult:
+        body = {"text": request.content, "html": request.content_html, "cc": request.cc}
+        data = self._request("POST", record, f"{self._messages_path(record)}/{message_id}/reply", json_body={k: v for k, v in body.items() if v not in ("", [])})
+        return self._send_result(record, data, 0)
 
-    def forward(
-        self, record: "EmailConfigRecord", message_id: str, request: MailSendRequest
-    ) -> MailSendResult:
-        data = self._request("POST", record, f"/messages/{message_id}/forward", json_body={
-            "to": request.recipients,
-            "body": request.content_html or request.content,
-        })
-        return self._build_send_result(record, data)
+    def forward(self, record: "EmailConfigRecord", message_id: str, request: MailSendRequest) -> MailSendResult:
+        body = {"to": request.recipients, "text": request.content, "html": request.content_html}
+        data = self._request("POST", record, f"{self._messages_path(record)}/{message_id}/forward", json_body={k: v for k, v in body.items() if v not in ("", [])})
+        return self._send_result(record, data, len(request.recipients))
 
-    def download_attachment(
-        self, record: "EmailConfigRecord", message_id: str, attachment_id: str
-    ) -> dict[str, Any]:
-        data = self._request("GET", record, f"/messages/{message_id}/attachments/{attachment_id}")
-        return {"ok": True, **data}
+    def trash(self, record: "EmailConfigRecord", message_id: str) -> MailSendResult:
+        self._request("DELETE", record, f"{self._messages_path(record)}/{message_id}")
+        return MailSendResult(sent=True, provider=self.provider_key, from_email=record.sender_email, recipient_count=0, message_id=message_id)
 
-    def provision_inbox(
-        self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        data = self._request("POST", record, "/inboxes", json_body=options or {})
-        return {"ok": True, **data}
+    def download_attachment(self, record: "EmailConfigRecord", message_id: str, attachment_id: str) -> dict[str, Any]:
+        return self._request_binary(record, f"{self._messages_path(record)}/{message_id}/attachments/{attachment_id}")
+
+    def provision_inbox(self, record: "EmailConfigRecord", options: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = self._request("POST", record, "/v0/inboxes", json_body=options or {})
+        payload = data.get("inbox", data) if isinstance(data, dict) else {}
+        return {
+            "ok": True,
+            "provider": self.provider_key,
+            "mailbox_id": payload.get("inbox_id") or payload.get("id"),
+            "email": payload.get("email") or payload.get("address"),
+            "raw": payload,
+        }

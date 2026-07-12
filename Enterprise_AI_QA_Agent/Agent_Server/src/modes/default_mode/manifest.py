@@ -20,7 +20,6 @@ MODE_MANIFEST = {
         "observation-search",
         "cli-executor",
         "report-writer",
-        "send-email",
     ],
     "harness_key": "default_conversation_harness",
     "placeholder": False,

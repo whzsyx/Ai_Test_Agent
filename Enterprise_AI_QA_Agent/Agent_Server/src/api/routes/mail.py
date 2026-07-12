@@ -6,6 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from src.application.mail.contracts import MailCapability
+from src.schemas.email_config import EmailConfigUpdateRequest
 
 
 router = APIRouter(prefix="/mail", tags=["mail"])
@@ -14,10 +16,6 @@ router = APIRouter(prefix="/mail", tags=["mail"])
 class ProviderSetupActionRequest(BaseModel):
     action: str
     payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class ProvisionInboxRequest(BaseModel):
-    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class SendPrepareRequest(BaseModel):
@@ -60,10 +58,7 @@ async def list_providers(request: Request):
     providers = []
     for key in registry.registered_keys():
         adapter = registry.resolve(key)
-        providers.append({
-            "provider": key,
-            "capabilities": sorted(cap.value for cap in adapter.capabilities()),
-        })
+        providers.append(adapter.descriptor())
     return {"providers": providers}
 
 
@@ -90,7 +85,7 @@ async def provider_setup_action(
     if adapter is None:
         raise HTTPException(status_code=404, detail="Unknown provider: " + provider)
 
-    if body.action in {"auth_status", "auth_login", "auth_login_status", "whoami"}:
+    if body.action in {"status", "auth_status", "auth_login", "auth_login_status", "whoami", "provision_inbox"}:
         config_id = body.payload.get("config_id")
         if config_id is not None and not isinstance(config_id, int):
             try:
@@ -101,6 +96,29 @@ async def provider_setup_action(
         record = _resolve_provider_record(mail_service, provider, config_id)
         if record is None:
             return {"ok": False, "error": "no_enabled_config", "provider": provider}
+
+        if body.action == "status":
+            return adapter.status(record)
+
+        if body.action == "provision_inbox":
+            if not adapter.supports(MailCapability.PROVISION_INBOX):
+                return {"ok": False, "provider": provider, "error": "capability_not_supported"}
+            result = adapter.provision_inbox(record, body.payload.get("options") or {})
+            mailbox_id = str(result.get("mailbox_id") or "").strip()
+            email = str(result.get("email") or record.sender_email or "").strip()
+            if mailbox_id:
+                extra = dict(record.extra_config or {})
+                extra["mailbox_id"] = mailbox_id
+                mail_service._email_config_store.update(record.id, EmailConfigUpdateRequest(
+                    config_name=record.config_name,
+                    provider=record.provider,
+                    sender_email=email,
+                    enabled=record.enabled,
+                    is_default=record.is_default,
+                    description=record.description,
+                    extra_config=extra,
+                ))
+            return result
 
         if body.action == "auth_status":
             if hasattr(adapter, "auth_status"):
@@ -141,18 +159,6 @@ async def provider_setup_action(
             }
 
     return {"ok": True, "action": body.action, "result": "no_op"}
-
-
-@router.post("/providers/{provider}/provision-inbox")
-async def provision_inbox(
-    provider: str, body: ProvisionInboxRequest, request: Request
-):
-    mail_service = request.app.state.mail_service
-    try:
-        result = mail_service.provision_inbox(options=body.options)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return result
 
 
 @router.post("/test-send/prepare")

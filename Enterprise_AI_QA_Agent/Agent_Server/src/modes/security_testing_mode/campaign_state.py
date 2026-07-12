@@ -351,7 +351,7 @@ class ReportDeliveryRecord(BaseModel):
     """Delivery status for the generated security report."""
 
     channel: str = "email"
-    status: str = "not_requested"  # not_requested / sent / failed / skipped
+    status: str = "not_requested"  # not_requested / awaiting_confirmation / sent / failed / skipped
     recipients: list[str] = Field(default_factory=list)
     subject: str = ""
     summary: str = ""
@@ -359,6 +359,9 @@ class ReportDeliveryRecord(BaseModel):
     provider: str = ""
     from_email: str = ""
     recipient_count: int = 0
+    confirmation_required: bool = False
+    confirmation_token: str = ""
+    confirmation_summary: str = ""
     artifact_paths: list[str] = Field(default_factory=list)
     error: str = ""
     delivered_at: str = ""

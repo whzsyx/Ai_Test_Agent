@@ -475,6 +475,27 @@ class SecurityTestingModeRuntime:
         explicit_status = str(result.get("status") or "").strip().lower()
         ok = result.get("ok")
         failed = explicit_status in {"failed", "denied"} or ok is False or bool(result.get("error"))
+        confirmation_required = bool(result.get("confirmation_required")) and not failed
+        if confirmation_required:
+            confirmation_summary = str(
+                result.get("confirmation_summary") or result.get("summary") or ""
+            ).strip()
+            state.delivery = ReportDeliveryRecord(
+                status="awaiting_confirmation",
+                recipients=recipients,
+                subject=str(payload.get("subject") or ""),
+                summary=confirmation_summary or "Security report email is ready for confirmation.",
+                sent=False,
+                provider=str(result.get("provider") or "tencent_agently"),
+                from_email=str(result.get("from_email") or ""),
+                recipient_count=len(recipients),
+                confirmation_required=True,
+                confirmation_token=str(result.get("confirmation_token") or ""),
+                confirmation_summary=confirmation_summary,
+                artifact_paths=artifact_paths,
+            )
+            state.notes.append("Security report email is prepared and waiting for user confirmation.")
+            return state
         sent = bool(delivery.get("sent")) and not failed
         recipient_count = int(delivery.get("recipient_count") or len(recipients)) if sent else 0
         delivery_error = "" if sent else str(result.get("error") or result.get("summary") or "email_delivery_failed")

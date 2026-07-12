@@ -1,7 +1,7 @@
 ---
 name: mail-capability
 description: Safety rules for all Agent Mailbox tool invocations.
-tools: mail-status, mail-send, mail-confirm, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-download-attachment, mail-provision-inbox
+tools: mail-status, mail-send, mail-confirm, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-trash, mail-download-attachment
 ---
 
 # mail-capability
@@ -9,6 +9,8 @@ tools: mail-status, mail-send, mail-confirm, mail-list, mail-read, mail-search, 
 ## Purpose
 
 Public safety skill for all Agent Mailbox tool invocations. Applies regardless of which provider adapter is active.
+
+All `mail-*` tools target the one globally active mailbox. Never attempt to select a provider or an inactive mailbox from tool input; mailbox switching is an administrator action in Email Settings.
 
 ## Security Rules
 
@@ -22,12 +24,11 @@ Public safety skill for all Agent Mailbox tool invocations. Applies regardless o
 
 5. **Rate-limit awareness.** Do not call `mail-send`, `mail-reply`, or `mail-forward` in a tight loop. If batch sending is needed, ask the user for confirmation on the recipient list first.
 
-6. **Inbox provisioning is a privileged action.** `mail-provision-inbox` creates a new email identity. Always confirm with the user before provisioning.
 
 ## Capability Gating
 
 - Read-only tools (`mail-status`, `mail-list`, `mail-read`, `mail-search`) can be used freely to gather context.
-- Write tools (`mail-send`, `mail-reply`, `mail-forward`, `mail-download-attachment`, `mail-provision-inbox`) require the two-phase confirmation pattern or explicit user approval.
+- Write tools (`mail-send`, `mail-reply`, `mail-forward`, `mail-trash`) require the two-phase confirmation pattern. Attachment downloads require explicit user approval.
 
 ## HTML Report Templates
 

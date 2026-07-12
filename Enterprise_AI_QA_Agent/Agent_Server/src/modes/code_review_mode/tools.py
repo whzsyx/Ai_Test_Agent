@@ -11,8 +11,6 @@ CODE_REVIEW_TOOL_KEYS = [
     "session-history",
     "observation-search",
     "knowledge-rag",
-    "message-dispatch",
-    "send-email",
     "report-writer",
     "subagent-dispatch",
 ]

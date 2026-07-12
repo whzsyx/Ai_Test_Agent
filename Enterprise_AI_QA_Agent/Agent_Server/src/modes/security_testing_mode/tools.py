@@ -10,7 +10,6 @@ SECURITY_TESTING_TOOL_KEYS: list[str] = [
     "subagent-dispatch",
     "knowledge-rag",
     "report-writer",
-    "send-email",
     "observation-search",
     "session-history",
 ]
@@ -31,7 +30,6 @@ SECURITY_WORKER_TOOL_KEYS: list[str] = [
 # Tools for reporting phase
 SECURITY_REPORTING_TOOL_KEYS: list[str] = [
     "report-writer",
-    "send-email",
     "knowledge-rag",
     "observation-search",
     "session-history",

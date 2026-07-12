@@ -3,24 +3,21 @@
 Mirrors the ``model_providers`` registry pattern: adapters are keyed by their
 ``provider_key`` class attribute and resolved via :meth:`resolve`.
 
-Resolution semantics preserve the historical inline behavior
-(``provider == "aliyun" -> Aliyun, else -> SMTP``): any provider key that is
-not explicitly registered falls back to the SMTP adapter, so all existing
-transactional-send providers keep working unchanged.
+Every supported Agent Mail vendor has a concrete adapter under
+``infrastructure/mail/providers``. Provider differences remain behind the
+public mail capability API.
 """
 
 from __future__ import annotations
 
 from src.application.mail.contracts import MailProviderAdapter
 from src.infrastructure.mail.providers import (
-    AgentMailAdapter,
     AgenticMailAdapter,
-    AliyunMailAdapter,
+    AgentMailAdapter,
     AwsAgentMailboxAdapter,
     DeadSimpleEmailAdapter,
     OpenMailAdapter,
     RobotomailAdapter,
-    SmtpMailAdapter,
     TencentAgentlyMailAdapter,
 )
 
@@ -37,8 +34,6 @@ class MailProviderRegistry:
         self._providers: dict[str, MailProviderAdapter] = {
             p.provider_key: p for p in providers
         }
-        # Fallback preserves the old ``else -> SMTP`` branch for the many
-        # transactional providers (sendgrid, mailgun, ...) that deliver via SMTP.
         self._send_fallback = send_fallback
 
     def resolve(self, provider_key: str) -> MailProviderAdapter:
@@ -58,22 +53,10 @@ class MailProviderRegistry:
 
 
 def build_default_mail_provider_registry() -> MailProviderRegistry:
-    """Build the registry with the built-in adapters.
+    """Build the global multi-provider Agent Mail registry."""
 
-    Explicitly-registered providers get their own adapter; every other
-    provider key falls back to SMTP (matching the legacy behavior).
-    """
-
-    smtp = SmtpMailAdapter()
-    providers: list[MailProviderAdapter] = [
-        AliyunMailAdapter(),
-        TencentAgentlyMailAdapter(),
-        AgentMailAdapter(),
-        RobotomailAdapter(),
-        OpenMailAdapter(),
-        DeadSimpleEmailAdapter(),
-        AgenticMailAdapter(),
+    return MailProviderRegistry([
+        TencentAgentlyMailAdapter(), AgentMailAdapter(), RobotomailAdapter(),
+        OpenMailAdapter(), DeadSimpleEmailAdapter(), AgenticMailAdapter(),
         AwsAgentMailboxAdapter(),
-        smtp,
-    ]
-    return MailProviderRegistry(providers, send_fallback=smtp)
+    ])
