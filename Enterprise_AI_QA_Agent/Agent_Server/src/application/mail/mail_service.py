@@ -85,6 +85,25 @@ class MailService:
         result = adapter.send(record, request)
         return result.to_dict()
 
+    def confirm(
+        self,
+        operation: str,
+        confirmation_token: str,
+        *,
+        config_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Commit a prepared Agent Mail write operation after user confirmation."""
+        record = self._resolve_record_by_id(config_id)
+        adapter = self._registry.resolve(record.provider)
+        operation_key = str(operation or "").strip().lower()
+        method_name = {"send": "send_confirm", "reply": "reply_confirm", "forward": "forward_confirm"}.get(operation_key)
+        if not method_name or not hasattr(adapter, method_name):
+            raise RuntimeError(
+                f"Provider '{record.provider}' does not support confirmation for operation '{operation}'."
+            )
+        result = getattr(adapter, method_name)(record, confirmation_token)
+        return result.to_dict()
+
     # --- Agent Mailbox capabilities ----------------------------------------
 
     def status(self, config_id: int | None = None) -> dict[str, Any]:

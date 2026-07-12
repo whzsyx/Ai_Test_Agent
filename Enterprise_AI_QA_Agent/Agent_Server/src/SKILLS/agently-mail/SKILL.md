@@ -1,7 +1,7 @@
 ---
 name: agently-mail
 description: Tencent Agent Mail skill - provides email sending, receiving, reading, searching, replying and forwarding via agently-cli.
-tools: mail-status, mail-send, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-download-attachment, mail-provision-inbox
+tools: mail-status, mail-send, mail-confirm, mail-list, mail-read, mail-search, mail-reply, mail-forward, mail-download-attachment, mail-provision-inbox
 ---
 
 # Tencent Agent Mail
@@ -39,4 +39,11 @@ instruct the user to run the login flow manually.
 
 1. First call to mail-send/reply/forward returns a confirmation summary with a token.
 2. Review the summary with the user.
-3. Only after explicit approval, call again with the confirmation token to commit.
+3. Stop the current turn. Only after explicit approval in a later user turn, call `mail-confirm` with the operation and opaque confirmation token.
+
+### HTML Report Templates
+
+- For ordinary email, pass `content` (plain text) or `content_html` (ready-made HTML).
+- For a QA report, pass `content_markdown`; `mail-send` renders it with `src/templates/report_email.html` before preparing the send.
+- Use `template_key=code_review_debate` or `template_key=security_testing_full` with matching `template_context` for specialized reports. Otherwise use `default`.
+- Never render a template again when `content_html` is already supplied.

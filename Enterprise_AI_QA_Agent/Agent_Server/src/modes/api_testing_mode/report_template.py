@@ -70,7 +70,7 @@ class ApiTestingReportTemplate:
             "{{ time_label }}": html.escape(report.generated_at or ""),
             "{{ verdict_icon }}": verdict_icon,
             "{{ verdict_label }}": html.escape(verdict_label),
-            "{{ verdict_class }}": verdict_bg,  # Now used as CSS class name
+            "{{ verdict_class }}": verdict_class,
             "{{ verdict_summary }}": html.escape(verdict_summary),
             "{{ total_tasks }}": str(report.total_tasks),
             "{{ passed_tasks }}": str(report.completed),

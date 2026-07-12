@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.application.mail.contracts import (
@@ -32,7 +33,10 @@ if TYPE_CHECKING:
 
 _AUTH_LOGIN_SESSIONS: dict[str, dict[str, Any]] = {}
 _AUTH_LOGIN_LOCK = threading.Lock()
+_PENDING_CONFIRMATIONS: dict[str, dict[str, Any]] = {}
+_PENDING_CONFIRMATIONS_LOCK = threading.Lock()
 _AUTH_URL_PATTERN = re.compile(r"https?://\S+")
+_CONFIRMATION_TOKEN_PATTERN = re.compile(r"\bctk_[A-Za-z0-9_-]+\b")
 
 
 class TencentAgentlyMailAdapter(MailProviderAdapter):
@@ -97,18 +101,47 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"agently-cli timed out after {timeout}s.")
 
-        if proc.returncode != 0:
-            stderr = (proc.stderr or "").strip()
-            raise RuntimeError(
-                f"agently-cli error (exit {proc.returncode}): {stderr}"
-            )
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        payload = self._parse_cli_json(stdout) or self._parse_cli_json(stderr)
 
-        try:
-            return json.loads(proc.stdout)
-        except (json.JSONDecodeError, ValueError):
+        if proc.returncode != 0:
+            message = self._extract_cli_error_message(payload or {})
+            detail = message or stderr.strip() or stdout.strip() or "No error output."
+            raise RuntimeError(f"agently-cli error (exit {proc.returncode}): {detail}")
+
+        if payload is None:
+            raw_output = "\n".join(part.strip() for part in (stdout, stderr) if part and part.strip())
+            token_match = _CONFIRMATION_TOKEN_PATTERN.search(raw_output)
+            if token_match:
+                return {
+                    "ok": True,
+                    "confirmation_required": True,
+                    "confirmation_token": token_match.group(0),
+                    "summary": raw_output,
+                }
+            if raw_output:
+                return {"ok": True, "summary": raw_output}
+            preview = raw_output[:500]
             raise RuntimeError(
-                f"agently-cli returned non-JSON output: {proc.stdout[:500]}"
+                "agently-cli returned empty or non-JSON output"
+                + (f": {preview}" if preview else ".")
             )
+        return payload
+
+    @staticmethod
+    def _parse_cli_json(text: str | None) -> dict[str, Any] | None:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        start = raw.find("{")
+        if start < 0:
+            return None
+        try:
+            value, _ = json.JSONDecoder().raw_decode(raw[start:])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
 
     @staticmethod
     def _cli_not_found_message(cli: str) -> str:
@@ -302,39 +335,150 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
     def send(
         self, record: "EmailConfigRecord", request: MailSendRequest
     ) -> MailSendResult:
+        args = self._send_args(request)
+        try:
+            data = self._run_cli(record, args)
+        except Exception:
+            self._cleanup_confirmation_files({"args": args})
+            raise
+        result = self._build_send_result(record, data)
+        if result.confirmation_required:
+            result.recipient_count = result.recipient_count or len(request.recipients)
+            result.confirmation_summary = self._send_confirmation_summary(request)
+            self._remember_confirmation(result.confirmation_token, "send", args)
+        else:
+            self._cleanup_confirmation_files({"args": args})
+        return result
+
+    @staticmethod
+    def _send_args(request: MailSendRequest) -> list[str]:
         args = ["message", "+send"]
         for r in request.recipients:
             args += ["--to", r]
         args += ["--subject", request.subject]
         body = request.content_html or request.content
-        args += ["--body", body]
+        args += [
+            "--body-file",
+            TencentAgentlyMailAdapter._write_body_file(
+                body,
+                is_html=bool(request.content_html),
+            ),
+        ]
         if request.cc:
             for cc in request.cc:
                 args += ["--cc", cc]
         if request.bcc:
             for bcc in request.bcc:
                 args += ["--bcc", bcc]
-        data = self._run_cli(record, args)
-        return self._build_send_result(record, data)
+        return args
+
+    @staticmethod
+    def _write_body_file(body: str, *, is_html: bool = False) -> str:
+        root = Path("src/data/agently_mail_confirmations")
+        root.mkdir(parents=True, exist_ok=True)
+        suffix = ".html" if is_html else ".txt"
+        path = root / f"body_{uuid.uuid4().hex}{suffix}"
+        path.write_text(body, encoding="utf-8")
+        return path.as_posix()
 
     def send_confirm(
-        self, record: "EmailConfigRecord", confirmation_token: str
+        self,
+        record: "EmailConfigRecord",
+        confirmation_token: str,
     ) -> MailSendResult:
         """Phase 2: commit a prepared send with the confirmation token."""
-        args = ["message", "+send", "--confirmation-token", confirmation_token]
+        args = self._confirmation_args(confirmation_token, "send")
         data = self._run_cli(record, args)
-        return self._build_send_result(record, data)
+        result = self._build_send_result(record, data)
+        return self._finish_confirmation(confirmation_token, result)
 
     def _build_send_result(
         self, record: "EmailConfigRecord", data: dict
     ) -> MailSendResult:
+        payload = self._normalize_cli_payload(data)
+        confirmation_required = bool(payload.get("confirmation_required"))
         return MailSendResult(
-            sent=not data.get("confirmation_required", False),
+            sent=not confirmation_required,
             provider=self.provider_key,
-            from_email=data.get("from", record.sender_email or ""),
-            recipient_count=data.get("recipient_count", 0),
-            message_id=data.get("message_id"),
+            from_email=str(payload.get("from") or record.sender_email or ""),
+            recipient_count=int(payload.get("recipient_count") or 0),
+            message_id=payload.get("message_id"),
+            confirmation_required=confirmation_required,
+            confirmation_token=str(payload.get("confirmation_token") or "") or None,
+            confirmation_summary=str(payload.get("summary") or payload.get("confirmation_summary") or "") or None,
         )
+
+    @staticmethod
+    def _send_confirmation_summary(request: MailSendRequest) -> str:
+        body = request.content_html or request.content
+        body_preview = body if len(body) <= 240 else body[:240] + "..."
+        return (
+            f"Recipients: {', '.join(request.recipients)}\n"
+            f"Subject: {request.subject}\n"
+            f"Body: {body_preview}"
+        )
+
+    @staticmethod
+    def _remember_confirmation(
+        token: str | None,
+        operation: str,
+        args: list[str],
+    ) -> None:
+        if not token:
+            return
+        cutoff = time.time() - 300
+        with _PENDING_CONFIRMATIONS_LOCK:
+            expired = [
+                key
+                for key, item in _PENDING_CONFIRMATIONS.items()
+                if float(item.get("created_at") or 0) < cutoff
+            ]
+            for key in expired:
+                item = _PENDING_CONFIRMATIONS.pop(key, None)
+                TencentAgentlyMailAdapter._cleanup_confirmation_files(item)
+            _PENDING_CONFIRMATIONS[token] = {
+                "operation": operation,
+                "args": list(args),
+                "created_at": time.time(),
+            }
+
+    @staticmethod
+    def _confirmation_args(token: str, operation: str) -> list[str]:
+        with _PENDING_CONFIRMATIONS_LOCK:
+            pending = _PENDING_CONFIRMATIONS.get(token)
+        if not pending or time.time() - float(pending.get("created_at") or 0) > 300:
+            raise RuntimeError(
+                "Mail confirmation context is missing or expired. Prepare the message again."
+            )
+        if pending.get("operation") != operation:
+            raise RuntimeError("Mail confirmation operation does not match the prepared request.")
+        return [*list(pending.get("args") or []), "--confirmation-token", token]
+
+    @staticmethod
+    def _finish_confirmation(token: str, result: MailSendResult) -> MailSendResult:
+        if result.confirmation_required or not result.sent:
+            raise RuntimeError(
+                "Agent Mail did not commit the confirmed operation; prepare it again before retrying."
+            )
+        with _PENDING_CONFIRMATIONS_LOCK:
+            pending = _PENDING_CONFIRMATIONS.pop(token, None)
+        TencentAgentlyMailAdapter._cleanup_confirmation_files(pending)
+        return result
+
+    @staticmethod
+    def _cleanup_confirmation_files(pending: dict[str, Any] | None) -> None:
+        if not pending:
+            return
+        args = list(pending.get("args") or [])
+        for index, value in enumerate(args[:-1]):
+            if value != "--body-file":
+                continue
+            path = Path(args[index + 1])
+            try:
+                if path.is_file() and "agently_mail_confirmations" in path.parts:
+                    path.unlink()
+            except OSError:
+                pass
 
     # --- list ---------------------------------------------------------------
 
@@ -407,22 +551,42 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         message_id: str,
         request: MailSendRequest,
     ) -> MailSendResult:
+        args = self._reply_args(message_id, request)
+        try:
+            data = self._run_cli(record, args)
+        except Exception:
+            self._cleanup_confirmation_files({"args": args})
+            raise
+        result = self._build_send_result(record, data)
+        self._remember_confirmation(result.confirmation_token, "reply", args)
+        if not result.confirmation_required:
+            self._cleanup_confirmation_files({"args": args})
+        return result
+
+    @staticmethod
+    def _reply_args(message_id: str, request: MailSendRequest) -> list[str]:
         args = ["message", "+reply", "--id", message_id]
         body = request.content_html or request.content
-        args += ["--body", body]
-        if request.cc:
-            for cc in request.cc:
-                args += ["--cc", cc]
-        data = self._run_cli(record, args)
-        return self._build_send_result(record, data)
+        args += [
+            "--body-file",
+            TencentAgentlyMailAdapter._write_body_file(
+                body,
+                is_html=bool(request.content_html),
+            ),
+        ]
+        for cc in request.cc:
+            args += ["--cc", cc]
+        return args
 
     def reply_confirm(
-        self, record: "EmailConfigRecord", confirmation_token: str
+        self,
+        record: "EmailConfigRecord",
+        confirmation_token: str,
     ) -> MailSendResult:
         """Phase 2 for reply."""
-        args = ["message", "+reply", "--confirmation-token", confirmation_token]
+        args = self._confirmation_args(confirmation_token, "reply")
         data = self._run_cli(record, args)
-        return self._build_send_result(record, data)
+        return self._finish_confirmation(confirmation_token, self._build_send_result(record, data))
 
     # --- forward (two-phase) ------------------------------------------------
 
@@ -432,23 +596,44 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         message_id: str,
         request: MailSendRequest,
     ) -> MailSendResult:
+        args = self._forward_args(message_id, request)
+        try:
+            data = self._run_cli(record, args)
+        except Exception:
+            self._cleanup_confirmation_files({"args": args})
+            raise
+        result = self._build_send_result(record, data)
+        self._remember_confirmation(result.confirmation_token, "forward", args)
+        if not result.confirmation_required:
+            self._cleanup_confirmation_files({"args": args})
+        return result
+
+    @staticmethod
+    def _forward_args(message_id: str, request: MailSendRequest) -> list[str]:
         args = ["message", "+forward", "--id", message_id]
-        for r in request.recipients:
-            args += ["--to", r]
+        for recipient in request.recipients:
+            args += ["--to", recipient]
         body = request.content_html or request.content
         if body:
-            args += ["--body", body]
+            args += [
+                "--body-file",
+                TencentAgentlyMailAdapter._write_body_file(
+                    body,
+                    is_html=bool(request.content_html),
+                ),
+            ]
         args.append("--include-attachments")
-        data = self._run_cli(record, args)
-        return self._build_send_result(record, data)
+        return args
 
     def forward_confirm(
-        self, record: "EmailConfigRecord", confirmation_token: str
+        self,
+        record: "EmailConfigRecord",
+        confirmation_token: str,
     ) -> MailSendResult:
         """Phase 2 for forward."""
-        args = ["message", "+forward", "--confirmation-token", confirmation_token]
+        args = self._confirmation_args(confirmation_token, "forward")
         data = self._run_cli(record, args)
-        return self._build_send_result(record, data)
+        return self._finish_confirmation(confirmation_token, self._build_send_result(record, data))
 
     # --- attachments --------------------------------------------------------
 

@@ -194,6 +194,10 @@ const TOOLING_REFRESH_MIN_INTERVAL_MS = 10000;
 const EVENT_RECONNECT_DELAY_MS = 1500;
 const RECEIVED_EVENT_ID_LIMIT = 5000;
 
+function isActiveSessionStatus(status: SessionLifecycleStatus) {
+  return status === "running" || status === "waiting_approval";
+}
+
 function mergeSessionMessages(
   serverMessages: ChatMessage[],
   localMessages: ChatMessage[],
@@ -217,11 +221,7 @@ function mergeSessionMessages(
       .filter((value) => Boolean(value)),
   );
   const localById = new Map(localMessages.map((message) => [message.id, message]));
-  const allowTransientLocalMessages =
-    sessionStatus === "running" ||
-    sessionStatus === "waiting_approval" ||
-    sessionStatus === "interrupted" ||
-    hasStreamingAssistantMessage(localMessages);
+  const allowTransientLocalMessages = isActiveSessionStatus(sessionStatus);
 
   const merged = serverMessages.map((serverMessage) => {
     const localMessage = localById.get(serverMessage.id);
@@ -232,6 +232,7 @@ function mergeSessionMessages(
     const localStatus = messageDeliveryStatus(localMessage);
     const serverStatus = messageDeliveryStatus(serverMessage);
     const shouldPreferLocalContent =
+      isActiveSessionStatus(sessionStatus) &&
       serverMessage.role === "assistant" &&
       (localStatus === "streaming" || localStatus === "completed") &&
       localMessage.content.length >= serverMessage.content.length &&

@@ -68,6 +68,9 @@ class MailSendResult:
     from_email: str
     recipient_count: int
     message_id: str | None = None
+    confirmation_required: bool = False
+    confirmation_token: str | None = None
+    confirmation_summary: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -78,6 +81,12 @@ class MailSendResult:
         }
         if self.message_id is not None:
             payload["message_id"] = self.message_id
+        if self.confirmation_required:
+            payload["confirmation_required"] = True
+        if self.confirmation_token:
+            payload["confirmation_token"] = self.confirmation_token
+        if self.confirmation_summary:
+            payload["confirmation_summary"] = self.confirmation_summary
         return payload
 
 

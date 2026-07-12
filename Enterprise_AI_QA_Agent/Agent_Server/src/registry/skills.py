@@ -98,7 +98,7 @@ class SkillRegistry:
                 recommended_agents=["coordinator", "ops-executor"],
                 tags=["mail", "communication"],
                 tool_keys=[
-                    "mail-status", "mail-send", "mail-list", "mail-read", "mail-search",
+                    "mail-status", "mail-send", "mail-confirm", "mail-list", "mail-read", "mail-search",
                     "mail-reply", "mail-forward", "mail-download-attachment", "mail-provision-inbox",
                 ],
             ),
@@ -110,7 +110,7 @@ class SkillRegistry:
                 recommended_agents=["coordinator", "ops-executor"],
                 tags=["mail", "safety", "communication"],
                 tool_keys=[
-                    "mail-status", "mail-send", "mail-list", "mail-read", "mail-search",
+                    "mail-status", "mail-send", "mail-confirm", "mail-list", "mail-read", "mail-search",
                     "mail-reply", "mail-forward", "mail-download-attachment", "mail-provision-inbox",
                 ],
             ),

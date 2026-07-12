@@ -171,20 +171,15 @@ async def test_send_prepare(body: SendPrepareRequest, request: Request):
 @router.post("/test-send/confirm")
 async def test_send_confirm(body: SendConfirmRequest, request: Request):
     mail_service = request.app.state.mail_service
-    registry = mail_service._registry
-    record = mail_service._resolve_record_by_id(body.config_id)
-    adapter = registry.resolve(record.provider)
-
-    if not hasattr(adapter, "send_confirm"):
-        raise HTTPException(
-            status_code=400,
-            detail="Provider does not support two-phase send confirmation.",
-        )
     try:
-        result = adapter.send_confirm(record, body.confirmation_token)
+        result = mail_service.confirm(
+            "send",
+            body.confirmation_token,
+            config_id=body.config_id,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return result.to_dict()
+    return result
 
 
 @router.post("/webhooks/{provider}")

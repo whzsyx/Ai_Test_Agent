@@ -14,6 +14,7 @@ import type {
   ExecutionEvent,
   HealthResponse,
   ModeDescriptor,
+  MailboxSendConfirmRequest,
   ModelConfigActionResponse,
   ModelConfigConnectionTestResponse,
   ModelConfigPublic,
@@ -294,7 +295,7 @@ export const api = {
       body: JSON.stringify(payload),
     });
   },
-  mailTestSendConfirm(payload: { confirmation_token: string; config_id?: number | null }): Promise<Record<string, unknown>> {
+  mailTestSendConfirm(payload: MailboxSendConfirmRequest): Promise<Record<string, unknown>> {
     return request("/api/v1/mail/test-send/confirm", {
       method: "POST",
       body: JSON.stringify(payload),

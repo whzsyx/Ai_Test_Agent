@@ -1882,10 +1882,13 @@ class ToolRegistry:
             "mail-send": ToolModule(
                 descriptor=ToolDescriptor(
                     key="mail-send",
-                    name="Mail Send",
-                    description="Send an email via the active Agent Mailbox provider. Requires user confirmation.",
+                    name="Mail Send Prepare",
+                    description=(
+                        "Prepare an email and return a confirmation token/summary without sending it. "
+                        "After showing the summary and receiving explicit user confirmation, call mail-confirm."
+                    ),
                     category="communication",
-                    permission_level="ask",
+                    permission_level="safe",
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -1898,13 +1901,59 @@ class ToolRegistry:
                             "subject": {"type": "string", "description": "Email subject."},
                             "content": {"type": "string", "description": "Plain text body."},
                             "content_html": {"type": "string", "description": "Optional HTML body."},
+                            "content_markdown": {
+                                "type": "string",
+                                "description": "Markdown report body rendered through the selected HTML email template when content_html is absent.",
+                            },
+                            "sender": {"type": "string", "description": "Display sender used by the HTML report template."},
+                            "time_label": {"type": "string", "description": "Optional time label used by the HTML report template."},
+                            "template_key": {
+                                "type": "string",
+                                "description": "Report template key: default, code_review_debate, or security_testing_full.",
+                            },
+                            "template_context": {"type": "object", "description": "Template-specific report values."},
                         },
-                        "required": ["to", "subject", "content"],
+                        "required": ["to", "subject"],
                     },
-                    output_schema={"ok": "boolean", "message_id": "string"},
+                    output_schema={
+                        "sent": "boolean",
+                        "confirmation_required": "boolean",
+                        "confirmation_token": "string",
+                        "confirmation_summary": "string",
+                    },
                     tags=["mail", "mailbox", "send"],
                 ),
                 handler_key="mail-send",
+            ),
+            "mail-confirm": ToolModule(
+                descriptor=ToolDescriptor(
+                    key="mail-confirm",
+                    name="Mail Confirm",
+                    description=(
+                        "Commit a previously prepared send, reply, or forward using its confirmation token. "
+                        "Call only in a later turn after the user explicitly confirms the displayed summary."
+                    ),
+                    category="communication",
+                    permission_level="ask",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": ["send", "reply", "forward"],
+                                "description": "Prepared operation type.",
+                            },
+                            "confirmation_token": {
+                                "type": "string",
+                                "description": "Opaque ctk_* token returned by the prepare tool.",
+                            },
+                        },
+                        "required": ["operation", "confirmation_token"],
+                    },
+                    output_schema={"sent": "boolean", "message_id": "string"},
+                    tags=["mail", "mailbox", "confirmation", "write"],
+                ),
+                handler_key="mail-confirm",
             ),
             "mail-list": ToolModule(
                 descriptor=ToolDescriptor(
@@ -1970,9 +2019,9 @@ class ToolRegistry:
                 descriptor=ToolDescriptor(
                     key="mail-reply",
                     name="Mail Reply",
-                    description="Reply to a message in the Agent Mailbox. Requires user confirmation.",
+                    description="Prepare a reply and return confirmation details without committing it.",
                     category="communication",
-                    permission_level="ask",
+                    permission_level="safe",
                     input_schema={
                         "type": "object",
                         "properties": {
@@ -1991,9 +2040,9 @@ class ToolRegistry:
                 descriptor=ToolDescriptor(
                     key="mail-forward",
                     name="Mail Forward",
-                    description="Forward a message from the Agent Mailbox. Requires user confirmation.",
+                    description="Prepare a forward and return confirmation details without committing it.",
                     category="communication",
-                    permission_level="ask",
+                    permission_level="safe",
                     input_schema={
                         "type": "object",
                         "properties": {

@@ -229,6 +229,7 @@ class ToolRuntimeService:
             "smoke-suite-runner": self._run_smoke_suite_runner,
             "mail-status": self._run_mail_status,
             "mail-send": self._run_mail_send,
+            "mail-confirm": self._run_mail_confirm,
             "mail-list": self._run_mail_list,
             "mail-read": self._run_mail_read,
             "mail-search": self._run_mail_search,
@@ -4080,11 +4081,44 @@ class ToolRuntimeService:
         return self._mail_service.status()
 
     async def _run_mail_send(self, tool_input: dict, context) -> dict:
+        content = str(tool_input.get("content") or "").strip()
+        content_markdown = str(tool_input.get("content_markdown") or "").strip()
+        content_html = str(tool_input.get("content_html") or "").strip()
+        if content_markdown and not content_html:
+            content_html = self._report_template_service.render_report_html(
+                title=str(tool_input.get("subject") or "QA Report").strip() or "QA Report",
+                time_label=str(
+                    tool_input.get("time_label")
+                    or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                ),
+                sender=str(
+                    tool_input.get("sender")
+                    or getattr(context, "selected_agent_key", "")
+                    or "Enterprise AI QA Agent"
+                ).strip(),
+                markdown_content=content_markdown,
+                template_key=str(tool_input.get("template_key") or "default").strip() or "default",
+                template_context=(
+                    tool_input.get("template_context")
+                    if isinstance(tool_input.get("template_context"), dict)
+                    else {}
+                ),
+            )
+        if not content:
+            content = content_markdown
+        if not content and not content_html:
+            raise ValueError("mail-send requires content, content_markdown, or content_html.")
         return self._mail_service.send(
             recipients=tool_input["to"],
             subject=tool_input["subject"],
-            content=tool_input["content"],
-            content_html=tool_input.get("content_html", ""),
+            content=content,
+            content_html=content_html,
+        )
+
+    async def _run_mail_confirm(self, tool_input: dict, context) -> dict:
+        return self._mail_service.confirm(
+            operation=tool_input["operation"],
+            confirmation_token=tool_input["confirmation_token"],
         )
 
     async def _run_mail_list(self, tool_input: dict, context) -> dict:
