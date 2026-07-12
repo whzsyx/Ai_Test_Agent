@@ -9,6 +9,8 @@ This maps directly to the tool runtime waiting_approval mechanism.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +45,34 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
     # --- CLI helpers --------------------------------------------------------
 
     def _cli_path(self, record: "EmailConfigRecord") -> str:
-        return (record.extra_config or {}).get("cli_path", "agently-cli")
+        configured = str((record.extra_config or {}).get("cli_path") or "").strip()
+        cli_name = configured or "agently-cli"
+        if self._looks_like_explicit_path(cli_name):
+            return cli_name
+
+        resolved = self._resolve_cli_from_path(cli_name)
+        return resolved or cli_name
+
+    @staticmethod
+    def _looks_like_explicit_path(value: str) -> bool:
+        return (
+            os.path.isabs(value)
+            or "\\" in value
+            or "/" in value
+            or bool(os.path.splitext(value)[1])
+        )
+
+    @staticmethod
+    def _resolve_cli_from_path(cli_name: str) -> str | None:
+        candidates = [cli_name]
+        if os.name == "nt":
+            candidates = [f"{cli_name}.cmd", f"{cli_name}.exe", f"{cli_name}.bat", cli_name]
+
+        for candidate in candidates:
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+        return None
 
     def _run_cli(
         self, record: "EmailConfigRecord", args: list[str], *, timeout: int = 30
@@ -57,7 +86,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         except FileNotFoundError:
             raise RuntimeError(
                 f"agently-cli not found at '{cli}'. "
-                "Install it or set extra_config.cli_path."
+                "Install it, add it to PATH, or set extra_config.cli_path."
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"agently-cli timed out after {timeout}s.")

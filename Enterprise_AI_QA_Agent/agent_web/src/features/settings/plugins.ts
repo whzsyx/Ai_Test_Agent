@@ -1,7 +1,6 @@
 import { markRaw, type Component } from "vue";
 
 import EmailSettingsPlugin from "./plugins/EmailSettingsPlugin.vue";
-import MailboxSettingsPlugin from "./plugins/MailboxSettingsPlugin.vue";
 import GeneralSettingsPlugin from "./plugins/GeneralSettingsPlugin.vue";
 import ModelSettingsPlugin from "./plugins/ModelSettingsPlugin.vue";
 import PlatformSettingsPlugin from "./plugins/PlatformSettingsPlugin.vue";
@@ -10,7 +9,7 @@ import StorageSettingsPlugin from "./plugins/StorageSettingsPlugin.vue";
 import AboutSystemPlugin from "./plugins/AboutSystemPlugin.vue";
 import { t } from "../../services/i18n";
 
-export type SettingsPluginKey = "general" | "model" | "email" | "mailbox" | "platform" | "channel" | "storage" | "about";
+export type SettingsPluginKey = "general" | "model" | "email" | "platform" | "channel" | "storage" | "about";
 
 export interface SettingsPluginDefinition {
   key: SettingsPluginKey;
@@ -48,12 +47,6 @@ export const settingsPlugins: SettingsPluginDefinition[] = [
     labelKey: "settings.email",
     summary: "配置邮件投递通道与 SMTP 能力",
     component: markRaw(EmailSettingsPlugin),
-  }),
-  makePlugin({
-    key: "mailbox",
-    labelKey: "settings.mailbox",
-    summary: "配置 Agent Mailbox 信箱平台与收发能力",
-    component: markRaw(MailboxSettingsPlugin),
   }),
   makePlugin({
     key: "platform",

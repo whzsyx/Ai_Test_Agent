@@ -12,6 +12,7 @@ import type {
 
 type MessageTone = "success" | "error";
 type DeliveryMode = "api" | "smtp";
+type ChannelDirection = "delivery" | "agent_mailbox";
 type EmailProvider =
   | "aliyun"
   | "tencent_ses"
@@ -22,7 +23,14 @@ type EmailProvider =
   | "resend"
   | "brevo"
   | "mailchimp"
-  | "zoho_campaigns";
+  | "zoho_campaigns"
+  | "tencent_agently"
+  | "agentmail"
+  | "robotomail"
+  | "openmail"
+  | "dead_simple_email"
+  | "agenticmail"
+  | "aws_agent_mailbox";
 
 interface ProviderGuide {
   title: string;
@@ -64,6 +72,11 @@ interface EmailDraft {
   smtp_port: number | null;
   smtp_username: string;
   extra_config: Record<string, string>;
+}
+
+interface AgentMailboxProfile {
+  authType: "api_key" | "cli_oauth" | "local_api" | "api_or_mcp";
+  capabilities: string;
 }
 
 const DEFAULT_SMTP_PORT = 587;
@@ -283,14 +296,73 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
   },
 ];
 
+const AGENT_MAILBOX_PROFILES: ProviderProfile[] = [
+  {
+    value: "tencent_agently", label: "Tencent Agent Mail", channelLabel: "CLI + OAuth",
+    strengths: "通过 agently-cli 提供完整信箱收发与管理能力", deliverability: "由信箱服务决定", freeTier: "按服务商规则",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "Tencent Agent Mail",
+    guide: { title: "Tencent Agent Mail", summary: "使用 agently-cli 与 OAuth 接入 Agent 信箱。", strengths: ["支持发送、接收、搜索、回复、转发和附件。"], requirements: ["本机需要安装并登录 agently-cli。"], docs: [] },
+  },
+  {
+    value: "agentmail", label: "AgentMail", channelLabel: "REST API",
+    strengths: "支持信箱创建、Webhook 与完整邮件操作", deliverability: "由信箱服务决定", freeTier: "按服务商规则",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "AgentMail",
+    guide: { title: "AgentMail", summary: "通过 REST API 接入 AgentMail 信箱。", strengths: ["支持 provision inbox、Webhook 和完整邮件操作。"], requirements: ["需要 API Key，可选自定义 Base URL。"], docs: [] },
+  },
+  {
+    value: "robotomail", label: "Robotomail", channelLabel: "REST API",
+    strengths: "支持信箱管理、Webhook 与完整邮件操作", deliverability: "由信箱服务决定", freeTier: "按服务商规则",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "Robotomail",
+    guide: { title: "Robotomail", summary: "通过 REST API 接入 Robotomail。", strengths: ["支持信箱管理、Webhook 和完整邮件操作。"], requirements: ["需要 API Key，可选自定义 Base URL。"], docs: [] },
+  },
+  {
+    value: "openmail", label: "OpenMail", channelLabel: "REST API / WebSocket",
+    strengths: "支持实时 WebSocket 消息能力", deliverability: "由信箱服务决定", freeTier: "按服务商规则",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "OpenMail",
+    guide: { title: "OpenMail", summary: "通过 REST API 和 WebSocket 接入 OpenMail。", strengths: ["适合需要实时邮件事件的 Agent。"], requirements: ["需要 API Key，可选自定义 Base URL。"], docs: [] },
+  },
+  {
+    value: "dead_simple_email", label: "Dead Simple Email", channelLabel: "REST API / IMAP / SMTP",
+    strengths: "REST API 结合 IMAP/SMTP 兼容能力", deliverability: "由信箱服务决定", freeTier: "按服务商规则",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "Dead Simple Email",
+    guide: { title: "Dead Simple Email", summary: "通过 REST API 接入，支持 IMAP/SMTP fallback。", strengths: ["对传统邮件协议兼容较好。"], requirements: ["需要 API Key，可选自定义 Base URL。"], docs: [] },
+  },
+  {
+    value: "agenticmail", label: "AgenticMail", channelLabel: "Local API / MCP / SSE",
+    strengths: "适合自托管的本地 Agent 邮箱服务", deliverability: "由本地服务决定", freeTier: "自托管",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "AgenticMail",
+    guide: { title: "AgenticMail", summary: "通过本地 API、MCP 与 SSE 接入自托管信箱。", strengths: ["数据和运行环境可由企业自行控制。"], requirements: ["需要填写本地服务 Base URL。"], docs: [] },
+  },
+  {
+    value: "aws_agent_mailbox", label: "AWS Agent Mailbox", channelLabel: "HTTP API / MCP",
+    strengths: "基于 AWS 的 API 或 MCP 信箱接入", deliverability: "由 AWS 服务决定", freeTier: "按 AWS 规则",
+    supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "AWS Agent Mailbox",
+    guide: { title: "AWS Agent Mailbox", summary: "通过 HTTP API 或 MCP 配置接入 AWS Agent Mailbox。", strengths: ["适合已经使用 AWS 基础设施的团队。"], requirements: ["填写 API Key 或对应 MCP/API 配置。"], docs: [] },
+  },
+];
+
+const ALL_PROVIDER_PROFILES = [...PROVIDER_PROFILES, ...AGENT_MAILBOX_PROFILES];
+const AGENT_MAILBOX_PROVIDER_KEYS = new Set<EmailProvider>(
+  AGENT_MAILBOX_PROFILES.map((profile) => profile.value),
+);
+const AGENT_MAILBOX_AUTH: Record<string, AgentMailboxProfile> = {
+  tencent_agently: { authType: "cli_oauth", capabilities: "发送、接收、搜索、回复、转发、附件" },
+  agentmail: { authType: "api_key", capabilities: "信箱创建、发送、接收、Webhook" },
+  robotomail: { authType: "api_key", capabilities: "信箱管理、发送、接收、Webhook" },
+  openmail: { authType: "api_key", capabilities: "发送、接收、WebSocket" },
+  dead_simple_email: { authType: "api_key", capabilities: "发送、接收、IMAP/SMTP fallback" },
+  agenticmail: { authType: "local_api", capabilities: "本地 API、MCP、SSE" },
+  aws_agent_mailbox: { authType: "api_or_mcp", capabilities: "HTTP API、MCP" },
+};
+
 const PROVIDER_BY_KEY = Object.fromEntries(
-  PROVIDER_PROFILES.map((profile) => [profile.value, profile]),
+  ALL_PROVIDER_PROFILES.map((profile) => [profile.value, profile]),
 ) as Record<EmailProvider, ProviderProfile>;
 
-const PROVIDER_OPTIONS: SelectOption[] = PROVIDER_PROFILES.map((profile) => ({
-  label: profile.label,
-  value: profile.value,
-}));
+const CHANNEL_DIRECTION_OPTIONS: SelectOption[] = [
+  { label: "邮件发送服务", value: "delivery" },
+  { label: "Agent 邮箱", value: "agent_mailbox" },
+];
 
 const API_SMTP_MODE_OPTIONS: SelectOption[] = [
   { label: "API", value: "api" },
@@ -307,11 +379,19 @@ const emailConfigs = ref<EmailConfigPublic[]>([]);
 const messageVisible = ref(false);
 const messageText = ref("");
 const messageTone = ref<MessageTone>("success");
+const channelDirection = ref<ChannelDirection>("delivery");
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
 
 const draft = reactive<EmailDraft>(buildEmptyDraft("aliyun"));
 
 const activeProfile = computed(() => PROVIDER_BY_KEY[draft.provider]);
+const isAgentMailbox = computed(() => AGENT_MAILBOX_PROVIDER_KEYS.has(draft.provider));
+const activeMailboxProfile = computed(() => AGENT_MAILBOX_AUTH[draft.provider]);
+const providerOptions = computed<SelectOption[]>(() =>
+  ALL_PROVIDER_PROFILES
+    .filter((profile) => AGENT_MAILBOX_PROVIDER_KEYS.has(profile.value) === (channelDirection.value === "agent_mailbox"))
+    .map((profile) => ({ label: profile.label, value: profile.value })),
+);
 const providerSupportsModeSwitch = computed(
   () => activeProfile.value.supportsApi && activeProfile.value.supportsSmtp,
 );
@@ -347,6 +427,10 @@ function buildEmptyDraft(provider: EmailProvider): EmailDraft {
     smtp_username: "",
     extra_config: {
       sending_domain: "",
+      sender_name: "",
+      api_token_label: "",
+      base_url: "",
+      cli_path: provider === "tencent_agently" ? "agently-cli" : "",
     },
   };
 }
@@ -403,6 +487,9 @@ function getDeliveryMode(item: EmailConfigPublic): DeliveryMode {
 }
 
 function describeChannel(item: EmailConfigPublic) {
+  if (AGENT_MAILBOX_PROVIDER_KEYS.has(item.provider as EmailProvider)) {
+    return `Agent 邮箱 · ${PROVIDER_BY_KEY[item.provider as EmailProvider]?.channelLabel || "API"}`;
+  }
   const mode = getDeliveryMode(item);
   if (mode === "smtp") {
     const host = item.smtp_host || "N/A";
@@ -422,6 +509,12 @@ function describeChannel(item: EmailConfigPublic) {
 function describeAuth(item: EmailConfigPublic) {
   const mode = getDeliveryMode(item);
   const provider = item.provider as EmailProvider;
+  if (AGENT_MAILBOX_PROVIDER_KEYS.has(provider)) {
+    const authType = AGENT_MAILBOX_AUTH[provider]?.authType;
+    if (authType === "cli_oauth") return "CLI / OAuth";
+    if (authType === "local_api") return "本地 API";
+    return item.has_api_key ? t("emailSettings.apikey_configured") : t("emailSettings.apikey_not_configured");
+  }
   if (mode === "smtp") {
     return item.has_api_key ? t("emailSettings.smtp_auth_configured") : t("emailSettings.smtp_auth_not_configured");
   }
@@ -446,6 +539,7 @@ function openCreateModal() {
   isCreateMode.value = true;
   editingConfigId.value = null;
   applyDraft(buildEmptyDraft("aliyun"));
+  channelDirection.value = "delivery";
   showEditorModal.value = true;
 }
 
@@ -454,6 +548,7 @@ function openEditModal(item: EmailConfigPublic) {
   const profile = PROVIDER_BY_KEY[provider] ?? PROVIDER_BY_KEY.aliyun;
   const mode = getDeliveryMode(item);
   isCreateMode.value = false;
+  channelDirection.value = AGENT_MAILBOX_PROVIDER_KEYS.has(provider) ? "agent_mailbox" : "delivery";
   editingConfigId.value = item.id;
   applyDraft({
     config_name: item.config_name,
@@ -474,6 +569,8 @@ function openEditModal(item: EmailConfigPublic) {
       sending_domain: String(item.extra_config?.sending_domain || ""),
       sender_name: String(item.extra_config?.sender_name || ""),
       api_token_label: String(item.extra_config?.api_token_label || ""),
+      base_url: String(item.extra_config?.base_url || ""),
+      cli_path: String(item.extra_config?.cli_path || (provider === "tencent_agently" ? "agently-cli" : "")),
     },
   });
   showEditorModal.value = true;
@@ -514,6 +611,18 @@ function handleProviderChange(value: string) {
   applyDraft(nextDraft);
 }
 
+function handleDirectionChange(value: string) {
+  const direction = value as ChannelDirection;
+  if (direction === channelDirection.value) return;
+  channelDirection.value = direction;
+  const provider: EmailProvider = direction === "agent_mailbox" ? "agentmail" : "aliyun";
+  const nextDraft = buildEmptyDraft(provider);
+  nextDraft.enabled = draft.enabled;
+  nextDraft.is_default = draft.is_default;
+  nextDraft.test_mode = draft.test_mode;
+  applyDraft(nextDraft);
+}
+
 function handleModeChange(value: string) {
   const mode = value as DeliveryMode;
   draft.delivery_mode = mode;
@@ -523,6 +632,7 @@ function handleModeChange(value: string) {
 function buildExtraConfig() {
   const extra: Record<string, unknown> = {
     delivery_mode: draft.delivery_mode,
+    channel_direction: channelDirection.value,
   };
   if (draft.extra_config.sending_domain?.trim()) {
     extra.sending_domain = draft.extra_config.sending_domain.trim();
@@ -533,6 +643,8 @@ function buildExtraConfig() {
   if (draft.extra_config.api_token_label?.trim()) {
     extra.api_token_label = draft.extra_config.api_token_label.trim();
   }
+  if (draft.extra_config.base_url?.trim()) extra.base_url = draft.extra_config.base_url.trim();
+  if (draft.extra_config.cli_path?.trim()) extra.cli_path = draft.extra_config.cli_path.trim();
   return extra;
 }
 
@@ -565,12 +677,14 @@ function validateDraft() {
     showMessage("error", t("emailSettings.v_channel_name"));
     return false;
   }
-  if (!draft.sender_email.trim()) {
+  if (!isAgentMailbox.value && !draft.sender_email.trim()) {
     showMessage("error", t("emailSettings.v_sender_email"));
     return false;
   }
   if (draft.delivery_mode === "api") {
-    if (!draft.api_key.trim() && isCreateMode.value) {
+    const mailboxAuth = activeMailboxProfile.value?.authType;
+    const requiresApiKey = !isAgentMailbox.value || mailboxAuth === "api_key" || mailboxAuth === "api_or_mcp";
+    if (requiresApiKey && !draft.api_key.trim() && isCreateMode.value) {
       showMessage("error", t("emailSettings.v_api_key"));
       return false;
     }
@@ -584,6 +698,10 @@ function validateDraft() {
     }
     if (draft.provider === "resend" && !draft.extra_config.sending_domain?.trim()) {
       showMessage("error", t("emailSettings.v_resend_domain"));
+      return false;
+    }
+    if (mailboxAuth === "local_api" && !draft.extra_config.base_url?.trim()) {
+      showMessage("error", "请填写 Agent 邮箱服务 Base URL。");
       return false;
     }
   } else {
@@ -642,6 +760,13 @@ async function withAction(configId: number, action: string, runner: () => Promis
 
 async function testConnection(item: EmailConfigPublic) {
   await withAction(item.id, "test", async () => {
+    if (AGENT_MAILBOX_PROVIDER_KEYS.has(item.provider as EmailProvider)) {
+      const result = await api.mailProviderStatus(item.provider);
+      const ok = result.ok === true;
+      const detail = String(result.error || result.message || (ok ? "Agent 邮箱连接正常。" : "Agent 邮箱连接失败。"));
+      showMessage(ok ? "success" : "error", detail);
+      return;
+    }
     const result = await api.testEmailConfigConnection(item.id);
     showMessage(result.ok ? "success" : "error", result.preview ? `${result.message} ${result.preview}` : result.message);
   });
@@ -869,6 +994,17 @@ function secretKeyLabel(provider: EmailProvider) {
         </div>
 
         <div class="form-grid two">
+          <label v-if="isCreateMode" class="full settings-provider-field">
+            <span>通道方向</span>
+            <NSelect
+              :value="channelDirection"
+              class="settings-provider-select"
+              menu-class="settings-provider-select-menu"
+              :options="CHANNEL_DIRECTION_OPTIONS"
+              @update:value="(value) => handleDirectionChange(String(value))"
+            />
+          </label>
+
           <label class="full">
             <span>{{ t("emailSettings.channel_name") }}</span>
             <input v-model="draft.config_name" type="text" :placeholder="t('emailSettings.channel_name_ph')" />
@@ -880,7 +1016,7 @@ function secretKeyLabel(provider: EmailProvider) {
               :value="draft.provider"
               class="settings-provider-select"
               menu-class="settings-provider-select-menu"
-              :options="PROVIDER_OPTIONS"
+              :options="providerOptions"
               filterable
               consistent-menu-width
               :placeholder="t('emailSettings.provider_ph')"
@@ -888,7 +1024,7 @@ function secretKeyLabel(provider: EmailProvider) {
             />
           </label>
 
-          <label v-if="providerSupportsModeSwitch" class="settings-provider-field">
+          <label v-if="providerSupportsModeSwitch && !isAgentMailbox" class="settings-provider-field">
             <span>{{ t("emailSettings.delivery_mode") }}</span>
             <NSelect
               :value="draft.delivery_mode"
@@ -910,13 +1046,28 @@ function secretKeyLabel(provider: EmailProvider) {
           </label>
 
           <template v-if="draft.delivery_mode === 'api'">
-            <label>
+            <label v-if="activeMailboxProfile?.authType !== 'cli_oauth' && activeMailboxProfile?.authType !== 'local_api'">
               <span>{{ apiKeyLabel(draft.provider) }}</span>
               <input
                 v-model="draft.api_key"
                 type="password"
                 :placeholder="isCreateMode ? apiKeyLabel(draft.provider) : t('emailSettings.keep_current_hint')"
               />
+            </label>
+
+            <label v-if="activeMailboxProfile?.authType === 'cli_oauth'">
+              <span>CLI Path</span>
+              <input v-model="draft.extra_config.cli_path" type="text" placeholder="留空则自动从 PATH 发现 agently-cli" />
+            </label>
+
+            <label v-if="isAgentMailbox && activeMailboxProfile?.authType !== 'cli_oauth'">
+              <span>Base URL{{ activeMailboxProfile?.authType === 'local_api' ? '' : '（可选）' }}</span>
+              <input v-model="draft.extra_config.base_url" type="text" placeholder="https://api.example.com" />
+            </label>
+
+            <label v-if="isAgentMailbox" class="full">
+              <span>信箱能力</span>
+              <input :value="activeMailboxProfile?.capabilities" type="text" disabled />
             </label>
 
             <label v-if="draft.provider === 'aliyun' || draft.provider === 'tencent_ses'">
@@ -957,7 +1108,7 @@ function secretKeyLabel(provider: EmailProvider) {
 
           <label>
             <span>{{ t("emailSettings.sender_email") }}</span>
-            <input v-model="draft.sender_email" type="email" placeholder="notice@example.com" />
+            <input v-model="draft.sender_email" type="email" :placeholder="isAgentMailbox ? '可留空，按 Provider 创建或读取信箱' : 'notice@example.com'" />
           </label>
 
           <label>
