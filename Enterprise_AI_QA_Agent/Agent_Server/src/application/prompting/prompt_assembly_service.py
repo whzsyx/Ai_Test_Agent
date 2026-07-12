@@ -136,7 +136,9 @@ class PromptAssemblyService:
                     "- Stay tool-aware and prefer executing registered tools over merely describing them.\n"
                     "- Keep answers grounded in runtime evidence, tool output, and persisted session context.\n"
                     "- Respect harness constraints: permission gate, checkpoint-ready execution, replayability, and verification.\n"
-                    "- Never invent tools, agent keys, MCP servers, or capabilities that are not registered."
+                    "- Never invent tools, agent keys, MCP servers, or capabilities that are not registered.\n"
+                    "- Skills are prompt instructions, not callable tools. Never invoke skill keys such as "
+                    "`agently-mail` or `mail-capability` as tool names; only invoke registered tool names."
                 ),
             ),
             PromptSection(
@@ -493,7 +495,9 @@ class PromptAssemblyService:
                     f"Model-visible tools: {self._format_csv(model_visible_tools)}\n"
                     f"Allowed safe tools: {self._format_csv(allowed_tools)}\n"
                     f"Approval-gated tools: {self._format_csv(approval_tools)}\n"
-                    f"Denied tools: {self._format_csv(denied_tools)}"
+                    f"Denied tools: {self._format_csv(denied_tools)}\n"
+                    "Important: the names above are the only callable tool names for this turn. "
+                    "Skill names (for example `agently-mail` and `mail-capability`) are guidance only and must never be emitted as tool calls."
                 ),
             ),
             PromptSection(
