@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import threading
+import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from src.application.mail.contracts import (
@@ -24,6 +28,11 @@ from src.application.mail.contracts import (
 
 if TYPE_CHECKING:
     from src.schemas.email_config import EmailConfigRecord
+
+
+_AUTH_LOGIN_SESSIONS: dict[str, dict[str, Any]] = {}
+_AUTH_LOGIN_LOCK = threading.Lock()
+_AUTH_URL_PATTERN = re.compile(r"https?://\S+")
 
 
 class TencentAgentlyMailAdapter(MailProviderAdapter):
@@ -84,10 +93,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                 cmd, capture_output=True, text=True, timeout=timeout,
             )
         except FileNotFoundError:
-            raise RuntimeError(
-                f"agently-cli not found at '{cli}'. "
-                "Install it, add it to PATH, or set extra_config.cli_path."
-            )
+            raise RuntimeError(self._cli_not_found_message(cli))
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"agently-cli timed out after {timeout}s.")
 
@@ -103,6 +109,193 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             raise RuntimeError(
                 f"agently-cli returned non-JSON output: {proc.stdout[:500]}"
             )
+
+    @staticmethod
+    def _cli_not_found_message(cli: str) -> str:
+        return (
+            f"agently-cli not found at '{cli}'. "
+            "Install it, add it to PATH, or set extra_config.cli_path."
+        )
+
+    @staticmethod
+    def _normalize_cli_payload(data: dict[str, Any]) -> dict[str, Any]:
+        payload = data.get("data")
+        if isinstance(payload, dict):
+            return payload
+        return data
+
+    @staticmethod
+    def _extract_cli_error_message(data: dict[str, Any]) -> str:
+        error = data.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+        return ""
+
+    def _capability_values(self) -> list[str]:
+        return sorted(cap.value for cap in self.capabilities())
+
+    @staticmethod
+    def _extract_auth_url(text: str) -> str | None:
+        match = _AUTH_URL_PATTERN.search(text)
+        return match.group(0) if match else None
+
+    def _start_auth_login_process(
+        self, record: "EmailConfigRecord"
+    ) -> dict[str, Any]:
+        self._prune_auth_login_sessions()
+        cli = self._cli_path(record)
+        cmd = [cli, "auth", "login"]
+        creationflags = 0
+        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creationflags = subprocess.CREATE_NO_WINDOW
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                creationflags=creationflags,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(self._cli_not_found_message(cli))
+
+        session_id = uuid.uuid4().hex
+        session = {
+            "ok": True,
+            "provider": self.provider_key,
+            "action": "auth_login",
+            "session_id": session_id,
+            "cli_path": cli,
+            "status": "starting",
+            "authorization_url": None,
+            "prompt": "请点击或复制以下链接在浏览器中完成授权：",
+            "output_lines": [],
+            "error": "",
+            "exit_code": None,
+            "started_at": time.time(),
+            "completed_at": None,
+            "_process": proc,
+        }
+        with _AUTH_LOGIN_LOCK:
+            _AUTH_LOGIN_SESSIONS[session_id] = session
+
+        def consume_output() -> None:
+            try:
+                if proc.stdout is not None:
+                    for raw_line in proc.stdout:
+                        line = raw_line.rstrip("\r\n")
+                        if not line:
+                            continue
+                        with _AUTH_LOGIN_LOCK:
+                            current = _AUTH_LOGIN_SESSIONS.get(session_id)
+                            if current is None:
+                                continue
+                            current["output_lines"].append(line)
+                            url = self._extract_auth_url(line)
+                            if url and not current.get("authorization_url"):
+                                current["authorization_url"] = url
+                                current["status"] = "authorization_url_ready"
+                            elif (
+                                current.get("status") == "starting"
+                                and "请点击" in line
+                            ):
+                                current["status"] = "waiting_browser_login"
+
+                            if "认证成功" in line or "Authorization successful" in line:
+                                current["status"] = "authorized"
+
+                proc.wait()
+                with _AUTH_LOGIN_LOCK:
+                    current = _AUTH_LOGIN_SESSIONS.get(session_id)
+                    if current is None:
+                        return
+                    current["exit_code"] = proc.returncode
+                    current["completed_at"] = time.time()
+                    if proc.returncode == 0:
+                        if current.get("status") not in {
+                            "authorized",
+                            "authorization_url_ready",
+                        }:
+                            current["status"] = "completed"
+                    else:
+                        current["ok"] = False
+                        current["status"] = "failed"
+                        current["error"] = (
+                            "\n".join(current.get("output_lines", [])[-5:])
+                            or f"agently-cli error (exit {proc.returncode})"
+                        )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                with _AUTH_LOGIN_LOCK:
+                    current = _AUTH_LOGIN_SESSIONS.get(session_id)
+                    if current is None:
+                        return
+                    current["ok"] = False
+                    current["status"] = "failed"
+                    current["completed_at"] = time.time()
+                    current["error"] = str(exc)
+
+        threading.Thread(target=consume_output, daemon=True).start()
+
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            snapshot = self.auth_login_session_status(record, session_id)
+            if snapshot.get("authorization_url") or snapshot.get("status") in {
+                "authorized",
+                "completed",
+                "failed",
+            }:
+                return snapshot
+            time.sleep(0.1)
+        return self.auth_login_session_status(record, session_id)
+
+    @staticmethod
+    def _prune_auth_login_sessions(max_age_seconds: int = 1800) -> None:
+        cutoff = time.time() - max_age_seconds
+        with _AUTH_LOGIN_LOCK:
+            expired = [
+                session_id
+                for session_id, session in _AUTH_LOGIN_SESSIONS.items()
+                if float(session.get("started_at") or 0) < cutoff
+            ]
+            for session_id in expired:
+                _AUTH_LOGIN_SESSIONS.pop(session_id, None)
+
+    def auth_login_session_status(
+        self, record: "EmailConfigRecord", session_id: str
+    ) -> dict[str, Any]:
+        _ = record
+        with _AUTH_LOGIN_LOCK:
+            session = _AUTH_LOGIN_SESSIONS.get(session_id)
+            if session is None:
+                return {
+                    "ok": False,
+                    "provider": self.provider_key,
+                    "action": "auth_login",
+                    "session_id": session_id,
+                    "error": "auth_login_session_not_found",
+                }
+
+            output_lines = list(session.get("output_lines") or [])
+            return {
+                "ok": bool(session.get("ok", True)),
+                "provider": self.provider_key,
+                "action": "auth_login",
+                "session_id": session_id,
+                "status": str(session.get("status") or "unknown"),
+                "authorization_url": session.get("authorization_url"),
+                "prompt": session.get("prompt"),
+                "exit_code": session.get("exit_code"),
+                "error": str(session.get("error") or ""),
+                "output_lines": output_lines,
+                "started_at": session.get("started_at"),
+                "completed_at": session.get("completed_at"),
+            }
 
     # --- send (two-phase) ---------------------------------------------------
 
@@ -277,26 +470,117 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
 
     # --- status / auth ------------------------------------------------------
 
-    def status(self, record: "EmailConfigRecord") -> dict[str, Any]:
+    def auth_status(self, record: "EmailConfigRecord") -> dict[str, Any]:
         try:
             data = self._run_cli(record, ["auth", "status"])
-            me_data = self._run_cli(record, ["+me"])
         except RuntimeError as exc:
             return {
                 "ok": False,
                 "provider": self.provider_key,
-                "capabilities": sorted(
-                    cap.value for cap in self.capabilities()
-                ),
+                "capabilities": self._capability_values(),
                 "error": str(exc),
             }
+
+        payload = self._normalize_cli_payload(data)
+        status = str(payload.get("status") or "unknown")
+        logged_in = bool(payload.get("logged_in"))
+        token_status = str(payload.get("token_status") or "").strip() or None
+
         return {
             "ok": True,
             "provider": self.provider_key,
-            "capabilities": sorted(cap.value for cap in self.capabilities()),
-            "auth_status": data.get("status", "unknown"),
-            "email": me_data.get("email", ""),
-            "aliases": me_data.get("aliases", []),
+            "capabilities": self._capability_values(),
+            "logged_in": logged_in,
+            "auth_status": status,
+            "token_status": token_status,
+            "granted_at": payload.get("granted_at"),
+            "expires_at": payload.get("expires_at"),
+            "storage": payload.get("storage"),
+            "app_id": payload.get("app_id"),
+            "message": self._extract_cli_error_message(data)
+            or str(payload.get("message") or "").strip(),
+        }
+
+    def whoami(self, record: "EmailConfigRecord") -> dict[str, Any]:
+        try:
+            data = self._run_cli(record, ["+me"])
+        except RuntimeError as exc:
+            return {
+                "ok": False,
+                "provider": self.provider_key,
+                "capabilities": self._capability_values(),
+                "error": str(exc),
+            }
+
+        payload = self._normalize_cli_payload(data)
+        aliases = payload.get("aliases")
+        alias_list = aliases if isinstance(aliases, list) else []
+        primary_alias = next(
+            (
+                alias
+                for alias in alias_list
+                if isinstance(alias, dict) and alias.get("is_primary")
+            ),
+            alias_list[0] if alias_list else None,
+        )
+        primary_email = ""
+        if isinstance(primary_alias, dict):
+            primary_email = str(primary_alias.get("email") or "").strip()
+
+        return {
+            "ok": True,
+            "provider": self.provider_key,
+            "capabilities": self._capability_values(),
+            "email": primary_email,
+            "primary_alias": primary_alias,
+            "aliases": alias_list,
+            "constraints": payload.get("constraints") or {},
+            "rate_limits": payload.get("rate_limits") or {},
+            "scopes": payload.get("scopes") or [],
+        }
+
+    def auth_login(self, record: "EmailConfigRecord") -> dict[str, Any]:
+        try:
+            return self._start_auth_login_process(record)
+        except RuntimeError as exc:
+            return {
+                "ok": False,
+                "provider": self.provider_key,
+                "capabilities": self._capability_values(),
+                "action": "auth_login",
+                "error": str(exc),
+            }
+
+    def status(self, record: "EmailConfigRecord") -> dict[str, Any]:
+        auth = self.auth_status(record)
+        if not auth.get("ok"):
+            return auth
+
+        if not auth.get("logged_in"):
+            return {
+                "ok": False,
+                "provider": self.provider_key,
+                "capabilities": self._capability_values(),
+                "auth_status": auth.get("auth_status", "unknown"),
+                "logged_in": False,
+                "error": str(auth.get("auth_status") or "not_logged_in"),
+            }
+
+        me = self.whoami(record)
+        if not me.get("ok"):
+            return me
+
+        return {
+            "ok": True,
+            "provider": self.provider_key,
+            "capabilities": self._capability_values(),
+            "auth_status": auth.get("auth_status", "unknown"),
+            "logged_in": True,
+            "email": me.get("email", ""),
+            "aliases": me.get("aliases", []),
+            "constraints": me.get("constraints", {}),
+            "rate_limits": me.get("rate_limits", {}),
+            "scopes": me.get("scopes", []),
         }
 
     # --- normalization helpers ----------------------------------------------

@@ -79,6 +79,14 @@ interface AgentMailboxProfile {
   capabilities: string;
 }
 
+interface MailboxSetupState {
+  prompt: string;
+  authorizationUrl: string;
+  sessionId: string;
+  authStatus: string;
+  currentEmail: string;
+}
+
 const DEFAULT_SMTP_PORT = 587;
 const CYBERMAIL_HOST = "mail.cyberpersons.com";
 const CYBERMAIL_PORT = 587;
@@ -301,7 +309,7 @@ const AGENT_MAILBOX_PROFILES: ProviderProfile[] = [
     value: "tencent_agently", label: "Tencent Agent Mail", channelLabel: "CLI + OAuth",
     strengths: "通过 agently-cli 提供完整信箱收发与管理能力", deliverability: "由信箱服务决定", freeTier: "按服务商规则",
     supportsApi: true, supportsSmtp: false, defaultMode: "api", defaultName: "Tencent Agent Mail",
-    guide: { title: "Tencent Agent Mail", summary: "使用 agently-cli 与 OAuth 接入 Agent 信箱。", strengths: ["支持发送、接收、搜索、回复、转发和附件。"], requirements: ["本机需要安装并登录 agently-cli。"], docs: [] },
+    guide: { title: "Tencent Agent Mail", summary: "使用 agently-cli 与 OAuth 接入 Agent 信箱。", strengths: ["支持发送、接收、搜索、回复、转发和附件。"], requirements: ["部署 Agent_Server 的服务器需要安装并登录 agently-cli。"], docs: [] },
   },
   {
     value: "agentmail", label: "AgentMail", channelLabel: "REST API",
@@ -380,6 +388,7 @@ const messageVisible = ref(false);
 const messageText = ref("");
 const messageTone = ref<MessageTone>("success");
 const channelDirection = ref<ChannelDirection>("delivery");
+const mailboxSetupState = reactive<Record<number, MailboxSetupState>>({});
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
 
 const draft = reactive<EmailDraft>(buildEmptyDraft("aliyun"));
@@ -477,6 +486,70 @@ function showMessage(tone: MessageTone, text: string) {
   }, 2600);
 }
 
+function formatAgentMailboxStatusMessage(result: Record<string, unknown>) {
+  const rawDetail = String(result.error || result.message || "").trim();
+  const normalized = rawDetail.toLowerCase();
+  const authStatus = String(result.auth_status || "").trim().toLowerCase();
+
+  if (!rawDetail) {
+    return "Agent 邮箱连接失败。";
+  }
+  if (rawDetail === "no_enabled_config") {
+    return "当前没有已启用的 Agent 邮箱配置。";
+  }
+  if (
+    normalized.includes("authorization required")
+    || normalized.includes("no stored token")
+    || normalized.includes("exit 3")
+    || normalized.includes("not_logged_in")
+    || authStatus === "not_logged_in"
+  ) {
+    return "服务端已发现 agently-cli，但当前还没有完成 OAuth 授权。请点击当前通道卡片里的“开始授权”，再在浏览器中完成授权。";
+  }
+  if (normalized.includes("not found")) {
+    return "服务端未发现 agently-cli。请先在部署 Agent_Server 的服务器上安装 `@tencent-qqmail/agently-cli`，并确保它在 PATH 中。";
+  }
+
+  return rawDetail;
+}
+
+function getMailboxSetup(configId: number): MailboxSetupState {
+  if (!mailboxSetupState[configId]) {
+    mailboxSetupState[configId] = {
+      prompt: "请点击或复制以下链接在浏览器中完成授权：",
+      authorizationUrl: "",
+      sessionId: "",
+      authStatus: "",
+      currentEmail: "",
+    };
+  }
+  return mailboxSetupState[configId];
+}
+
+function extractPrimaryMailboxEmail(result: Record<string, unknown>) {
+  const directEmail = String(result.email || "").trim();
+  if (directEmail) {
+    return directEmail;
+  }
+  const aliases = Array.isArray(result.aliases) ? result.aliases : [];
+  const primaryAlias = aliases.find(
+    (alias) => alias && typeof alias === "object" && Boolean((alias as Record<string, unknown>).is_primary),
+  ) as Record<string, unknown> | undefined;
+  const alias = primaryAlias ?? aliases[0];
+  if (!alias || typeof alias !== "object") {
+    return "";
+  }
+  return String((alias as Record<string, unknown>).email || "").trim();
+}
+
+function formatAuthStatusLabel(result: Record<string, unknown>) {
+  const authStatus = String(result.auth_status || "").trim();
+  if (!authStatus) return "unknown";
+  if (authStatus === "logged_in") return "已授权";
+  if (authStatus === "not_logged_in") return "未授权";
+  return authStatus;
+}
+
 function getProviderLabel(provider: string) {
   return PROVIDER_BY_KEY[provider as EmailProvider]?.label ?? provider;
 }
@@ -533,6 +606,10 @@ function describeSenderName(item: EmailConfigPublic) {
 
 function actionKey(configId: number, action: string) {
   return `${configId}:${action}`;
+}
+
+function providerActionKey(item: EmailConfigPublic, action: string) {
+  return actionKey(item.id, `${item.provider}:${action}`);
 }
 
 function openCreateModal() {
@@ -760,10 +837,21 @@ async function withAction(configId: number, action: string, runner: () => Promis
 
 async function testConnection(item: EmailConfigPublic) {
   await withAction(item.id, "test", async () => {
+    if (item.provider === "tencent_agently") {
+      const result = await api.mailProviderSetupAction(item.provider, "auth_status", { config_id: item.id });
+      const ok = result.logged_in === true;
+      const detail = ok
+        ? `Agent 邮箱已授权${extractPrimaryMailboxEmail(result as Record<string, unknown>) ? `：${extractPrimaryMailboxEmail(result as Record<string, unknown>)}` : "。"}`
+        : formatAgentMailboxStatusMessage(result as Record<string, unknown>);
+      const setup = getMailboxSetup(item.id);
+      setup.authStatus = formatAuthStatusLabel(result as Record<string, unknown>);
+      showMessage(ok ? "success" : "error", detail);
+      return;
+    }
     if (AGENT_MAILBOX_PROVIDER_KEYS.has(item.provider as EmailProvider)) {
       const result = await api.mailProviderStatus(item.provider);
       const ok = result.ok === true;
-      const detail = String(result.error || result.message || (ok ? "Agent 邮箱连接正常。" : "Agent 邮箱连接失败。"));
+      const detail = ok ? "Agent 邮箱连接正常。" : formatAgentMailboxStatusMessage(result as Record<string, unknown>);
       showMessage(ok ? "success" : "error", detail);
       return;
     }
@@ -790,6 +878,78 @@ async function deleteChannel(item: EmailConfigPublic) {
     showMessage("success", result.message);
     await loadSettings();
   });
+}
+
+async function startTencentMailboxAuth(item: EmailConfigPublic) {
+  await withAction(item.id, `${item.provider}:auth_login`, async () => {
+    const result = await api.mailProviderSetupAction(item.provider, "auth_login", { config_id: item.id });
+    const setup = getMailboxSetup(item.id);
+    setup.prompt = String(result.prompt || "请点击或复制以下链接在浏览器中完成授权：");
+    setup.authorizationUrl = String(result.authorization_url || "");
+    setup.sessionId = String(result.session_id || "");
+
+    if (result.ok === false) {
+      showMessage("error", formatAgentMailboxStatusMessage(result as Record<string, unknown>));
+      return;
+    }
+
+    const status = String(result.status || "").trim();
+    if (setup.authorizationUrl) {
+      showMessage("success", "已获取 OAuth 授权链接，请在卡片中点击或复制后完成授权。");
+      return;
+    }
+    if (status === "authorized" || status === "completed") {
+      showMessage("success", "agently-cli OAuth 已完成授权。");
+      return;
+    }
+    showMessage("success", "已启动 agently-cli OAuth 授权流程。");
+  });
+}
+
+async function checkTencentMailboxAuth(item: EmailConfigPublic) {
+  await withAction(item.id, `${item.provider}:auth_status`, async () => {
+    const result = await api.mailProviderSetupAction(item.provider, "auth_status", { config_id: item.id });
+    const setup = getMailboxSetup(item.id);
+    setup.authStatus = formatAuthStatusLabel(result as Record<string, unknown>);
+    if (result.logged_in === true) {
+      const mailbox = extractPrimaryMailboxEmail(result as Record<string, unknown>);
+      if (mailbox) {
+        setup.currentEmail = mailbox;
+      }
+      showMessage("success", mailbox ? `OAuth 已授权，当前邮箱：${mailbox}` : "OAuth 已授权。");
+      return;
+    }
+
+    showMessage("error", formatAgentMailboxStatusMessage(result as Record<string, unknown>));
+  });
+}
+
+async function loadTencentMailboxIdentity(item: EmailConfigPublic) {
+  await withAction(item.id, `${item.provider}:whoami`, async () => {
+    const result = await api.mailProviderSetupAction(item.provider, "whoami", { config_id: item.id });
+    if (result.ok === false) {
+      showMessage("error", formatAgentMailboxStatusMessage(result as Record<string, unknown>));
+      return;
+    }
+    const mailbox = extractPrimaryMailboxEmail(result as Record<string, unknown>);
+    const setup = getMailboxSetup(item.id);
+    setup.currentEmail = mailbox;
+    showMessage("success", mailbox ? `当前授权邮箱：${mailbox}` : "已读取当前授权邮箱信息。");
+  });
+}
+
+async function copyTencentMailboxAuthUrl(item: EmailConfigPublic) {
+  const url = getMailboxSetup(item.id).authorizationUrl;
+  if (!url) {
+    showMessage("error", "当前还没有可复制的授权链接。");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    showMessage("success", "授权链接已复制到剪贴板。");
+  } catch {
+    showMessage("error", "复制失败，请手动复制授权链接。");
+  }
 }
 
 function requiresSendingDomain(provider: EmailProvider) {
@@ -876,6 +1036,54 @@ function secretKeyLabel(provider: EmailProvider) {
           <div class="settings-model-card__stat">
             <span>{{ t("emailSettings.sender_name") }}</span>
             <strong>{{ describeSenderName(item) }}</strong>
+          </div>
+
+          <div v-if="item.provider === 'tencent_agently'" class="settings-email-auth-panel">
+            <div class="settings-email-auth-panel__actions">
+              <button
+                class="secondary-btn"
+                type="button"
+                :disabled="busyActionKey === providerActionKey(item, 'auth_login')"
+                @click="startTencentMailboxAuth(item)"
+              >
+                开始授权
+              </button>
+              <button
+                class="secondary-btn"
+                type="button"
+                :disabled="busyActionKey === providerActionKey(item, 'auth_status')"
+                @click="checkTencentMailboxAuth(item)"
+              >
+                检查授权
+              </button>
+              <button
+                class="secondary-btn"
+                type="button"
+                :disabled="busyActionKey === providerActionKey(item, 'whoami')"
+                @click="loadTencentMailboxIdentity(item)"
+              >
+                当前邮箱
+              </button>
+              <button
+                v-if="getMailboxSetup(item.id).authorizationUrl"
+                class="secondary-btn"
+                type="button"
+                @click="copyTencentMailboxAuthUrl(item)"
+              >
+                复制链接
+              </button>
+            </div>
+
+            <p v-if="getMailboxSetup(item.id).authorizationUrl" class="settings-email-auth-panel__hint">
+              {{ getMailboxSetup(item.id).prompt }}
+            </p>
+            <pre v-if="getMailboxSetup(item.id).authorizationUrl" class="settings-email-auth-panel__url">{{ getMailboxSetup(item.id).authorizationUrl }}</pre>
+            <p v-if="getMailboxSetup(item.id).authStatus" class="settings-email-auth-panel__meta">
+              授权状态：{{ getMailboxSetup(item.id).authStatus }}
+            </p>
+            <p v-if="getMailboxSetup(item.id).currentEmail" class="settings-email-auth-panel__meta">
+              当前邮箱：{{ getMailboxSetup(item.id).currentEmail }}
+            </p>
           </div>
 
           <div class="settings-model-card__actions settings-email-card__actions">
@@ -1055,9 +1263,9 @@ function secretKeyLabel(provider: EmailProvider) {
               />
             </label>
 
-            <label v-if="activeMailboxProfile?.authType === 'cli_oauth'">
-              <span>CLI Path</span>
-              <input v-model="draft.extra_config.cli_path" type="text" placeholder="留空则自动从 PATH 发现 agently-cli" />
+            <label v-if="activeMailboxProfile?.authType === 'cli_oauth'" class="full">
+              <span>CLI Runtime</span>
+              <input value="服务端自动从 PATH 发现 agently-cli；如未安装，请在部署阶段或初始化动作中安装。" type="text" disabled />
             </label>
 
             <label v-if="isAgentMailbox && activeMailboxProfile?.authType !== 'cli_oauth'">
@@ -1152,3 +1360,40 @@ function secretKeyLabel(provider: EmailProvider) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.settings-email-auth-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(99, 102, 241, 0.16);
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.settings-email-auth-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-email-auth-panel__hint,
+.settings-email-auth-panel__meta {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-color-2, #64748b);
+}
+
+.settings-email-auth-panel__url {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #f8fafc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+</style>
