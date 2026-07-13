@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
+import httpx
 import pytest
 
+from src.api.routes.mail import ProviderSetupActionRequest, provider_setup_action
 from src.application.mail import MailService, build_default_mail_provider_registry
 from src.application.mail.contracts import (
     CapabilityNotSupported,
@@ -18,7 +23,8 @@ from src.infrastructure.mail.providers.agentmail import AgentMailAdapter
 from src.infrastructure.mail.providers.dead_simple_email import DeadSimpleEmailAdapter
 from src.infrastructure.mail.providers.openmail import OpenMailAdapter
 from src.infrastructure.mail.providers.robotomail import RobotomailAdapter
-from src.schemas.email_config import EmailConfigRecord
+from src.infrastructure.email_config_store import MySQLEmailConfigStore
+from src.schemas.email_config import EmailConfigRecord, EmailConfigUpdateRequest
 
 
 def _record(**overrides) -> EmailConfigRecord:
@@ -397,6 +403,81 @@ def test_openmail_documented_send_and_message_contract(monkeypatch):
         adapter.send(record, _rest_request(recipients=["one@example.com", "two@example.com"]))
 
 
+def test_openmail_can_bind_existing_inbox_by_email(monkeypatch):
+    adapter = OpenMailAdapter()
+    record = _rest_record("openmail", mailbox_id="")
+    calls = []
+
+    def fake_request(method, current, path, *, json_body=None, params=None, extra_headers=None):
+        calls.append((method, path, params))
+        return {
+            "data": [
+                {"id": "inbox_1", "address": "first@openmail.sh"},
+                {"id": "inbox_2", "address": "gleamopal4609@openmail.sh"},
+            ]
+        }
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.provision_inbox(
+        record, {"existing_email": "GleamOpal4609@openmail.sh"}
+    )
+
+    assert calls == [("GET", "/v1/inboxes", {"limit": 100})]
+    assert result["mailbox_id"] == "inbox_2"
+    assert result["email"] == "gleamopal4609@openmail.sh"
+    assert result["bound_existing"] is True
+
+
+def test_rest_provider_http_error_includes_vendor_response():
+    adapter = OpenMailAdapter()
+    response = httpx.Response(
+        422,
+        request=httpx.Request("POST", "https://api.openmail.sh/v1/inboxes"),
+        json={"error": "inbox_limit_reached", "message": "Upgrade to create more."},
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP 422: inbox_limit_reached - Upgrade"):
+        adapter._raise_provider_error(response)
+
+
+def test_provider_setup_action_returns_provision_error_instead_of_500():
+    class FailingProvisionAdapter(_CapturingAdapter):
+        provider_key = "openmail"
+
+        def capabilities(self):
+            return {MailCapability.SEND, MailCapability.PROVISION_INBOX}
+
+        def provision_inbox(self, record, options=None):
+            raise RuntimeError("OpenMail API returned HTTP 422: inbox_limit_reached")
+
+    record = _record(
+        id=8,
+        provider="openmail",
+        api_key="secret",
+        enabled=False,
+        is_default=False,
+    )
+    service = MailService(_StubStore([record]), MailProviderRegistry([FailingProvisionAdapter()]))
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(mail_service=service))
+    )
+
+    result = asyncio.run(provider_setup_action(
+        "openmail",
+        ProviderSetupActionRequest(
+            action="provision_inbox",
+            payload={"config_id": 8, "options": {}},
+        ),
+        request,
+    ))
+
+    assert result == {
+        "ok": False,
+        "provider": "openmail",
+        "error": "OpenMail API returned HTTP 422: inbox_limit_reached",
+    }
+
+
 def test_dead_simple_email_uses_documented_snake_case_operations(monkeypatch):
     adapter = DeadSimpleEmailAdapter()
     record = _rest_record("dead_simple_email")
@@ -452,6 +533,46 @@ def test_robotomail_uses_documented_camel_case_and_rfc_reply(monkeypatch):
     assert reply.message_id == "msg_1"
 
 
+def test_robotomail_can_bind_existing_mailbox_with_scoped_key(monkeypatch):
+    adapter = RobotomailAdapter()
+    record = _rest_record("robotomail", mailbox_id="")
+    calls = []
+
+    def fake_request(method, current, path, *, json_body=None, params=None, extra_headers=None):
+        calls.append((method, path, json_body))
+        return {
+            "mailboxes": [
+                {"id": "mailbox_1", "fullAddress": "first@robotomail.co"},
+                {"id": "mailbox_2", "fullAddress": "eighteen@robotomail.co"},
+            ]
+        }
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    result = adapter.provision_inbox(
+        record, {"existing_email": "Eighteen@robotomail.co"}
+    )
+
+    assert calls == [("GET", "/v1/mailboxes", None)]
+    assert result["mailbox_id"] == "mailbox_2"
+    assert result["email"] == "eighteen@robotomail.co"
+    assert result["bound_existing"] is True
+
+
+def test_robotomail_scoped_key_create_error_is_actionable(monkeypatch):
+    adapter = RobotomailAdapter()
+    record = _rest_record("robotomail", mailbox_id="")
+
+    def fake_request(*args, **kwargs):
+        raise RuntimeError(
+            "Robotomail API returned HTTP 403: This operation requires a full-access API key"
+        )
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+
+    with pytest.raises(RuntimeError, match="绑定已有 Mailbox"):
+        adapter.provision_inbox(record)
+
+
 @pytest.mark.parametrize(
     ("adapter", "record", "expected_path", "response", "email"),
     [
@@ -475,3 +596,39 @@ def test_rest_provider_status_uses_real_mailbox_lookup(
     assert captured == {"method": "GET", "path": expected_path}
     assert result["ok"] is True
     assert result["email"] == email
+
+
+def test_email_config_internal_update_preserves_provider_credentials():
+    store = object.__new__(MySQLEmailConfigStore)
+    existing = _rest_record("openmail")
+    existing.secret_key = "secondary-secret"
+
+    merged = store._merge_update(existing, EmailConfigUpdateRequest(
+        config_name=existing.config_name,
+        provider=existing.provider,
+        sender_email="new@openmail.sh",
+        enabled=False,
+        is_default=False,
+        extra_config={"mailbox_id": "new_mailbox"},
+    ))
+
+    assert merged.api_key == "secret"
+    assert merged.secret_key == "secondary-secret"
+    assert merged.sender_email == "new@openmail.sh"
+    assert merged.extra_config["mailbox_id"] == "new_mailbox"
+
+
+def test_email_config_provider_switch_does_not_reuse_old_credentials():
+    store = object.__new__(MySQLEmailConfigStore)
+    existing = _rest_record("openmail")
+
+    merged = store._merge_update(existing, EmailConfigUpdateRequest(
+        config_name=existing.config_name,
+        provider="agentmail",
+        sender_email="",
+        enabled=False,
+        is_default=False,
+        extra_config={},
+    ))
+
+    assert merged.api_key is None

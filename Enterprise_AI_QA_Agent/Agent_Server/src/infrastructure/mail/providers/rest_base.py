@@ -66,7 +66,7 @@ class RestMailAdapterBase(MailProviderAdapter):
             params=params,
             timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
         )
-        response.raise_for_status()
+        self._raise_provider_error(response)
         if not response.content:
             return {}
         return response.json()
@@ -78,7 +78,7 @@ class RestMailAdapterBase(MailProviderAdapter):
             timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
             follow_redirects=True,
         )
-        response.raise_for_status()
+        self._raise_provider_error(response)
         return self._binary_result(response)
 
     def _download_url(self, record: "EmailConfigRecord", url: str) -> dict[str, Any]:
@@ -90,8 +90,31 @@ class RestMailAdapterBase(MailProviderAdapter):
             timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
             follow_redirects=True,
         )
-        response.raise_for_status()
+        self._raise_provider_error(response)
         return self._binary_result(response)
+
+    def _raise_provider_error(self, response: httpx.Response) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = ""
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                message = payload.get("message") or payload.get("detail")
+                if isinstance(error, dict):
+                    error = error.get("message") or error.get("code")
+                parts = [str(item).strip() for item in (error, message) if str(item or "").strip()]
+                detail = " - ".join(dict.fromkeys(parts))
+            if not detail:
+                detail = response.text.strip()[:500] or response.reason_phrase
+            provider = self.display_name or self.provider_key
+            raise RuntimeError(
+                f"{provider} API returned HTTP {response.status_code}: {detail}"
+            ) from exc
 
     @staticmethod
     def _binary_result(response: httpx.Response) -> dict[str, Any]:

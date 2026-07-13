@@ -362,12 +362,18 @@ class MySQLEmailConfigStore:
     def _legacy_row_to_record(self, row: dict) -> EmailConfigRecord:
         config = json.loads(row.get("config_json") or "{}")
         provider = str(row["provider"]).strip().lower()
+        extra_config = _clean_extra_config({
+            key: value
+            for key, value in config.items()
+            if key not in {"api_key", "secret_key"}
+        })
+        extra_config.pop("cli_path", None)
         return EmailConfigRecord(
             config_name="Agent 原生邮箱",
             provider=provider,
             owner_agent_key="global",
-            api_key=_clean_str(payload.api_key) or existing.api_key,
-            secret_key=_clean_str(payload.secret_key) or existing.secret_key,
+            api_key=_clean_str(config.get("api_key")),
+            secret_key=_clean_str(config.get("secret_key")),
             sender_email=row.get("from_email") or "",
             test_email=None,
             test_mode=False,
@@ -377,7 +383,7 @@ class MySQLEmailConfigStore:
             smtp_host=None,
             smtp_port=None,
             smtp_username=None,
-            extra_config={},
+            extra_config=extra_config,
             created_at=_to_datetime(row.get("created_at")),
             updated_at=_to_datetime(row.get("updated_at")),
         )
@@ -419,13 +425,24 @@ class MySQLEmailConfigStore:
             if existing_config_dir:
                 extra_config["config_dir"] = existing_config_dir
 
+        # Public update payloads cannot echo stored secrets back to the client.
+        # Treat an omitted/None secret as "keep the current value" while the
+        # provider is unchanged. A provider switch must supply fresh credentials
+        # so a token is never carried across vendors accidentally.
+        same_provider = payload.provider == existing.provider
+        api_key = _clean_str(payload.api_key)
+        secret_key = _clean_str(payload.secret_key)
+        if same_provider:
+            api_key = api_key or existing.api_key
+            secret_key = secret_key or existing.secret_key
+
         return EmailConfigRecord(
             id=existing.id,
             config_name=payload.config_name.strip(),
             provider=payload.provider,
             owner_agent_key="global",
-            api_key=None,
-            secret_key=None,
+            api_key=api_key,
+            secret_key=secret_key,
             sender_email=payload.sender_email.strip(),
             test_email=None,
             test_mode=False,

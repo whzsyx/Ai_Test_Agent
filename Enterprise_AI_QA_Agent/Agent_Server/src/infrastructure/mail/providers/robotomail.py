@@ -133,11 +133,42 @@ class RobotomailAdapter(RestMailAdapterBase):
         self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         values = dict(options or {})
+        existing_email = str(values.pop("existing_email", "") or "").strip().casefold()
+        if existing_email:
+            data = self._request("GET", record, "/v1/mailboxes")
+            matches = [
+                item
+                for item in self._items(data, "mailboxes")
+                if str(item.get("fullAddress") or "").strip().casefold()
+                == existing_email
+            ]
+            if not matches:
+                raise RuntimeError(
+                    f"Robotomail mailbox '{existing_email}' was not found or is not "
+                    "accessible with this API key."
+                )
+            payload = matches[0]
+            return {
+                "ok": True,
+                "provider": self.provider_key,
+                "mailbox_id": payload.get("id"),
+                "email": payload.get("fullAddress"),
+                "raw": payload,
+                "bound_existing": True,
+            }
         if not values.get("address"):
             local_part = str(record.sender_email or "").partition("@")[0].strip()
             values["address"] = local_part or f"agent-{uuid.uuid4().hex[:10]}"
         values.setdefault("displayName", record.config_name)
-        data = self._request("POST", record, "/v1/mailboxes", json_body=values)
+        try:
+            data = self._request("POST", record, "/v1/mailboxes", json_body=values)
+        except RuntimeError as exc:
+            if "HTTP 403" in str(exc) and "full-access API key" in str(exc):
+                raise RuntimeError(
+                    "创建 Robotomail Mailbox 需要 full-access API Key；"
+                    "如使用 mailbox-scoped Key，请选择“绑定已有 Mailbox”。"
+                ) from None
+            raise
         payload = data.get("mailbox", data) if isinstance(data, dict) else {}
         return {
             "ok": True,

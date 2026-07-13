@@ -103,7 +103,10 @@ async def provider_setup_action(
         if body.action == "provision_inbox":
             if not adapter.supports(MailCapability.PROVISION_INBOX):
                 return {"ok": False, "provider": provider, "error": "capability_not_supported"}
-            result = adapter.provision_inbox(record, body.payload.get("options") or {})
+            try:
+                result = adapter.provision_inbox(record, body.payload.get("options") or {})
+            except RuntimeError as exc:
+                return {"ok": False, "provider": provider, "error": str(exc)}
             mailbox_id = str(result.get("mailbox_id") or "").strip()
             email = str(result.get("email") or record.sender_email or "").strip()
             if mailbox_id:

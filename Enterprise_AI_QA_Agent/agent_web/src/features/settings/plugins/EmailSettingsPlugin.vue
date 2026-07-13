@@ -26,12 +26,21 @@ const AUTH_POLL_INTERVAL_MS = 1500;
 const AUTH_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const draft = reactive({
   config_name: "", provider: "tencent_agently", sender_email: "", api_key: "",
-  base_url: "", mailbox_id: "", routes_json: "", description: "",
+  base_url: "", mailbox_id: "", routes_json: "", description: "", inbox_mode: "existing",
 });
 
 const providerMap = computed(() => new Map(providers.value.map((item) => [item.provider, item])));
 const selectedProvider = computed(() => providerMap.value.get(draft.provider));
 const isTencentDraft = computed(() => draft.provider === "tencent_agently");
+const isOpenMailDraft = computed(() => draft.provider === "openmail");
+const isRobotomailDraft = computed(() => draft.provider === "robotomail");
+const supportsExistingMailboxBinding = computed(() => isOpenMailDraft.value || isRobotomailDraft.value);
+const isBindingExistingMailbox = computed(() => supportsExistingMailboxBinding.value && draft.inbox_mode === "existing");
+const mailboxNoun = computed(() => isOpenMailDraft.value ? "Inbox" : "Mailbox");
+const existingMailboxAddressLabel = computed(() => isOpenMailDraft.value ? "已有 OpenMail 邮箱地址" : "已有 Robotomail 邮箱地址");
+const bindingHint = computed(() => isOpenMailDraft.value
+  ? "系统会从 OpenMail 查询这个已有 Inbox 并自动保存 Mailbox ID，不会创建新的 Inbox。"
+  : "系统会从 Robotomail 查询这个已有 Mailbox 并自动保存 Mailbox ID，不会创建新的 Mailbox；mailbox-scoped API Key 可以使用此方式。");
 const canProvisionDraft = computed(() => selectedProvider.value?.capabilities.includes("provision_inbox") === true);
 const requiresRoutesDraft = computed(() => selectedProvider.value?.configuration_fields?.includes("routes") === true);
 
@@ -72,12 +81,15 @@ async function loadSettings() {
 
 function openCreate() {
   creatingMailbox.value = null;
-  Object.assign(draft, { config_name: "", provider: "tencent_agently", sender_email: "", api_key: "", base_url: "", mailbox_id: "", routes_json: "", description: "" });
+  Object.assign(draft, { config_name: "", provider: "tencent_agently", sender_email: "", api_key: "", base_url: "", mailbox_id: "", routes_json: "", description: "", inbox_mode: "existing" });
   showCreate.value = true;
 }
 
 async function createMailbox() {
   if (!draft.config_name.trim()) return message("error", "请输入配置名称");
+  if (isBindingExistingMailbox.value && !draft.sender_email.trim()) {
+    return message("error", `请输入要绑定的 ${draft.provider === "openmail" ? "OpenMail" : "Robotomail"} 邮箱地址`);
+  }
   let routes: Record<string, string> | undefined;
   if (draft.routes_json.trim()) {
     try { routes = JSON.parse(draft.routes_json); }
@@ -89,7 +101,8 @@ async function createMailbox() {
   if (routes) extra_config.routes = routes;
   const payload: EmailConfigCreateRequest = {
     config_name: draft.config_name.trim(), provider: draft.provider,
-    sender_email: draft.sender_email.trim(), api_key: draft.api_key.trim() || null,
+    sender_email: supportsExistingMailboxBinding.value && draft.inbox_mode === "create" ? "" : draft.sender_email.trim(),
+    api_key: draft.api_key.trim() || null,
     enabled: false, is_default: false, description: draft.description.trim() || null, extra_config,
   };
   saving.value = true;
@@ -103,9 +116,12 @@ async function createMailbox() {
     }
     const descriptor = providerMap.value.get(created.provider);
     if (!draft.mailbox_id.trim() && descriptor?.capabilities.includes("provision_inbox")) {
+      const options = isBindingExistingMailbox.value
+        ? { existing_email: draft.sender_email.trim() }
+        : {};
       const provisioned = await api.mailProviderSetupAction(created.provider, "provision_inbox", {
         config_id: created.id,
-        options: {},
+        options,
       });
       if (provisioned.ok === false) throw new Error(String(provisioned.error || "创建厂商 Inbox 失败"));
     }
@@ -137,6 +153,24 @@ async function syncMailboxStatus(item: EmailConfigPublic) {
   } catch (error) {
     state.authStatus = error instanceof Error ? error.message : "状态检查失败";
   }
+}
+
+async function testConnection(item: EmailConfigPublic) {
+  await action(item.id, "test", async () => {
+    const state = setup(item.id);
+    state.authStatus = "检查中...";
+    const result = await api.mailProviderSetupAction(item.provider, "status", {
+      config_id: item.id,
+    });
+    if (result.ok !== true) {
+      const error = String(result.error || result.auth_status || "连接失败");
+      state.authStatus = error;
+      throw new Error(`${item.config_name} 连接失败：${error}`);
+    }
+    state.authStatus = "可用";
+    const email = String(result.email || item.sender_email || "").trim();
+    message("success", `${item.config_name}${email ? `（${email}）` : ""} 连接正常`);
+  });
 }
 
 async function startAuth(item: EmailConfigPublic) {
@@ -252,15 +286,6 @@ async function cancelCreate() {
   showCreate.value = false;
 }
 
-async function provision(item: EmailConfigPublic) {
-  await action(item.id, "provision", async () => {
-    const result = await api.mailProviderSetupAction(item.provider, "provision_inbox", { config_id: item.id, options: {} });
-    if (result.ok === false) throw new Error(String(result.error || "创建厂商邮箱失败"));
-    message("success", `厂商邮箱 ${String(result.email || result.mailbox_id || "")} 已创建`);
-    await loadSettings();
-  });
-}
-
 async function activate(item: EmailConfigPublic) {
   await action(item.id, "activate", async () => { const result = await api.activateEmailConfig(item.id); message("success", result.message); await loadSettings(); });
 }
@@ -304,7 +329,7 @@ onBeforeUnmount(() => {
         <div v-if="setup(item.id).authorizationUrl" class="auth-box"><p>请点击或复制以下链接在浏览器中完成授权：</p><code>{{ setup(item.id).authorizationUrl }}</code><div class="actions"><a :href="setup(item.id).authorizationUrl" target="_blank" rel="noopener noreferrer">打开链接</a><button type="button" @click="copyUrl(item)">复制</button><span v-if="setup(item.id).polling" class="polling-hint">正在自动检测授权结果...</span></div></div>
         <div class="actions wrap">
           <button v-if="item.provider === 'tencent_agently' && !['可用', '检查中...'].includes(setup(item.id).authStatus)" type="button" :disabled="isBusy(item.id, 'auth') || setup(item.id).polling" @click="startAuth(item)">{{ setup(item.id).polling ? "等待授权..." : "重新授权" }}</button>
-          <button v-if="providerMap.get(item.provider)?.capabilities.includes('provision_inbox')" type="button" @click="provision(item)">创建厂商邮箱</button>
+          <button type="button" :disabled="isBusy(item.id, 'test')" @click="testConnection(item)">{{ isBusy(item.id, 'test') ? "测试中..." : "测试连接" }}</button>
           <button v-if="!item.enabled" class="primary-outline" type="button" @click="activate(item)">设为当前</button>
           <button class="danger" type="button" @click="remove(item)">删除</button>
         </div>
@@ -319,13 +344,14 @@ onBeforeUnmount(() => {
         <template v-if="!isTencentDraft">
           <label>API Key<input v-model="draft.api_key" type="password" autocomplete="new-password" placeholder="保存在后端，不会回显" /></label>
           <label>API Base URL<input v-model="draft.base_url" :placeholder="String(selectedProvider?.default_base_url || 'https://...')" /></label>
-          <label>Mailbox ID<input v-model="draft.mailbox_id" :placeholder="canProvisionDraft ? '可留空，创建后再生成厂商 Inbox' : '厂商邮箱 ID'" /></label>
+          <label v-if="supportsExistingMailboxBinding">{{ mailboxNoun }} 使用方式<select v-model="draft.inbox_mode"><option value="existing">绑定已有 {{ mailboxNoun }}</option><option value="create">创建新 {{ mailboxNoun }}</option></select></label>
+          <label v-if="!supportsExistingMailboxBinding">Mailbox ID<input v-model="draft.mailbox_id" :placeholder="canProvisionDraft ? '可留空，创建后再生成厂商 Inbox' : '厂商邮箱 ID'" /></label>
           <label v-if="requiresRoutesDraft">路由映射 JSON<textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea></label>
-          <label>邮箱地址<input v-model="draft.sender_email" placeholder="厂商邮箱地址" /></label>
+          <label v-if="!supportsExistingMailboxBinding || isBindingExistingMailbox">{{ supportsExistingMailboxBinding ? existingMailboxAddressLabel : "邮箱地址" }}<input v-model="draft.sender_email" :placeholder="isOpenMailDraft ? '例如：gleamopal4609@openmail.sh' : (isRobotomailDraft ? '例如：eighteen@robotomail.co' : '厂商邮箱地址')" /></label>
         </template>
         <label>说明<textarea v-model="draft.description" rows="2" placeholder="可选"></textarea></label>
-        <p class="hint">{{ isTencentDraft ? "创建过程中会直接进入 OAuth 授权，授权成功后才生成邮箱。" : (canProvisionDraft && !draft.mailbox_id.trim() ? "创建时会验证 API Key，并自动创建厂商 Inbox；成功后才生成邮箱。" : "创建时会连接厂商 API 验证凭证与 Mailbox；成功后才生成邮箱。") }}</p>
-        <div class="actions end"><button type="button" @click="cancelCreate">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "处理中..." : (isTencentDraft ? "创建并授权" : "创建并验证") }}</button></div>
+        <p class="hint">{{ isTencentDraft ? "创建过程中会直接进入 OAuth 授权，授权成功后才生成邮箱。" : (isBindingExistingMailbox ? bindingHint : (isRobotomailDraft ? "创建 Robotomail Mailbox 必须使用 full-access API Key；成功后才生成邮箱。" : (canProvisionDraft && !draft.mailbox_id.trim() ? "创建时会验证 API Key，并自动创建厂商 Inbox；成功后才生成邮箱。" : "创建时会连接厂商 API 验证凭证与 Mailbox；成功后才生成邮箱。"))) }}</p>
+        <div class="actions end"><button type="button" @click="cancelCreate">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "处理中..." : (isTencentDraft ? "创建并授权" : (isBindingExistingMailbox ? "绑定并验证" : "创建并验证")) }}</button></div>
       </template>
       <template v-else>
         <div class="creation-progress">

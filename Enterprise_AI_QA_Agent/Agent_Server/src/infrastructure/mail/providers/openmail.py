@@ -129,7 +129,30 @@ class OpenMailAdapter(RestMailAdapterBase):
     def provision_inbox(
         self, record: "EmailConfigRecord", options: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        body = {"displayName": record.config_name, **(options or {})}
+        values = dict(options or {})
+        existing_email = str(values.pop("existing_email", "") or "").strip().casefold()
+        if existing_email:
+            data = self._request("GET", record, "/v1/inboxes", params={"limit": 100})
+            inboxes = self._items(data, "data", "inboxes", "items")
+            payload = next(
+                (
+                    item for item in inboxes
+                    if str(item.get("address") or "").strip().casefold() == existing_email
+                ),
+                None,
+            )
+            if payload is None:
+                raise RuntimeError(f"OpenMail inbox '{existing_email}' was not found.")
+            return {
+                "ok": True,
+                "provider": self.provider_key,
+                "mailbox_id": payload.get("id"),
+                "email": payload.get("address"),
+                "bound_existing": True,
+                "raw": payload,
+            }
+
+        body = {"displayName": record.config_name, **values}
         data = self._request("POST", record, "/v1/inboxes", json_body=body)
         payload = data if isinstance(data, dict) else {}
         return {
