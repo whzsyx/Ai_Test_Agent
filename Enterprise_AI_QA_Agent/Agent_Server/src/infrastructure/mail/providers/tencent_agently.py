@@ -645,7 +645,16 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
 
         data = self._run_cli(record, args)
         messages_raw = data.get("messages") or data.get("data") or []
-        return [self._to_mail_message(m) for m in messages_raw]
+        parsed_messages = []
+        for m in messages_raw:
+            if isinstance(m, str):
+                try:
+                    m = json.loads(m)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(m, dict):
+                parsed_messages.append(m)
+        return [self._to_mail_message(m) for m in parsed_messages]
 
     # --- read ---------------------------------------------------------------
 
@@ -682,7 +691,16 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
 
         data = self._run_cli(record, args)
         messages_raw = data.get("messages") or data.get("data") or []
-        return [self._to_mail_message(m) for m in messages_raw]
+        parsed_messages = []
+        for m in messages_raw:
+            if isinstance(m, str):
+                try:
+                    m = json.loads(m)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(m, dict):
+                parsed_messages.append(m)
+        return [self._to_mail_message(m) for m in parsed_messages]
 
     # --- reply (two-phase) --------------------------------------------------
 
