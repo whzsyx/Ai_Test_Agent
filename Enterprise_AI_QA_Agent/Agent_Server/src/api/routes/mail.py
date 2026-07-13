@@ -85,7 +85,14 @@ async def provider_setup_action(
     if adapter is None:
         raise HTTPException(status_code=404, detail="Unknown provider: " + provider)
 
-    if body.action in {"status", "auth_status", "auth_login", "auth_login_status", "whoami", "provision_inbox"}:
+    if body.action in {
+        "status",
+        "auth_status",
+        "auth_login",
+        "auth_login_status",
+        "whoami",
+        "provision_inbox",
+    }:
         config_id = body.payload.get("config_id")
         if config_id is not None and not isinstance(config_id, int):
             try:
@@ -96,6 +103,17 @@ async def provider_setup_action(
         record = _resolve_provider_record(mail_service, provider, config_id)
         if record is None:
             return {"ok": False, "error": "no_enabled_config", "provider": provider}
+
+        # Existing Tencent records created before mailbox-isolated credentials
+        # were introduced are migrated lazily when the user authorizes again.
+        if (
+            body.action == "auth_login"
+            and provider == "tencent_agently"
+            and config_id is not None
+        ):
+            record = mail_service._email_config_store.ensure_tencent_credential_profile(
+                config_id
+            )
 
         if body.action == "status":
             return adapter.status(record)

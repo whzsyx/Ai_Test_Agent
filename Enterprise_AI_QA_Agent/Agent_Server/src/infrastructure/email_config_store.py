@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from pathlib import Path
-import uuid
 
 from src.core.config import Settings
 from src.infrastructure.sqlalchemy_runtime import mysql_raw_connection
@@ -104,6 +103,28 @@ class MySQLEmailConfigStore:
                 )
                 config_id = int(cur.lastrowid)
             conn.commit()
+        if payload.provider == "tencent_agently":
+            return self.ensure_tencent_credential_profile(config_id)
+        return self.get_by_id(config_id)
+
+    def ensure_tencent_credential_profile(self, config_id: int) -> EmailConfigRecord:
+        """Assign a stable server-side CLI credential directory to one mailbox."""
+
+        record = self.get_by_id(config_id)
+        if record.provider != "tencent_agently":
+            return record
+        extra = dict(record.extra_config or {})
+        if str(extra.get("config_dir") or "").strip():
+            return record
+        extra["config_dir"] = str(self._mailbox_config_dir(f"config-{config_id}"))
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE `{self._settings.email_config_table}` "
+                    "SET extra_config_json=%s WHERE id=%s",
+                    (json.dumps(extra, ensure_ascii=False), config_id),
+                )
+            conn.commit()
         return self.get_by_id(config_id)
 
     def update(self, config_id: int, payload: EmailConfigUpdateRequest) -> EmailConfigRecord:
@@ -164,7 +185,7 @@ class MySQLEmailConfigStore:
         return self.get_by_id(config_id)
 
     def activate(self, config_id: int) -> EmailConfigRecord:
-        record = self.get_by_id(config_id)
+        self.get_by_id(config_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -460,8 +481,6 @@ class MySQLEmailConfigStore:
     def _payload_to_values(self, payload: EmailConfigCreateRequest):
         extra_config = _clean_extra_config(payload.extra_config)
         extra_config.pop("cli_path", None)
-        if payload.provider == "tencent_agently":
-            extra_config["config_dir"] = str(_mailbox_config_dir(uuid.uuid4().hex))
         enabled = bool(payload.enabled or payload.is_default)
         return (
             payload.config_name.strip(),
@@ -480,6 +499,16 @@ class MySQLEmailConfigStore:
             None,
             json.dumps(extra_config, ensure_ascii=False),
         )
+
+    def _mailbox_config_dir(self, profile_key: str) -> Path:
+        configured = str(self._settings.agently_cli_config_root or "").strip()
+        if configured:
+            root = Path(configured).expanduser()
+        else:
+            root = Path(__file__).resolve().parents[2] / self._settings.data_dir / "agently_mail_profiles"
+        path = (root / profile_key).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _row_to_record(self, row: dict | None) -> EmailConfigRecord:
         if row is None:
@@ -522,10 +551,6 @@ def _clean_extra_config(value):
     if not isinstance(value, dict):
         return {}
     return {str(key): item for key, item in value.items()}
-
-
-def _mailbox_config_dir(profile_key: str) -> Path:
-    return (Path(__file__).resolve().parents[1] / "data" / "agently_mail_profiles" / profile_key).resolve()
 
 
 def _parse_extra_config(value):

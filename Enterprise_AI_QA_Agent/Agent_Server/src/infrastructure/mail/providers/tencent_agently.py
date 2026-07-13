@@ -26,6 +26,8 @@ from src.application.mail.contracts import (
     MailSendRequest,
     MailSendResult,
 )
+from src.core.config import get_settings
+from src.infrastructure.redis_lock import RedisLockManager
 
 if TYPE_CHECKING:
     from src.schemas.email_config import EmailConfigRecord
@@ -45,6 +47,14 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
     provider_key = "tencent_agently"
     display_name = "腾讯 Agent Mail"
     auth_type = "oauth_cli"
+
+    def __init__(self, *, settings=None, auth_lock_manager=None) -> None:
+        self._settings = settings or get_settings()
+        self._auth_lock_manager = auth_lock_manager or RedisLockManager(
+            self._settings.redis_url,
+            ttl_seconds=self._settings.agently_auth_lock_ttl_seconds,
+            wait_seconds=self._settings.agently_auth_lock_wait_seconds,
+        )
 
     def capabilities(self) -> set[MailCapability]:
         return {
@@ -79,6 +89,23 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         return None
 
     def _run_cli(
+        self, record: "EmailConfigRecord", args: list[str], *, timeout: int = 30
+    ) -> dict[str, Any]:
+        if self._requires_auth_lock(record, args):
+            with self._auth_lock_manager.acquire(self._auth_lock_key(record)):
+                return self._run_cli_unlocked(record, args, timeout=timeout)
+        return self._run_cli_unlocked(record, args, timeout=timeout)
+
+    def _auth_lock_key(self, record: "EmailConfigRecord") -> str:
+        return f"agent-mail:auth:{self.provider_key}:{record.id}"
+
+    @staticmethod
+    def _requires_auth_lock(record: "EmailConfigRecord", args: list[str]) -> bool:
+        # auth status is a local metadata read and cannot rotate credentials.
+        # Unsaved records have no stable distributed-lock identity.
+        return record.id is not None and args[:2] != ["auth", "status"]
+
+    def _run_cli_unlocked(
         self, record: "EmailConfigRecord", args: list[str], *, timeout: int = 30
     ) -> dict[str, Any]:
         cli = self._cli_path(record)
@@ -181,6 +208,40 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         return sorted(cap.value for cap in self.capabilities())
 
     @staticmethod
+    def _credential_ref(record: "EmailConfigRecord") -> str:
+        return f"tencent_agently/config-{record.id}" if record.id is not None else ""
+
+    @staticmethod
+    def _is_reauth_error(error: object) -> bool:
+        text = str(error or "").casefold()
+        return any(
+            marker in text
+            for marker in (
+                "exit 3",
+                "authorization required",
+                "refresh token is invalid",
+                "refresh token has expired",
+                "not_logged_in",
+                "not logged in",
+            )
+        )
+
+    def _auth_error_result(
+        self, record: "EmailConfigRecord", error: object, *, action: str
+    ) -> dict[str, Any]:
+        reauth_required = self._is_reauth_error(error)
+        return {
+            "ok": False,
+            "provider": self.provider_key,
+            "capabilities": self._capability_values(),
+            "action": action,
+            "auth_state": "reauth_required" if reauth_required else "failed",
+            "reauth_required": reauth_required,
+            "credential_ref": self._credential_ref(record),
+            "error": str(error),
+        }
+
+    @staticmethod
     def _extract_auth_url(text: str) -> str | None:
         match = _AUTH_URL_PATTERN.search(text)
         return match.group(0) if match else None
@@ -195,6 +256,11 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
             creationflags = subprocess.CREATE_NO_WINDOW
 
+        auth_lock = None
+        if record.id is not None:
+            auth_lock = self._auth_lock_manager.acquire(self._auth_lock_key(record))
+            auth_lock.__enter__()
+
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -208,7 +274,13 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                 env=self._cli_env(record),
             )
         except FileNotFoundError:
+            if auth_lock is not None:
+                auth_lock.__exit__(None, None, None)
             raise RuntimeError(self._cli_not_found_message(cli))
+        except Exception:
+            if auth_lock is not None:
+                auth_lock.__exit__(None, None, None)
+            raise
 
         session_id = uuid.uuid4().hex
         session = {
@@ -219,6 +291,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             "record_id": record.id,
             "cli_path": cli,
             "status": "starting",
+            "auth_state": "authorizing",
             "authorization_url": None,
             "prompt": "请点击或复制以下链接在浏览器中完成授权：",
             "output_lines": [],
@@ -232,6 +305,14 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             _AUTH_LOGIN_SESSIONS[session_id] = session
 
         def consume_output() -> None:
+            lock_released = False
+
+            def release_auth_lock() -> None:
+                nonlocal lock_released
+                if auth_lock is not None and not lock_released:
+                    lock_released = True
+                    auth_lock.__exit__(None, None, None)
+
             try:
                 if proc.stdout is not None:
                     for raw_line in proc.stdout:
@@ -254,9 +335,20 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                                 current["status"] = "waiting_browser_login"
 
                             if "认证成功" in line or "Authorization successful" in line:
-                                current["status"] = "authorized"
+                                current["status"] = "credentials_saved"
 
                 proc.wait()
+                # Release the long-running OAuth lock before +me. whoami() then
+                # acquires the same mailbox lock for the strong verification.
+                release_auth_lock()
+                verified_identity: dict[str, Any] | None = None
+                verify_error = ""
+                if proc.returncode == 0:
+                    verified_identity = self.whoami(record)
+                    if not verified_identity.get("ok"):
+                        verify_error = str(
+                            verified_identity.get("error") or "OAuth identity verification failed."
+                        )
                 with _AUTH_LOGIN_LOCK:
                     current = _AUTH_LOGIN_SESSIONS.get(session_id)
                     if current is None:
@@ -264,17 +356,32 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                     current["exit_code"] = proc.returncode
                     current["completed_at"] = time.time()
                     if proc.returncode == 0:
-                        if current.get("status") not in {
-                            "authorized",
-                            "authorization_url_ready",
-                        }:
-                            current["status"] = "completed"
+                        if verify_error:
+                            current["ok"] = False
+                            current["status"] = "failed"
+                            current["error"] = verify_error
+                            current["auth_state"] = (
+                                "reauth_required"
+                                if self._is_reauth_error(verify_error)
+                                else "failed"
+                            )
+                        else:
+                            current["status"] = "authorized"
+                            current["auth_state"] = "authorized"
+                            current["email"] = str(
+                                (verified_identity or {}).get("email") or ""
+                            )
                     else:
                         current["ok"] = False
                         current["status"] = "failed"
                         current["error"] = (
                             "\n".join(current.get("output_lines", [])[-5:])
                             or f"agently-cli error (exit {proc.returncode})"
+                        )
+                        current["auth_state"] = (
+                            "reauth_required"
+                            if proc.returncode == 3
+                            else "failed"
                         )
             except Exception as exc:  # pragma: no cover - defensive guard
                 with _AUTH_LOGIN_LOCK:
@@ -285,6 +392,9 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                     current["status"] = "failed"
                     current["completed_at"] = time.time()
                     current["error"] = str(exc)
+                    current["auth_state"] = "failed"
+            finally:
+                release_auth_lock()
 
         threading.Thread(target=consume_output, daemon=True).start()
 
@@ -341,6 +451,9 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                 "action": "auth_login",
                 "session_id": session_id,
                 "status": str(session.get("status") or "unknown"),
+                "auth_state": str(session.get("auth_state") or "authorizing"),
+                "reauth_required": session.get("auth_state") == "reauth_required",
+                "email": str(session.get("email") or ""),
                 "authorization_url": session.get("authorization_url"),
                 "prompt": session.get("prompt"),
                 "exit_code": session.get("exit_code"),
@@ -707,12 +820,11 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         try:
             data = self._run_cli(record, ["auth", "status"])
         except RuntimeError as exc:
-            return {
-                "ok": False,
-                "provider": self.provider_key,
-                "capabilities": self._capability_values(),
-                "error": str(exc),
-            }
+            return self._auth_error_result(record, exc, action="auth_status")
+
+        if data.get("ok") is False:
+            error = self._extract_cli_error_message(data) or "agently-cli auth status failed."
+            return self._auth_error_result(record, error, action="auth_status")
 
         payload = self._normalize_cli_payload(data)
         status = str(payload.get("status") or "unknown")
@@ -724,12 +836,15 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             "provider": self.provider_key,
             "capabilities": self._capability_values(),
             "logged_in": logged_in,
+            "auth_state": "checking" if logged_in else "reauth_required",
+            "reauth_required": not logged_in,
             "auth_status": status,
             "token_status": token_status,
             "granted_at": payload.get("granted_at"),
             "expires_at": payload.get("expires_at"),
             "storage": payload.get("storage"),
             "app_id": payload.get("app_id"),
+            "credential_ref": self._credential_ref(record),
             "message": self._extract_cli_error_message(data)
             or str(payload.get("message") or "").strip(),
         }
@@ -738,12 +853,11 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         try:
             data = self._run_cli(record, ["+me"])
         except RuntimeError as exc:
-            return {
-                "ok": False,
-                "provider": self.provider_key,
-                "capabilities": self._capability_values(),
-                "error": str(exc),
-            }
+            return self._auth_error_result(record, exc, action="whoami")
+
+        if data.get("ok") is False:
+            error = self._extract_cli_error_message(data) or "agently-cli identity check failed."
+            return self._auth_error_result(record, error, action="whoami")
 
         payload = self._normalize_cli_payload(data)
         aliases = payload.get("aliases")
@@ -759,12 +873,22 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         primary_email = ""
         if isinstance(primary_alias, dict):
             primary_email = str(primary_alias.get("email") or "").strip()
+        primary_email = primary_email or str(payload.get("email") or "").strip()
+        if not primary_email:
+            return self._auth_error_result(
+                record,
+                "agently-cli identity check returned no mailbox address.",
+                action="whoami",
+            )
 
         return {
             "ok": True,
             "provider": self.provider_key,
             "capabilities": self._capability_values(),
             "email": primary_email,
+            "auth_state": "authorized",
+            "reauth_required": False,
+            "credential_ref": self._credential_ref(record),
             "primary_alias": primary_alias,
             "aliases": alias_list,
             "constraints": payload.get("constraints") or {},
@@ -776,13 +900,7 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
         try:
             return self._start_auth_login_process(record)
         except RuntimeError as exc:
-            return {
-                "ok": False,
-                "provider": self.provider_key,
-                "capabilities": self._capability_values(),
-                "action": "auth_login",
-                "error": str(exc),
-            }
+            return self._auth_error_result(record, exc, action="auth_login")
 
     def status(self, record: "EmailConfigRecord") -> dict[str, Any]:
         auth = self.auth_status(record)
@@ -796,6 +914,9 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
                 "capabilities": self._capability_values(),
                 "auth_status": auth.get("auth_status", "unknown"),
                 "logged_in": False,
+                "auth_state": "reauth_required",
+                "reauth_required": True,
+                "credential_ref": self._credential_ref(record),
                 "error": str(auth.get("auth_status") or "not_logged_in"),
             }
 
@@ -809,6 +930,9 @@ class TencentAgentlyMailAdapter(MailProviderAdapter):
             "capabilities": self._capability_values(),
             "auth_status": auth.get("auth_status", "unknown"),
             "logged_in": True,
+            "auth_state": "authorized",
+            "reauth_required": False,
+            "credential_ref": self._credential_ref(record),
             "email": me.get("email", ""),
             "aliases": me.get("aliases", []),
             "constraints": me.get("constraints", {}),

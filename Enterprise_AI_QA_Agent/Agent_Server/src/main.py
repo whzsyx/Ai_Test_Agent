@@ -26,6 +26,7 @@ from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
 from src.api.routes.mail import router as mail_router
 from src.application.model_adapters import build_default_adapter_registry
+from src.application.mail.auth_monitor import TencentAuthMonitor
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.compatibility import CompatibilityRunnerService
@@ -260,6 +261,12 @@ async def lifespan(app: FastAPI):
     app.state.model_adapter_registry = adapter_registry
     app.state.tool_runtime_service = tool_runtime_service
     app.state.mail_service = tool_runtime_service._mail_service
+    tencent_auth_monitor = TencentAuthMonitor(
+        settings=settings,
+        email_config_store=email_config_store,
+        registry=app.state.mail_service._registry,
+    )
+    app.state.tencent_auth_monitor = tencent_auth_monitor
     app.state.compatibility_runner_service = compatibility_runner_service
     app.state.runtime_service = runtime_service
     session_service = SessionService(
@@ -300,9 +307,11 @@ async def lifespan(app: FastAPI):
         adapter_registry=adapter_registry,
         oauth_token_service=oauth_token_service,
     )
+    await tencent_auth_monitor.startup()
     try:
         yield
     finally:
+        await tencent_auth_monitor.shutdown()
         await mcp_connection_manager.shutdown()
 
 

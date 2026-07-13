@@ -8,6 +8,7 @@ import type { EmailConfigCreateRequest, EmailConfigPublic, MailboxProviderInfo }
 type Setup = {
   authorizationUrl: string;
   authStatus: string;
+  authState: string;
   sessionId: string;
   polling: boolean;
   pollStartedAt: number;
@@ -48,7 +49,8 @@ const requiresRoutesDraft = computed(() => selectedProvider.value?.configuration
 function setup(id: number) {
   return setupById[id] ||= {
     authorizationUrl: "",
-    authStatus: "检查中...",
+    authStatus: t("nativeMailSettings.checking"),
+    authState: "checking",
     sessionId: "",
     polling: false,
     pollStartedAt: 0,
@@ -143,32 +145,49 @@ async function createMailbox() {
 
 async function syncMailboxStatus(item: EmailConfigPublic) {
   const state = setup(item.id);
-  state.authStatus = "检查中...";
+  state.authStatus = t("nativeMailSettings.checking");
+  state.authState = "checking";
   try {
-    const result = await api.mailProviderSetupAction(item.provider, item.provider === "tencent_agently" ? "auth_status" : "status", { config_id: item.id });
-    if (item.provider === "tencent_agently") {
-      state.authStatus = result.logged_in === true ? "可用" : String(result.auth_status || result.error || "未授权");
-      return;
-    }
-    state.authStatus = result.ok === true ? "可用" : String(result.error || "不可用");
+    const result = await api.mailProviderSetupAction(item.provider, "status", { config_id: item.id });
+    applyConnectionResult(state, result);
   } catch (error) {
+    state.authState = "failed";
     state.authStatus = error instanceof Error ? error.message : "状态检查失败";
+  }
+}
+
+function applyConnectionResult(state: Setup, result: Record<string, unknown>) {
+  const authState = String(result.auth_state || (result.ok === true ? "authorized" : "failed"));
+  state.authState = authState;
+  if (authState === "authorized" && result.ok === true) {
+    state.authStatus = t("nativeMailSettings.available");
+  } else if (authState === "reauth_required" || result.reauth_required === true) {
+    state.authState = "reauth_required";
+    state.authStatus = t("nativeMailSettings.auth_expired");
+  } else if (authState === "authorizing") {
+    state.authStatus = t("nativeMailSettings.authorizing");
+  } else if (authState === "checking") {
+    state.authStatus = t("nativeMailSettings.checking");
+  } else {
+    state.authStatus = String(result.error || result.auth_status || t("nativeMailSettings.unavailable"));
   }
 }
 
 async function testConnection(item: EmailConfigPublic) {
   await action(item.id, "test", async () => {
     const state = setup(item.id);
-    state.authStatus = "检查中...";
+    state.authStatus = t("nativeMailSettings.checking");
+    state.authState = "checking";
     const result = await api.mailProviderSetupAction(item.provider, "status", {
       config_id: item.id,
     });
+    applyConnectionResult(state, result);
     if (result.ok !== true) {
-      const error = String(result.error || result.auth_status || "连接失败");
-      state.authStatus = error;
+      const error = state.authState === "reauth_required"
+        ? t("nativeMailSettings.auth_expired_hint")
+        : String(result.error || result.auth_status || "连接失败");
       throw new Error(`${item.config_name} 连接失败：${error}`);
     }
-    state.authStatus = "可用";
     const email = String(result.email || item.sender_email || "").trim();
     message("success", `${item.config_name}${email ? `（${email}）` : ""} 连接正常`);
   });
@@ -183,9 +202,10 @@ async function startAuth(item: EmailConfigPublic) {
     state.authorizationUrl = String(result.authorization_url || "");
     state.sessionId = String(result.session_id || "");
     state.authStatus = String(result.status || "等待授权");
+    state.authState = String(result.auth_state || "authorizing");
     state.pollStartedAt = Date.now();
     if (["authorized", "completed"].includes(state.authStatus)) {
-      await completeAuth(item, state);
+      await completeAuth(item, state, String(result.email || ""));
       return;
     }
     state.polling = true;
@@ -215,6 +235,7 @@ async function pollAuth(item: EmailConfigPublic) {
   if (!state.sessionId || !state.polling) return;
   if (Date.now() - state.pollStartedAt > AUTH_POLL_TIMEOUT_MS) {
     stopAuthPolling(item.id);
+    state.authState = "failed";
     state.authStatus = "授权等待超时";
     message("error", "OAuth 授权等待超时，请重新开始授权");
     return;
@@ -223,28 +244,44 @@ async function pollAuth(item: EmailConfigPublic) {
     const result = await api.mailProviderSetupAction(item.provider, "auth_login_status", { config_id: item.id, session_id: state.sessionId });
     if (!state.polling) return;
     if (result.ok === false || result.status === "failed") {
+      state.authState = String(result.auth_state || "failed");
+      state.authStatus = state.authState === "reauth_required"
+        ? t("nativeMailSettings.auth_expired")
+        : String(result.error || "OAuth 授权失败");
       throw new Error(String(result.error || "OAuth 授权失败"));
     }
     state.authStatus = String(result.status || "等待授权");
+    state.authState = String(result.auth_state || "authorizing");
     state.authorizationUrl = String(result.authorization_url || state.authorizationUrl);
     if (["authorized", "completed"].includes(state.authStatus)) {
       stopAuthPolling(item.id);
-      await completeAuth(item, state);
+      await completeAuth(item, state, String(result.email || ""));
       return;
     }
     scheduleAuthPoll(item);
   } catch (error) {
     stopAuthPolling(item.id);
-    state.authStatus = "授权检查失败";
+    if (state.authState !== "reauth_required") {
+      state.authState = "failed";
+      state.authStatus = "授权检查失败";
+    }
     message("error", error instanceof Error ? error.message : "OAuth 授权检查失败");
   }
 }
 
-async function completeAuth(item: EmailConfigPublic, state: Setup) {
+async function completeAuth(item: EmailConfigPublic, state: Setup, verifiedEmail = "") {
   stopAuthPolling(item.id);
   const isCreating = creatingMailbox.value?.id === item.id;
-  const email = await loadIdentity(item, !isCreating);
-  state.authStatus = "可用";
+  let email = verifiedEmail.trim();
+  if (!email) {
+    const result = await api.mailProviderSetupAction(item.provider, "status", { config_id: item.id });
+    applyConnectionResult(state, result);
+    if (result.ok !== true) throw new Error(String(result.error || "授权后的邮箱验证失败"));
+    email = String(result.email || "").trim();
+  }
+  await persistIdentityEmail(item, email);
+  state.authStatus = t("nativeMailSettings.available");
+  state.authState = "authorized";
   state.authorizationUrl = "";
   state.sessionId = "";
   if (isCreating) {
@@ -252,19 +289,14 @@ async function completeAuth(item: EmailConfigPublic, state: Setup) {
     showCreate.value = false;
     await loadSettings();
   }
-  message("success", email ? `邮箱 ${email} 已授权成功` : "邮箱已授权成功");
+  message("success", email ? `邮箱 ${email} 已授权成功，可以正常使用` : t("nativeMailSettings.reauth_success"));
 }
 
-async function loadIdentity(item: EmailConfigPublic, reloadOnChange = true): Promise<string> {
-  const result = await api.mailProviderSetupAction(item.provider, "whoami", { config_id: item.id });
-  if (result.ok === false) throw new Error(String(result.error || "读取邮箱身份失败"));
-  const email = String(result.email || (result.primary_alias as Record<string, unknown> | undefined)?.email || "").trim();
-  setup(item.id).authStatus = "可用";
+async function persistIdentityEmail(item: EmailConfigPublic, email: string): Promise<void> {
   if (email && email !== item.sender_email) {
     await api.updateEmailConfig(item.id, { config_name: item.config_name, provider: item.provider, sender_email: email, api_key: null, enabled: item.enabled, is_default: item.is_default, description: item.description || null, extra_config: {} });
-    if (reloadOnChange) await loadSettings();
+    item.sender_email = email;
   }
-  return email;
 }
 
 async function cancelCreate() {
@@ -380,7 +412,7 @@ onBeforeUnmount(() => {
           <div class="settings-model-card__spacer"></div>
           <div class="settings-model-card__actions">
             <button
-              v-if="item.provider === 'tencent_agently' && !['可用', '检查中...'].includes(setup(item.id).authStatus)"
+              v-if="item.provider === 'tencent_agently' && setup(item.id).authState === 'reauth_required'"
               type="button"
               class="settings-model-card__action settings-model-card__action-edit"
               :disabled="isBusy(item.id, 'auth') || setup(item.id).polling"

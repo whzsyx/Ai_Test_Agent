@@ -126,7 +126,21 @@ npm install -g @tencent-qqmail/agently-cli
 
 后端只从服务器 PATH 解析命令。OAuth URL 必须原样返回前端，不得重新编码或拼接。
 
-现有服务器 DPAPI 授权可继续使用；新建腾讯邮箱配置使用独立 `AGENTLY_CLI_CONFIG_DIR`，不同邮箱的 OAuth 凭据互不覆盖。
+新建腾讯邮箱配置使用独立 `AGENTLY_CLI_CONFIG_DIR`，不同邮箱的 OAuth 凭据互不覆盖。旧配置在下一次重新授权时自动迁移到按配置 ID 固定的独立目录。
+
+生产环境必须把凭据根目录挂载到持久磁盘，并保证服务重启后仍使用同一个操作系统服务账号；Windows 下官方 CLI 的 DPAPI 密文只能由该账号解密。Token 原文由官方 CLI 保存，不写入数据库，数据库只保存服务器凭据目录引用。
+
+```env
+REDIS_URL=redis://redis-host:6379/0
+AGENTLY_CLI_CONFIG_ROOT=/var/lib/agent-server/agently
+AGENTLY_AUTH_LOCK_TTL_SECONDS=600
+AGENTLY_AUTH_LOCK_WAIT_SECONDS=30
+AGENTLY_AUTH_CHECK_INTERVAL_SECONDS=300
+```
+
+所有可能刷新 Token 的 CLI 操作按邮箱配置 ID 获取 Redis 分布式锁；同一邮箱串行执行，不同邮箱互不阻塞。Redis 不可用或锁等待超时时禁止执行 CLI，避免多 Worker 并发刷新导致 Refresh Token 轮换冲突。`auth status` 仅读取本地元数据，不参与刷新，因此不获取该锁。
+
+OAuth CLI 退出码为 0 只表示凭据已经落盘，后端还必须执行一次 `+me` 强验证；只有成功读取到邮箱地址后才返回 `authorized`。统一认证状态为 `checking`、`authorizing`、`authorized`、`reauth_required`、`failed`。后台只定时强验证当前激活的腾讯邮箱，发现 Refresh Token 失效时记录 `reauth_required`，不会自动发起 OAuth。
 
 ## 6. 设置页面
 
