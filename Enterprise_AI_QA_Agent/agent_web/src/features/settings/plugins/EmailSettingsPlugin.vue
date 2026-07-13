@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useMessage } from "naive-ui";
 import { api } from "../../../services/api";
+import { t } from "../../../services/i18n";
 import type { EmailConfigCreateRequest, EmailConfigPublic, MailboxProviderInfo } from "../../../types";
 
 type Setup = {
@@ -311,65 +312,350 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="mailbox-settings">
-    <header class="page-header">
-      <div><h2>Agent 原生邮箱</h2><p>全局统一管理各厂商 Agent Mail。所有 Agent 只使用当前激活邮箱。</p></div>
-      <button class="primary" type="button" @click="openCreate">+ 新建邮箱</button>
-    </header>
-    <div v-if="loading" class="empty">正在加载邮箱...</div>
-    <div v-else-if="!mailboxes.length" class="empty"><strong>还没有 Agent 邮箱</strong><span>新建配置、完成厂商授权，然后设为当前邮箱。</span></div>
-    <div v-else class="mailbox-grid">
-      <article v-for="item in mailboxes" :key="item.id" class="mailbox-card" :class="{ active: item.enabled }">
-        <div class="card-top"><div class="mail-icon">✉</div><div><h3>{{ item.config_name }}</h3><p>{{ providerName(item.provider) }}</p></div><span class="state" :class="{ enabled: item.enabled }">{{ item.enabled ? "当前使用" : "未激活" }}</span></div>
-        <dl>
-          <div><dt>邮箱地址</dt><dd>{{ item.sender_email || "尚未生成或绑定" }}</dd></div>
-          <div><dt>配置状态</dt><dd>{{ setup(item.id).authStatus }}</dd></div>
-          <div><dt>认证方式</dt><dd>{{ providerMap.get(item.provider)?.auth_type === "oauth_cli" ? "OAuth / CLI" : "API Key" }}</dd></div>
-        </dl>
-        <div v-if="setup(item.id).authorizationUrl" class="auth-box"><p>请点击或复制以下链接在浏览器中完成授权：</p><code>{{ setup(item.id).authorizationUrl }}</code><div class="actions"><a :href="setup(item.id).authorizationUrl" target="_blank" rel="noopener noreferrer">打开链接</a><button type="button" @click="copyUrl(item)">复制</button><span v-if="setup(item.id).polling" class="polling-hint">正在自动检测授权结果...</span></div></div>
-        <div class="actions wrap">
-          <button v-if="item.provider === 'tencent_agently' && !['可用', '检查中...'].includes(setup(item.id).authStatus)" type="button" :disabled="isBusy(item.id, 'auth') || setup(item.id).polling" @click="startAuth(item)">{{ setup(item.id).polling ? "等待授权..." : "重新授权" }}</button>
-          <button type="button" :disabled="isBusy(item.id, 'test')" @click="testConnection(item)">{{ isBusy(item.id, 'test') ? "测试中..." : "测试连接" }}</button>
-          <button v-if="!item.enabled" class="primary-outline" type="button" @click="activate(item)">设为当前</button>
-          <button class="danger" type="button" @click="remove(item)">删除</button>
-        </div>
-      </article>
+  <section class="settings-pane settings-email-pane">
+    <div class="settings-pane-head">
+      <div>
+        <h3>{{ t("nativeMailSettings.title") }}</h3>
+        <p>{{ t("nativeMailSettings.desc") }}</p>
+      </div>
     </div>
 
-    <div v-if="showCreate" class="modal-mask" @click.self="cancelCreate"><form class="modal" @submit.prevent="createMailbox">
-      <h3>{{ creatingMailbox ? "正在创建 Agent 邮箱" : "新建全局 Agent 邮箱" }}</h3>
-      <template v-if="!creatingMailbox">
-        <label>供应商<select v-model="draft.provider"><option v-for="item in providers" :key="item.provider" :value="item.provider">{{ item.display_name }}</option></select></label>
-        <label>配置名称<input v-model="draft.config_name" placeholder="例如：备用 AgentMail" /></label>
-        <template v-if="!isTencentDraft">
-          <label>API Key<input v-model="draft.api_key" type="password" autocomplete="new-password" placeholder="保存在后端，不会回显" /></label>
-          <label>API Base URL<input v-model="draft.base_url" :placeholder="String(selectedProvider?.default_base_url || 'https://...')" /></label>
-          <label v-if="supportsExistingMailboxBinding">{{ mailboxNoun }} 使用方式<select v-model="draft.inbox_mode"><option value="existing">绑定已有 {{ mailboxNoun }}</option><option value="create">创建新 {{ mailboxNoun }}</option></select></label>
-          <label v-if="!supportsExistingMailboxBinding">Mailbox ID<input v-model="draft.mailbox_id" :placeholder="canProvisionDraft ? '可留空，创建后再生成厂商 Inbox' : '厂商邮箱 ID'" /></label>
-          <label v-if="requiresRoutesDraft">路由映射 JSON<textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea></label>
-          <label v-if="!supportsExistingMailboxBinding || isBindingExistingMailbox">{{ supportsExistingMailboxBinding ? existingMailboxAddressLabel : "邮箱地址" }}<input v-model="draft.sender_email" :placeholder="isOpenMailDraft ? '例如：gleamopal4609@openmail.sh' : (isRobotomailDraft ? '例如：eighteen@robotomail.co' : '厂商邮箱地址')" /></label>
-        </template>
-        <label>说明<textarea v-model="draft.description" rows="2" placeholder="可选"></textarea></label>
-        <p class="hint">{{ isTencentDraft ? "创建过程中会直接进入 OAuth 授权，授权成功后才生成邮箱。" : (isBindingExistingMailbox ? bindingHint : (isRobotomailDraft ? "创建 Robotomail Mailbox 必须使用 full-access API Key；成功后才生成邮箱。" : (canProvisionDraft && !draft.mailbox_id.trim() ? "创建时会验证 API Key，并自动创建厂商 Inbox；成功后才生成邮箱。" : "创建时会连接厂商 API 验证凭证与 Mailbox；成功后才生成邮箱。"))) }}</p>
-        <div class="actions end"><button type="button" @click="cancelCreate">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "处理中..." : (isTencentDraft ? "创建并授权" : (isBindingExistingMailbox ? "绑定并验证" : "创建并验证")) }}</button></div>
-      </template>
-      <template v-else>
-        <div class="creation-progress">
-          <strong>{{ creatingMailbox.config_name }}</strong>
-          <span>状态：{{ setup(creatingMailbox.id).authStatus }}</span>
-          <template v-if="setup(creatingMailbox.id).authorizationUrl">
-            <p>请点击以下链接在浏览器中完成授权，系统会自动检测结果：</p>
-            <code>{{ setup(creatingMailbox.id).authorizationUrl }}</code>
-            <div class="actions"><a :href="setup(creatingMailbox.id).authorizationUrl" target="_blank" rel="noopener noreferrer">打开授权页面</a><button type="button" @click="copyUrl(creatingMailbox)">复制链接</button></div>
-          </template>
-          <span v-if="setup(creatingMailbox.id).polling" class="polling-hint">正在自动检测授权结果...</span>
+    <div class="settings-pane-block settings-model-grid-shell">
+      <div v-if="loading" class="settings-empty">{{ t("nativeMailSettings.loading") }}</div>
+      <div v-else class="settings-model-grid settings-email-grid">
+        <article
+          v-for="item in mailboxes"
+          :key="item.id"
+          class="settings-model-card settings-model-card-static settings-email-card"
+          :class="{ active: item.enabled }"
+        >
+          <div class="settings-model-card__header">
+            <span
+              class="settings-model-card__badge"
+              :class="item.enabled ? 'settings-model-card__badge-current' : 'settings-email-badge-idle'"
+            >
+              {{ item.enabled ? t("nativeMailSettings.current") : t("nativeMailSettings.inactive") }}
+            </span>
+          </div>
+
+          <div class="settings-model-card__name settings-email-card__name">
+            <span class="settings-email-card__icon"><i class="fa-regular fa-envelope"></i></span>
+            <strong>{{ item.config_name }}</strong>
+          </div>
+
+          <div class="settings-model-card__provider-row">
+            <i class="fa-solid fa-building"></i>
+            <span>{{ providerName(item.provider) }}</span>
+          </div>
+          <div class="settings-model-card__provider-row">
+            <i class="fa-solid fa-key"></i>
+            <span>{{ providerMap.get(item.provider)?.auth_type === "oauth_cli" ? "OAuth / CLI" : "API Key" }}</span>
+          </div>
+
+          <div class="settings-model-card__stats settings-model-card__stats-plain">
+            <div class="settings-model-card__stat settings-model-card__stat-full">
+              <span>{{ t("nativeMailSettings.email") }}</span>
+              <strong :title="item.sender_email">{{ item.sender_email || t("nativeMailSettings.unbound") }}</strong>
+            </div>
+            <div class="settings-model-card__stat settings-model-card__stat-full">
+              <span>{{ t("nativeMailSettings.status") }}</span>
+              <strong :title="setup(item.id).authStatus">{{ setup(item.id).authStatus }}</strong>
+            </div>
+          </div>
+
+          <div v-if="setup(item.id).authorizationUrl" class="settings-email-auth-box">
+            <p>{{ t("nativeMailSettings.auth_prompt") }}</p>
+            <code>{{ setup(item.id).authorizationUrl }}</code>
+            <div class="settings-email-link-actions">
+              <a class="primary-btn narrow" :href="setup(item.id).authorizationUrl" target="_blank" rel="noopener noreferrer">
+                {{ t("nativeMailSettings.open_link") }}
+              </a>
+              <button type="button" class="secondary-btn narrow" @click="copyUrl(item)">{{ t("nativeMailSettings.copy") }}</button>
+            </div>
+            <span v-if="setup(item.id).polling" class="settings-email-polling">
+              <i class="fa-solid fa-spinner fa-spin"></i> {{ t("nativeMailSettings.auto_detect") }}
+            </span>
+          </div>
+
+          <div class="settings-model-card__spacer"></div>
+          <div class="settings-model-card__actions">
+            <button
+              v-if="item.provider === 'tencent_agently' && !['可用', '检查中...'].includes(setup(item.id).authStatus)"
+              type="button"
+              class="settings-model-card__action settings-model-card__action-edit"
+              :disabled="isBusy(item.id, 'auth') || setup(item.id).polling"
+              :title="t('nativeMailSettings.reauthorize')"
+              :aria-label="t('nativeMailSettings.reauthorize')"
+              @click="startAuth(item)"
+            >
+              <i class="fa-solid" :class="setup(item.id).polling ? 'fa-spinner fa-spin' : 'fa-arrow-rotate-right'"></i>
+            </button>
+            <button
+              type="button"
+              class="settings-model-card__action settings-model-card__action-test"
+              :disabled="isBusy(item.id, 'test')"
+              :title="t('nativeMailSettings.test')"
+              :aria-label="t('nativeMailSettings.test')"
+              @click="testConnection(item)"
+            >
+              <i class="fa-solid" :class="isBusy(item.id, 'test') ? 'fa-spinner fa-spin' : 'fa-plug-circle-check'"></i>
+            </button>
+            <button
+              type="button"
+              class="settings-model-card__action settings-model-card__action-activate"
+              :disabled="item.enabled || isBusy(item.id, 'activate')"
+              :title="t('nativeMailSettings.activate')"
+              :aria-label="t('nativeMailSettings.activate')"
+              @click="activate(item)"
+            >
+              <i class="fa-solid" :class="isBusy(item.id, 'activate') ? 'fa-spinner fa-spin' : 'fa-circle-check'"></i>
+            </button>
+            <button
+              type="button"
+              class="settings-model-card__action settings-model-card__action-danger"
+              :disabled="isBusy(item.id, 'delete')"
+              :title="t('nativeMailSettings.delete')"
+              :aria-label="t('nativeMailSettings.delete')"
+              @click="remove(item)"
+            >
+              <i class="fa-solid" :class="isBusy(item.id, 'delete') ? 'fa-spinner fa-spin' : 'fa-trash-can'"></i>
+            </button>
+          </div>
+        </article>
+
+        <button
+          type="button"
+          class="settings-model-card settings-model-card-add settings-email-card settings-email-card-add"
+          @click="openCreate"
+        >
+          <div class="settings-model-card-add__icon">+</div>
+          <div class="settings-model-card-add__body">
+            <strong>{{ t("nativeMailSettings.add") }}</strong>
+            <p>{{ t("nativeMailSettings.add_desc") }}</p>
+          </div>
+        </button>
+      </div>
+      <div v-if="!loading && !mailboxes.length" class="settings-empty settings-email-empty">
+        <strong>{{ t("nativeMailSettings.empty_title") }}</strong>
+        <span>{{ t("nativeMailSettings.empty_desc") }}</span>
+      </div>
+    </div>
+
+    <div v-if="showCreate" class="settings-modal-overlay" @click.self="cancelCreate">
+      <form class="settings-modal-card settings-modal-card-clean settings-email-modal" @submit.prevent="createMailbox">
+        <div class="settings-modal-head">
+          <div>
+            <h4>{{ creatingMailbox ? t("nativeMailSettings.creating_title") : t("nativeMailSettings.create_title") }}</h4>
+            <p>{{ t("nativeMailSettings.create_desc") }}</p>
+          </div>
+          <button type="button" class="settings-modal-close" :disabled="saving" @click="cancelCreate">×</button>
         </div>
-        <div class="actions end"><button type="button" :disabled="saving" @click="cancelCreate">取消创建</button></div>
-      </template>
-    </form></div>
+
+        <template v-if="!creatingMailbox">
+          <div class="form-grid two">
+            <label>
+              <span>{{ t("nativeMailSettings.provider") }}</span>
+              <select v-model="draft.provider"><option v-for="item in providers" :key="item.provider" :value="item.provider">{{ item.display_name }}</option></select>
+            </label>
+            <label>
+              <span>{{ t("nativeMailSettings.config_name") }}</span>
+              <input v-model="draft.config_name" :placeholder="t('nativeMailSettings.config_name_ph')" />
+            </label>
+            <template v-if="!isTencentDraft">
+              <label class="full">
+                <span>API Key</span>
+                <input v-model="draft.api_key" type="password" autocomplete="new-password" :placeholder="t('nativeMailSettings.api_key_ph')" />
+              </label>
+              <label class="full">
+                <span>API Base URL</span>
+                <input v-model="draft.base_url" :placeholder="String(selectedProvider?.default_base_url || 'https://...')" />
+              </label>
+              <label v-if="supportsExistingMailboxBinding">
+                <span>{{ mailboxNoun }} {{ t("nativeMailSettings.use_mode") }}</span>
+                <select v-model="draft.inbox_mode">
+                  <option value="existing">{{ t("nativeMailSettings.bind_existing") }} {{ mailboxNoun }}</option>
+                  <option value="create">{{ t("nativeMailSettings.create_new") }} {{ mailboxNoun }}</option>
+                </select>
+              </label>
+              <label v-if="!supportsExistingMailboxBinding">
+                <span>Mailbox ID</span>
+                <input v-model="draft.mailbox_id" :placeholder="canProvisionDraft ? t('nativeMailSettings.mailbox_id_optional') : t('nativeMailSettings.mailbox_id')" />
+              </label>
+              <label v-if="requiresRoutesDraft" class="full">
+                <span>{{ t("nativeMailSettings.routes") }}</span>
+                <textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea>
+              </label>
+              <label v-if="!supportsExistingMailboxBinding || isBindingExistingMailbox" class="full">
+                <span>{{ supportsExistingMailboxBinding ? existingMailboxAddressLabel : t("nativeMailSettings.email") }}</span>
+                <input v-model="draft.sender_email" :placeholder="isOpenMailDraft ? 'gleamopal4609@openmail.sh' : (isRobotomailDraft ? 'eighteen@robotomail.co' : t('nativeMailSettings.email_ph'))" />
+              </label>
+            </template>
+            <label class="full">
+              <span>{{ t("nativeMailSettings.description") }}</span>
+              <textarea v-model="draft.description" rows="2" :placeholder="t('nativeMailSettings.optional')"></textarea>
+            </label>
+            <p class="settings-email-hint full">
+              <i class="fa-solid fa-circle-info"></i>
+              {{ isTencentDraft ? t("nativeMailSettings.tencent_hint") : (isBindingExistingMailbox ? bindingHint : (isRobotomailDraft ? t("nativeMailSettings.robot_create_hint") : (canProvisionDraft && !draft.mailbox_id.trim() ? t("nativeMailSettings.provision_hint") : t("nativeMailSettings.verify_hint")))) }}
+            </p>
+          </div>
+          <div class="settings-modal-actions">
+            <button type="button" class="secondary-btn narrow" :disabled="saving" @click="cancelCreate">{{ t("nativeMailSettings.cancel") }}</button>
+            <button class="primary-btn narrow" type="submit" :disabled="saving">
+              <i v-if="saving" class="fa-solid fa-spinner fa-spin"></i>
+              {{ saving ? t("nativeMailSettings.processing") : (isTencentDraft ? t("nativeMailSettings.create_auth") : (isBindingExistingMailbox ? t("nativeMailSettings.bind_verify") : t("nativeMailSettings.create_verify"))) }}
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="settings-email-progress">
+            <strong>{{ creatingMailbox.config_name }}</strong>
+            <span>{{ t("nativeMailSettings.status") }}：{{ setup(creatingMailbox.id).authStatus }}</span>
+            <template v-if="setup(creatingMailbox.id).authorizationUrl">
+              <p>{{ t("nativeMailSettings.auth_prompt_auto") }}</p>
+              <code>{{ setup(creatingMailbox.id).authorizationUrl }}</code>
+              <div class="settings-email-link-actions">
+                <a class="primary-btn narrow" :href="setup(creatingMailbox.id).authorizationUrl" target="_blank" rel="noopener noreferrer">{{ t("nativeMailSettings.open_auth") }}</a>
+                <button type="button" class="secondary-btn narrow" @click="copyUrl(creatingMailbox)">{{ t("nativeMailSettings.copy_link") }}</button>
+              </div>
+            </template>
+            <span v-if="setup(creatingMailbox.id).polling" class="settings-email-polling">
+              <i class="fa-solid fa-spinner fa-spin"></i> {{ t("nativeMailSettings.auto_detect") }}
+            </span>
+          </div>
+          <div class="settings-modal-actions">
+            <button type="button" class="secondary-btn narrow" :disabled="saving" @click="cancelCreate">{{ t("nativeMailSettings.cancel_create") }}</button>
+          </div>
+        </template>
+      </form>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.mailbox-settings{padding:24px 28px;color:var(--text-primary,#172033)}.page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #e6eaf0}.page-header h2{margin:0 0 8px;font-size:22px}.page-header p,.card-top p{margin:0;color:#718096}button,select,input,textarea{font:inherit}button{border:1px solid #d8dee9;border-radius:9px;background:#fff;padding:9px 14px;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}.primary{border-color:#4f7cff;background:#4f7cff;color:#fff}.primary-outline{border-color:#4f7cff;color:#315fd1}.danger{border-color:#ffd2d7;color:#d9364f;background:#fff6f7}.empty{margin-top:24px;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:1px dashed #d8dee9;border-radius:14px;color:#718096}.mailbox-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:18px;margin-top:22px}.mailbox-card{border:1px solid #dfe5ee;border-radius:16px;padding:20px;background:#fff;box-shadow:0 8px 28px rgba(30,45,75,.05)}.mailbox-card.active{border-color:#88d9ae;box-shadow:0 8px 28px rgba(8,116,67,.1)}.card-top{display:flex;align-items:center;gap:12px}.card-top h3{margin:0 0 4px;font-size:17px}.mail-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#edf3ff;color:#3f6be8;font-size:20px}.state{margin-left:auto;padding:4px 9px;border-radius:999px;background:#f1f3f6;color:#667085;font-size:12px}.state.enabled{background:#e9fbf1;color:#087443}dl{margin:18px 0;display:grid;gap:10px}dl div{display:grid;grid-template-columns:88px 1fr;gap:10px}dt{color:#8490a4}dd{margin:0;overflow-wrap:anywhere}.auth-box{margin:14px 0;padding:13px;border-radius:10px;background:#f7f9fc}.auth-box p{margin:0 0 8px}.auth-box code,.creation-progress code{display:block;max-height:90px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.polling-hint{color:#3867d6;font-size:13px}.actions{display:flex;align-items:center;gap:9px;margin-top:12px}.actions.wrap{flex-wrap:wrap}.actions.end{justify-content:flex-end}.actions a{color:#3867d6;text-decoration:none}.modal-mask{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:20px;background:rgba(15,23,42,.44)}.modal{width:min(560px,100%);max-height:90vh;overflow:auto;padding:24px;border-radius:16px;background:#fff;box-shadow:0 24px 80px rgba(0,0,0,.2)}.modal h3{margin:0 0 20px}.modal label{display:grid;gap:7px;margin-bottom:15px;color:#4a5568}.modal input,.modal select,.modal textarea{width:100%;box-sizing:border-box;border:1px solid #d8dee9;border-radius:9px;padding:10px 11px;background:#fff}.creation-progress{display:grid;gap:12px;padding:16px;border-radius:12px;background:#f7f9fc}.creation-progress p{margin:0;color:#4a5568}.hint{color:#718096;font-size:13px;line-height:1.6}@media(max-width:720px){.page-header{flex-direction:column}.mailbox-grid{grid-template-columns:1fr}.mailbox-settings{padding:18px}}
+.settings-email-pane {
+  color: var(--text);
+  font-family: var(--app-font-family);
+}
+
+.settings-email-card {
+  background: var(--surface);
+}
+
+.settings-email-card.active {
+  border-color: color-mix(in srgb, var(--green) 58%, var(--border));
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.settings-email-badge-idle {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.settings-email-card__name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-email-card__icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+}
+
+.settings-email-auth-box,
+.settings-email-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.settings-email-auth-box p,
+.settings-email-progress p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.settings-email-auth-box code,
+.settings-email-progress code {
+  display: block;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-email-link-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-email-link-actions a {
+  text-decoration: none;
+}
+
+.settings-email-polling {
+  color: var(--blue);
+  font-size: 12px;
+}
+
+.settings-email-empty {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-email-modal {
+  width: min(680px, calc(100vw - 48px));
+}
+
+.settings-email-hint {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.settings-email-hint i {
+  margin-right: 6px;
+  color: var(--blue);
+}
+
+@media (max-width: 720px) {
+  .settings-email-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-email-card {
+    width: 100%;
+  }
+
+  .form-grid.two {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
