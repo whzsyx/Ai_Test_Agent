@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.api.routes.attachments import router as attachments_router
 from src.api.routes.api_docs import router as api_docs_router
 from src.api.routes.compatibility import router as compatibility_router
+from src.api.routes.docker import router as docker_router
 from src.api.routes.health import router as health_router
 from src.api.routes.integrations import router as integrations_router
 from src.api.routes.knowledge import router as knowledge_router
@@ -31,6 +32,7 @@ from src.application.models.oauth_token_service import OAuthTokenService
 from src.application.artifacts.artifact_storage_service import ArtifactStorageService
 from src.application.compatibility import CompatibilityRunnerService
 from src.application.documents.api_docs_service import ApiDocsService
+from src.application.docker_management_service import DockerManagementService
 from src.application.integrations.integration_catalog_service import IntegrationCatalogService
 from src.application.knowledge.knowledge_graph_service import KnowledgeGraphService
 from src.application.mcp.host.connection_manager import McpConnectionManager
@@ -261,6 +263,7 @@ async def lifespan(app: FastAPI):
     app.state.model_adapter_registry = adapter_registry
     app.state.tool_runtime_service = tool_runtime_service
     app.state.mail_service = tool_runtime_service._mail_service
+    app.state.docker_management_service = DockerManagementService(settings)
     tencent_auth_monitor = TencentAuthMonitor(
         settings=settings,
         email_config_store=email_config_store,
@@ -341,6 +344,7 @@ app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
 app.include_router(oauth_router, prefix=settings.api_v1_prefix)
 app.include_router(mail_router, prefix=settings.api_v1_prefix)
+app.include_router(docker_router, prefix=settings.api_v1_prefix)
 
 
 if __name__ == "__main__":

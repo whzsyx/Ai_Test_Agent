@@ -1142,3 +1142,163 @@ export interface SecurityProfilesResponse {
   family_runner_map: Record<string, string>;
   total_count: number;
 }
+
+// --- Docker management types ----------------------------------------------
+
+export interface DockerEnvironment {
+  cli_available: boolean;
+  daemon_available: boolean;
+  docker_path: string;
+  client_version: string;
+  server_version: string;
+  operating_system?: string;
+  os_type?: string;
+  architecture?: string;
+  name?: string;
+  cpus?: number;
+  memory_bytes?: number;
+  error?: string;
+}
+
+export interface DockerPortBinding {
+  host_port: number;
+  container_port: number;
+  protocol: "tcp" | "udp";
+}
+
+export interface DockerVolumeBinding {
+  source: string;
+  target: string;
+  read_only: boolean;
+}
+
+export interface DockerImage {
+  id: string;
+  repository: string;
+  tag: string;
+  reference: string;
+  digest: string;
+  size: string;
+  created_at: string;
+}
+
+export interface DockerContainer {
+  id: string;
+  name: string;
+  image: string;
+  image_id: string;
+  command: string;
+  state: string;
+  status: string;
+  ports: string;
+  created_at: string;
+  size: string;
+  labels: string;
+  managed: boolean;
+}
+
+export interface DockerRequiredImage {
+  key: string;
+  image: string;
+  category: string;
+  purpose: string;
+  template_key: string;
+  installed: boolean;
+  image_id?: string;
+  size?: string;
+  container_count: number;
+}
+
+export interface DockerTemplate {
+  key: string;
+  image: string;
+  category: string;
+  purpose: string;
+  default_name: string;
+  ports: DockerPortBinding[];
+  volumes: DockerVolumeBinding[];
+  environment_keys: string[];
+}
+
+export interface DockerSummary {
+  required_total: number;
+  required_installed: number;
+  image_count: number;
+  container_count: number;
+  running_count: number;
+}
+
+export interface DockerOverviewResponse {
+  ok: boolean;
+  environment: DockerEnvironment;
+  required_images: DockerRequiredImage[];
+  templates: DockerTemplate[];
+  images: DockerImage[];
+  containers: DockerContainer[];
+  summary: DockerSummary;
+}
+
+export interface DockerImagePullRequest {
+  image: string;
+}
+
+export interface DockerImagePullResponse {
+  ok: boolean;
+  action: string;
+  image: string;
+  message: string;
+  output?: string;
+}
+
+export interface DockerImageRemoveRequest {
+  image: string;
+  force?: boolean;
+}
+
+export interface DockerContainerCreateRequest {
+  name: string;
+  image: string;
+  command?: string[];
+  entrypoint?: string | null;
+  ports?: DockerPortBinding[];
+  volumes?: DockerVolumeBinding[];
+  environment?: Record<string, string>;
+  restart_policy?: "no" | "always" | "unless-stopped" | "on-failure";
+  start?: boolean;
+}
+
+export interface DockerContainerCreateResponse {
+  ok: boolean;
+  created: boolean;
+  container_id: string;
+  name?: string;
+  image?: string;
+  state?: string;
+  message?: string;
+}
+
+export interface DockerTemplateCreateRequest {
+  name?: string;
+  pull_if_missing?: boolean;
+}
+
+export interface DockerContainerActionRequest {
+  action: "start" | "stop" | "restart" | "pause" | "unpause";
+}
+
+export interface DockerContainerActionResponse {
+  ok: boolean;
+  action: string;
+  container_id: string;
+}
+
+export interface DockerContainerRemoveRequest {
+  force?: boolean;
+}
+
+export interface DockerContainerLogsResponse {
+  ok: boolean;
+  container_id: string;
+  tail: number;
+  logs: string;
+}

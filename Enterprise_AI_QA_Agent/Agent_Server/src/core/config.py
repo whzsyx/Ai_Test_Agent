@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     agently_auth_lock_ttl_seconds: int
     agently_auth_lock_wait_seconds: float
     agently_auth_check_interval_seconds: float
+    docker_managed_container_prefix: str
+    docker_managed_volume_root: str
+    docker_redis_image: str
+    docker_minio_image: str
+    docker_mysql_image: str
+    docker_postgres_image: str
+    docker_memgraph_image: str
     memory_backend: str = "postgres"
     session_backend: str = "postgres"
     tool_job_backend: str = "postgres"
@@ -174,7 +181,17 @@ class Settings(BaseSettings):
     def validate_agently_positive_seconds(cls, value: float) -> float:
         return max(0.1, value)
 
-    @field_validator("redis_url", "agently_cli_config_root")
+    @field_validator(
+        "redis_url",
+        "agently_cli_config_root",
+        "docker_managed_container_prefix",
+        "docker_managed_volume_root",
+        "docker_redis_image",
+        "docker_minio_image",
+        "docker_mysql_image",
+        "docker_postgres_image",
+        "docker_memgraph_image",
+    )
     @classmethod
     def validate_agently_required_strings(cls, value: str) -> str:
         normalized = str(value or "").strip()

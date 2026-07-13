@@ -1,15 +1,16 @@
 import { markRaw, type Component } from "vue";
 
+import AboutSystemPlugin from "./plugins/AboutSystemPlugin.vue";
+import ChannelSettingsPlugin from "./plugins/ChannelSettingsPlugin.vue";
+import DockerManagementPlugin from "./plugins/DockerManagementPlugin.vue";
 import EmailSettingsPlugin from "./plugins/EmailSettingsPlugin.vue";
 import GeneralSettingsPlugin from "./plugins/GeneralSettingsPlugin.vue";
 import ModelSettingsPlugin from "./plugins/ModelSettingsPlugin.vue";
 import PlatformSettingsPlugin from "./plugins/PlatformSettingsPlugin.vue";
-import ChannelSettingsPlugin from "./plugins/ChannelSettingsPlugin.vue";
 import StorageSettingsPlugin from "./plugins/StorageSettingsPlugin.vue";
-import AboutSystemPlugin from "./plugins/AboutSystemPlugin.vue";
 import { t } from "../../services/i18n";
 
-export type SettingsPluginKey = "general" | "model" | "email" | "platform" | "channel" | "storage" | "about";
+export type SettingsPluginKey = "general" | "model" | "email" | "platform" | "channel" | "storage" | "docker" | "about";
 
 export interface SettingsPluginDefinition {
   key: SettingsPluginKey;
@@ -65,6 +66,12 @@ export const settingsPlugins: SettingsPluginDefinition[] = [
     labelKey: "settings.storage",
     summary: "预留对象存储与文件归档的统一配置入口",
     component: markRaw(StorageSettingsPlugin),
+  }),
+  makePlugin({
+    key: "docker",
+    labelKey: "settings.docker",
+    summary: "检测并管理运行环境所需的 Docker 镜像与容器",
+    component: markRaw(DockerManagementPlugin),
   }),
   makePlugin({
     key: "about",
