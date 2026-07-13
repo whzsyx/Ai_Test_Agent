@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { NModal, NDataTable } from "naive-ui";
+import { NModal, NDataTable, useDialog } from "naive-ui";
 
 import { api } from "../../../services/api";
 import { t } from "../../../services/i18n";
@@ -42,6 +42,8 @@ const tabs = computed<{ key: TabKey; label: string }[]>(() => [
   { key: "containers", label: t("docker.tab_containers") },
   { key: "templates", label: t("docker.tab_templates") },
 ]);
+
+const dialog = useDialog();
 
 const portsColumns = computed(() => [
   { title: t("docker.col_host"), key: "host", width: 140 },
@@ -110,11 +112,19 @@ async function pullImage(image: string) {
 }
 
 async function removeImage(image: string) {
-  if (!window.confirm(t("docker.confirm_remove_image", { image }))) return;
-  await withAction(actionKey("remove-image", image), async () => {
-    await api.dockerRemoveImage({ image });
-    showMessage("success", t("docker.remove_image_success", { image }));
-    await loadOverview();
+  dialog.info({
+    title: t("docker.remove_image"),
+    content: t("docker.confirm_remove_image", { image }),
+    positiveText: t("common.confirm"),
+    negativeText: t("common.cancel"),
+    positiveButtonProps: { type: "primary" },
+    onPositiveClick: () => {
+      void withAction(actionKey("remove-image", image), async () => {
+        await api.dockerRemoveImage({ image });
+        showMessage("success", t("docker.remove_image_success", { image }));
+        await loadOverview();
+      });
+    },
   });
 }
 
@@ -139,11 +149,19 @@ async function containerAction(container: DockerContainer, action: "start" | "st
 }
 
 async function removeContainer(container: DockerContainer, force = false) {
-  if (!window.confirm(t("docker.confirm_remove_container", { name: container.name || container.id }))) return;
-  await withAction(actionKey("remove-container", container.id), async () => {
-    await api.dockerRemoveContainer(container.id, { force });
-    showMessage("success", t("docker.remove_container_success", { name: container.name || container.id }));
-    await loadOverview();
+  dialog.info({
+    title: t("docker.remove_container"),
+    content: t("docker.confirm_remove_container", { name: container.name || container.id }),
+    positiveText: t("common.confirm"),
+    negativeText: t("common.cancel"),
+    positiveButtonProps: { type: "primary" },
+    onPositiveClick: () => {
+      void withAction(actionKey("remove-container", container.id), async () => {
+        await api.dockerRemoveContainer(container.id, { force });
+        showMessage("success", t("docker.remove_container_success", { name: container.name || container.id }));
+        await loadOverview();
+      });
+    },
   });
 }
 

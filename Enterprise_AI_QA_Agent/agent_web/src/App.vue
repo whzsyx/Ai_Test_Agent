@@ -28,6 +28,17 @@ const lightThemeOverrides: GlobalThemeOverrides = {
     textColor2: "#6B7280",
     borderColor: "#E5E7EB",
   },
+  Dialog: {
+    actionPositiveColor: "#111827",
+    actionPositiveColorHover: "#000000",
+    actionPositiveColorPressed: "#000000",
+    actionPositiveColorFocus: "#000000",
+    actionPositiveTextColor: "#ffffff",
+    actionPositiveTextColorHover: "#ffffff",
+    actionPositiveTextColorPressed: "#ffffff",
+    actionPositiveTextColorFocus: "#ffffff",
+    iconColorWarning: "#111827",
+  },
 };
 
 const route = useRoute();
@@ -50,6 +61,17 @@ const activeThemeOverrides = computed<GlobalThemeOverrides>(() => {
         popoverColor: "#050505",
         bodyColor: "#000000",
         cardColor: "#050505",
+      },
+      Dialog: {
+        actionPositiveColor: "#ffffff",
+        actionPositiveColorHover: "#e5e5e5",
+        actionPositiveColorPressed: "#cccccc",
+        actionPositiveColorFocus: "#e5e5e5",
+        actionPositiveTextColor: "#000000",
+        actionPositiveTextColorHover: "#000000",
+        actionPositiveTextColorPressed: "#000000",
+        actionPositiveTextColorFocus: "#000000",
+        iconColorWarning: "#ffffff",
       },
     };
   }
