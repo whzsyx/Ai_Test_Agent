@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -66,9 +67,11 @@ class RuntimeService:
         session: SessionRecord,
         request: ExecutionRequest,
         on_model_chunk: Callable[[str], Awaitable[None]] | None = None,
+        event_queue: asyncio.Queue | None = None,
     ) -> RuntimeTurnResult:
         self.clear_interrupt(session.id)
         initial_state = self._build_initial_state(session, request)
+        initial_state["_event_queue"] = event_queue
         await self._attach_session_resources(initial_state)
         append_graph_event(
             initial_state,
@@ -360,6 +363,7 @@ class RuntimeService:
             "worker_dispatches": [],
             "context_bundle": request.context,
             "event_log": [],
+            "_streamed_event_count": 0,
             "final_response": "",
             "pending_turn": {},
             "control_state": "active_turn",

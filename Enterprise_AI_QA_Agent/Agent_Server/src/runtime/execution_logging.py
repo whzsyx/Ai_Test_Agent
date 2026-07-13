@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 from src.graph.state import AgentGraphState
+from src.schemas.session import ExecutionEvent
 
 
 def truncate_text(value: str, limit: int = 180) -> str:
@@ -40,3 +43,19 @@ def append_graph_event(
         event_payload["correlation_id"] = f"{event_payload['trace_id']}:{event_payload['step']}"
     event_payload.update(payload)
     state["event_log"].append({"type": event_type, "payload": event_payload})
+
+    # Real-time push to SSE queue so the frontend receives events as they happen
+    event_queue: asyncio.Queue | None = state.get("_event_queue")
+    if event_queue is not None:
+        session_id: str = state.get("session_id", "")
+        event = ExecutionEvent(
+            type=event_type,
+            session_id=session_id,
+            timestamp=datetime.now(timezone.utc),
+            payload=event_payload,
+        )
+        try:
+            event_queue.put_nowait(event)
+            state["_streamed_event_count"] = state.get("_streamed_event_count", 0) + 1
+        except asyncio.QueueFull:
+            pass

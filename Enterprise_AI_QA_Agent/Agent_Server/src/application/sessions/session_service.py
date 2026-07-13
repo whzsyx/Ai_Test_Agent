@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
@@ -747,10 +747,12 @@ class SessionService:
             assistant_message_id=assistant_message_id,
         )
         try:
+            event_queue = self._store.get_queue(session_id)
             runtime_result = await self._runtime_service.execute_turn(
                 session,
                 execution_request,
                 on_model_chunk=stream_chunk_handler,
+                event_queue=event_queue,
             )
             return await self._finalize_runtime_result(
                 session=session,
@@ -1040,7 +1042,10 @@ class SessionService:
         session_id = session.id
         model_response_summary = runtime_result.state.get("model_response_summary", {})
         response_mode = str(model_response_summary.get("mode") or "ok")
-        for event in runtime_result.events:
+        # Skip events that were already streamed in real-time during graph execution
+        streamed_count = runtime_result.state.get("_streamed_event_count", 0)
+        events_to_append = runtime_result.events[streamed_count:] if streamed_count > 0 else runtime_result.events
+        for event in events_to_append:
             await self._store.append_event(session_id, event)
 
         for tool_message in runtime_result.tool_messages:

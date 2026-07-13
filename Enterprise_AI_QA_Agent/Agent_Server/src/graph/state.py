@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, TypedDict
 
 
@@ -60,3 +61,4 @@ class AgentGraphState(TypedDict):
     max_iterations: int
     continue_loop: bool
     termination_reason: str
+    _event_queue: asyncio.Queue | None
