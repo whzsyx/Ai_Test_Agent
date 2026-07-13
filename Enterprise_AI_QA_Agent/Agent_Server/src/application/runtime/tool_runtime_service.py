@@ -2847,28 +2847,6 @@ class ToolRuntimeService:
         )
         payload = result.model_dump()
         payload["status"] = "ok" if result.ok else "error"
-        if action == "start" and result.ok and self._session_resource_service is not None:
-            await self._session_resource_service.register(
-                session_id=context.session_id,
-                kind=SessionResourceKind.docker_container,
-                resource_key=result.container_name,
-                metadata={
-                    "engine": "helper",
-                    "image": result.selected_image,
-                    "tool_key": context.tool_key or "mock-target-runner",
-                    "call_id": context.call_id,
-                    "tool_job_id": context.tool_job_id,
-                    "turn_id": context.turn_id,
-                    "port": result.port,
-                },
-            )
-        elif action == "stop" and result.ok and self._session_resource_service is not None:
-            await self._session_resource_service.mark_released(
-                session_id=context.session_id,
-                kind=SessionResourceKind.docker_container,
-                resource_key=result.container_name,
-                reason="mock-target-runner:stop",
-            )
         return payload
 
     async def _run_mock_target_runner(
@@ -2896,6 +2874,28 @@ class ToolRuntimeService:
 
         payload = result.model_dump()
         payload["status"] = "ok" if result.ok else "error"
+        if action == "start" and result.ok and self._session_resource_service is not None:
+            await self._session_resource_service.register(
+                session_id=context.session_id,
+                kind=SessionResourceKind.docker_container,
+                resource_key=result.container_name,
+                metadata={
+                    "engine": "helper",
+                    "image": result.selected_image,
+                    "tool_key": context.tool_key or "mock-target-runner",
+                    "call_id": context.call_id,
+                    "tool_job_id": context.tool_job_id,
+                    "turn_id": context.turn_id,
+                    "port": result.port,
+                },
+            )
+        elif action == "stop" and result.ok and self._session_resource_service is not None:
+            await self._session_resource_service.mark_released(
+                session_id=context.session_id,
+                kind=SessionResourceKind.docker_container,
+                resource_key=result.container_name,
+                reason="mock-target-runner:stop",
+            )
         return payload
 
     async def _run_performance_engine_runner(
