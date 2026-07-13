@@ -53,11 +53,15 @@ class RestMailAdapterBase(MailProviderAdapter):
         *,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> Any:
+        headers = self._headers(record)
+        if extra_headers:
+            headers.update(extra_headers)
         response = httpx.request(
             method,
             self._base_url(record) + path,
-            headers=self._headers(record),
+            headers=headers,
             json=json_body,
             params=params,
             timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
@@ -72,8 +76,25 @@ class RestMailAdapterBase(MailProviderAdapter):
             self._base_url(record) + path,
             headers=self._headers(record),
             timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
+            follow_redirects=True,
         )
         response.raise_for_status()
+        return self._binary_result(response)
+
+    def _download_url(self, record: "EmailConfigRecord", url: str) -> dict[str, Any]:
+        """Download a provider-issued signed URL without forwarding API credentials."""
+        if not str(url or "").startswith(("https://", "http://")):
+            raise RuntimeError(f"Provider '{self.provider_key}' returned an invalid attachment URL.")
+        response = httpx.get(
+            url,
+            timeout=int((record.extra_config or {}).get("timeout_seconds") or self.default_timeout),
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        return self._binary_result(response)
+
+    @staticmethod
+    def _binary_result(response: httpx.Response) -> dict[str, Any]:
         disposition = response.headers.get("content-disposition", "")
         filename = ""
         if "filename=" in disposition:
@@ -99,34 +120,52 @@ class RestMailAdapterBase(MailProviderAdapter):
 
     @staticmethod
     def _message(raw: dict[str, Any]) -> MailMessage:
-        sender = raw.get("from") or raw.get("from_email") or raw.get("sender") or ""
+        sender = (
+            raw.get("from") or raw.get("from_email") or raw.get("fromAddress")
+            or raw.get("fromAddr") or raw.get("sender") or ""
+        )
         if isinstance(sender, dict):
             sender = sender.get("email") or sender.get("address") or ""
-        recipients = raw.get("to") or raw.get("recipients") or []
+        recipients = (
+            raw.get("to") or raw.get("recipients") or raw.get("toAddresses")
+            or raw.get("toAddr") or []
+        )
         if isinstance(recipients, str):
             recipients = [recipients]
         return MailMessage(
-            message_id=str(raw.get("message_id") or raw.get("id") or ""),
-            thread_id=str(raw.get("thread_id") or "") or None,
+            message_id=str(raw.get("message_id") or raw.get("messageId") or raw.get("id") or ""),
+            thread_id=str(raw.get("thread_id") or raw.get("threadId") or "") or None,
             subject=str(raw.get("subject") or ""),
             from_email=str(sender),
             to=[str(item.get("email") or item.get("address") or "") if isinstance(item, dict) else str(item) for item in recipients],
-            snippet=str(raw.get("snippet") or raw.get("preview") or raw.get("text") or "")[:500],
-            body_text=str(raw.get("text") or raw.get("body_text") or raw.get("body") or ""),
-            body_html=str(raw.get("html") or raw.get("body_html") or ""),
-            received_at=str(raw.get("timestamp") or raw.get("received_at") or raw.get("created_at") or "") or None,
+            snippet=str(
+                raw.get("snippet") or raw.get("preview") or raw.get("text")
+                or raw.get("body_text") or raw.get("bodyText") or raw.get("text_body") or ""
+            )[:500],
+            body_text=str(
+                raw.get("text") or raw.get("body_text") or raw.get("bodyText")
+                or raw.get("text_body") or raw.get("body") or ""
+            ),
+            body_html=str(raw.get("html") or raw.get("body_html") or raw.get("bodyHtml") or raw.get("html_body") or ""),
+            received_at=str(
+                raw.get("timestamp") or raw.get("received_at") or raw.get("receivedAt")
+                or raw.get("created_at") or raw.get("createdAt") or ""
+            ) or None,
             attachments=list(raw.get("attachments") or []),
             raw=raw,
         )
 
     def _send_result(self, record: "EmailConfigRecord", data: Any, recipients: int) -> MailSendResult:
         payload = data if isinstance(data, dict) else {}
+        nested = payload.get("message")
+        if isinstance(nested, dict):
+            payload = nested
         return MailSendResult(
             sent=True,
             provider=self.provider_key,
             from_email=record.sender_email,
             recipient_count=recipients,
-            message_id=str(payload.get("message_id") or payload.get("id") or "") or None,
+            message_id=str(payload.get("message_id") or payload.get("messageId") or payload.get("id") or "") or None,
         )
 
     def status(self, record: "EmailConfigRecord") -> dict[str, Any]:

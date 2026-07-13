@@ -32,7 +32,8 @@ const draft = reactive({
 const providerMap = computed(() => new Map(providers.value.map((item) => [item.provider, item])));
 const selectedProvider = computed(() => providerMap.value.get(draft.provider));
 const isTencentDraft = computed(() => draft.provider === "tencent_agently");
-const isAgentMailDraft = computed(() => draft.provider === "agentmail");
+const canProvisionDraft = computed(() => selectedProvider.value?.capabilities.includes("provision_inbox") === true);
+const requiresRoutesDraft = computed(() => selectedProvider.value?.configuration_fields?.includes("routes") === true);
 
 function setup(id: number) {
   return setupById[id] ||= {
@@ -92,17 +93,34 @@ async function createMailbox() {
     enabled: false, is_default: false, description: draft.description.trim() || null, extra_config,
   };
   saving.value = true;
+  let created: EmailConfigPublic | null = null;
   try {
-    const created = await api.createEmailConfig(payload);
+    created = await api.createEmailConfig(payload);
     if (created.provider === "tencent_agently") {
       creatingMailbox.value = created;
       await startAuth(created);
       return;
     }
+    const descriptor = providerMap.value.get(created.provider);
+    if (!draft.mailbox_id.trim() && descriptor?.capabilities.includes("provision_inbox")) {
+      const provisioned = await api.mailProviderSetupAction(created.provider, "provision_inbox", {
+        config_id: created.id,
+        options: {},
+      });
+      if (provisioned.ok === false) throw new Error(String(provisioned.error || "创建厂商 Inbox 失败"));
+    }
+    const verified = await api.mailProviderSetupAction(created.provider, "status", { config_id: created.id });
+    if (verified.ok !== true) throw new Error(String(verified.error || "厂商邮箱验证失败"));
     showCreate.value = false;
-    message("success", "邮箱配置已创建，可在列表中设为当前邮箱");
+    message("success", `邮箱 ${String(verified.email || created.sender_email || created.config_name)} 已创建并验证`);
     await loadSettings();
-  } catch (error) { message("error", error instanceof Error ? error.message : "创建失败"); }
+  } catch (error) {
+    if (created && created.provider !== "tencent_agently") {
+      try { await api.deleteEmailConfig(created.id); }
+      catch { /* Keep the original provider error as the actionable message. */ }
+    }
+    message("error", error instanceof Error ? error.message : "创建失败");
+  }
   finally { saving.value = false; }
 }
 
@@ -301,13 +319,13 @@ onBeforeUnmount(() => {
         <template v-if="!isTencentDraft">
           <label>API Key<input v-model="draft.api_key" type="password" autocomplete="new-password" placeholder="保存在后端，不会回显" /></label>
           <label>API Base URL<input v-model="draft.base_url" :placeholder="String(selectedProvider?.default_base_url || 'https://...')" /></label>
-          <label>Mailbox ID<input v-model="draft.mailbox_id" :placeholder="isAgentMailDraft ? '可留空，创建后再生成 Inbox' : '厂商邮箱 ID'" /></label>
-          <label v-if="!isAgentMailDraft">路由映射 JSON<textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea></label>
+          <label>Mailbox ID<input v-model="draft.mailbox_id" :placeholder="canProvisionDraft ? '可留空，创建后再生成厂商 Inbox' : '厂商邮箱 ID'" /></label>
+          <label v-if="requiresRoutesDraft">路由映射 JSON<textarea v-model="draft.routes_json" rows="5" placeholder='{"send":"/mailboxes/{mailbox_id}/messages","list":"/..."}'></textarea></label>
           <label>邮箱地址<input v-model="draft.sender_email" placeholder="厂商邮箱地址" /></label>
         </template>
         <label>说明<textarea v-model="draft.description" rows="2" placeholder="可选"></textarea></label>
-        <p class="hint">{{ isTencentDraft ? "创建过程中会直接进入 OAuth 授权，授权成功后才生成邮箱。" : "保存后可在列表中设为全局当前邮箱。" }}</p>
-        <div class="actions end"><button type="button" @click="cancelCreate">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "处理中..." : (isTencentDraft ? "创建并授权" : "创建配置") }}</button></div>
+        <p class="hint">{{ isTencentDraft ? "创建过程中会直接进入 OAuth 授权，授权成功后才生成邮箱。" : (canProvisionDraft && !draft.mailbox_id.trim() ? "创建时会验证 API Key，并自动创建厂商 Inbox；成功后才生成邮箱。" : "创建时会连接厂商 API 验证凭证与 Mailbox；成功后才生成邮箱。") }}</p>
+        <div class="actions end"><button type="button" @click="cancelCreate">取消</button><button class="primary" type="submit" :disabled="saving">{{ saving ? "处理中..." : (isTencentDraft ? "创建并授权" : "创建并验证") }}</button></div>
       </template>
       <template v-else>
         <div class="creation-progress">

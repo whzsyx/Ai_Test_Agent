@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from src.application.mail.contracts import MailCapability, MailMessage, MailSendRequest, MailSendResult
 from src.infrastructure.mail.providers.rest_base import RestMailAdapterBase
@@ -27,7 +28,7 @@ class AgentMailAdapter(RestMailAdapterBase):
         }
 
     def _messages_path(self, record: "EmailConfigRecord") -> str:
-        return f"/v0/inboxes/{self._mailbox_id(record)}/messages"
+        return f"/v0/inboxes/{quote(self._mailbox_id(record), safe='')}/messages"
 
     def send(self, record: "EmailConfigRecord", request: MailSendRequest) -> MailSendResult:
         body: dict[str, Any] = {
@@ -55,7 +56,7 @@ class AgentMailAdapter(RestMailAdapterBase):
         return self._message(raw)
 
     def search_messages(self, record: "EmailConfigRecord", query: str, options: dict[str, Any] | None = None) -> list[MailMessage]:
-        params = {**(options or {}), "query": query}
+        params = {**(options or {}), "q": query}
         data = self._request("GET", record, self._messages_path(record) + "/search", params=params)
         return [self._message(item) for item in self._items(data, "messages")]
 
@@ -74,10 +75,20 @@ class AgentMailAdapter(RestMailAdapterBase):
         return MailSendResult(sent=True, provider=self.provider_key, from_email=record.sender_email, recipient_count=0, message_id=message_id)
 
     def download_attachment(self, record: "EmailConfigRecord", message_id: str, attachment_id: str) -> dict[str, Any]:
-        return self._request_binary(record, f"{self._messages_path(record)}/{message_id}/attachments/{attachment_id}")
+        data = self._request(
+            "GET",
+            record,
+            f"{self._messages_path(record)}/{quote(message_id, safe='')}/attachments/{quote(attachment_id, safe='')}",
+        )
+        payload = data.get("attachment", data) if isinstance(data, dict) else {}
+        url = payload.get("download_url") if isinstance(payload, dict) else ""
+        if not url:
+            raise RuntimeError("AgentMail did not return an attachment download URL.")
+        return self._download_url(record, str(url))
 
     def provision_inbox(self, record: "EmailConfigRecord", options: dict[str, Any] | None = None) -> dict[str, Any]:
-        data = self._request("POST", record, "/v0/inboxes", json_body=options or {})
+        body = {"display_name": record.config_name, **(options or {})}
+        data = self._request("POST", record, "/v0/inboxes", json_body=body)
         payload = data.get("inbox", data) if isinstance(data, dict) else {}
         return {
             "ok": True,
@@ -86,3 +97,28 @@ class AgentMailAdapter(RestMailAdapterBase):
             "email": payload.get("email") or payload.get("address"),
             "raw": payload,
         }
+
+    def status(self, record: "EmailConfigRecord") -> dict[str, Any]:
+        try:
+            data = self._request(
+                "GET",
+                record,
+                f"/v0/inboxes/{quote(self._mailbox_id(record), safe='')}",
+            )
+            payload = data.get("inbox", data) if isinstance(data, dict) else {}
+            return {
+                "ok": True,
+                "configured": True,
+                "provider": self.provider_key,
+                "capabilities": sorted(cap.value for cap in self.capabilities()),
+                "email": payload.get("email") if isinstance(payload, dict) else record.sender_email,
+                "error": "",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "configured": False,
+                "provider": self.provider_key,
+                "capabilities": sorted(cap.value for cap in self.capabilities()),
+                "error": str(exc),
+            }

@@ -81,14 +81,21 @@ Agent_Server/src/application/mail/mail_service.py
 | Provider | 接入类型 | 实现状态 |
 |---|---|---|
 | 腾讯 Agent Mail | `agently-cli` + OAuth | 原生适配；CLI 从服务器 PATH 查找，凭据目录按邮箱配置隔离 |
-| AgentMail | 官方 REST API | 原生适配；使用 `https://api.agentmail.to/v0/inboxes/{inbox_id}/...` |
-| Robotomail | REST | 独立配置型适配器；需填写厂商 Base URL、Mailbox ID 和 routes |
-| OpenMail | REST | 独立配置型适配器；需填写厂商 Base URL、Mailbox ID 和 routes |
-| Dead Simple Email | REST | 独立配置型适配器；需填写厂商 Base URL、Mailbox ID 和 routes |
+| AgentMail | 官方 REST API | 原生适配；使用 `https://api.agentmail.to/v0/inboxes/{inbox_id}/...`，支持发送、列表、读取、搜索、回复、转发、删除和附件 |
+| Robotomail | 官方 REST API | 原生适配；使用 `https://api.robotomail.com/v1/mailboxes/{id}/...`，按 RFC Message-ID 回复；官方未提供转发和消息删除接口 |
+| OpenMail | 官方 REST API | 原生适配；使用 `https://api.openmail.sh/v1/...`，发送请求自动携带 `Idempotency-Key`；官方未提供转发和消息删除接口 |
+| Dead Simple Email | 官方 REST API | 原生适配；使用 `https://api.deadsimple.email/v1/...`，支持发送、读取、回复、转发和附件；官方未提供消息删除接口 |
 | AgenticMail | 自托管 REST | 独立配置型适配器；需填写部署地址、Mailbox ID 和 routes |
 | AWS Agent Mailbox | HTTP API | 独立配置型适配器；需填写实际网关、Mailbox ID 和 routes |
 
-没有可靠公开协议的厂商不使用伪造固定 URL。配置型适配器要求明确提供路由映射，缺少配置时返回可读的配置错误。
+四家 REST 原生适配分别以官方文档和 OpenAPI 为准，不再要求用户填写 routes。AgenticMail 和 AWS Agent Mailbox 仍没有已确认的统一公开协议，因此继续使用显式路由映射，避免伪造固定 URL。
+
+官方协议来源：
+
+- OpenMail：<https://docs.openmail.sh/pages/welcome>
+- Dead Simple Email：<https://deadsimple.email/api-reference.html>
+- Robotomail：<https://robotomail.com/docs>
+- AgentMail：<https://docs.agentmail.to/welcome>
 
 路由映射示例：
 
