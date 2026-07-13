@@ -40,7 +40,9 @@ function selectPlugin(plugin: SettingsPluginDefinition) {
 
         <main class="settings-mainpanel">
           <Transition name="panel-fade" mode="out-in">
-            <component :is="activePlugin.component" :key="activePluginKey" :plugin="activePlugin" />
+            <KeepAlive>
+              <component :is="activePlugin.component" :key="activePluginKey" :plugin="activePlugin" />
+            </KeepAlive>
           </Transition>
         </main>
       </div>
