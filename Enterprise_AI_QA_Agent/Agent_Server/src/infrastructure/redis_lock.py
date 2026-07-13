@@ -16,8 +16,8 @@ class RedisLockManager:
         self,
         redis_url: str,
         *,
-        ttl_seconds: int = 600,
-        wait_seconds: float = 30.0,
+        ttl_seconds: int,
+        wait_seconds: float,
         client: Redis | None = None,
     ) -> None:
         self._redis_url = str(redis_url or "").strip()

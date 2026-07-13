@@ -501,11 +501,9 @@ class MySQLEmailConfigStore:
         )
 
     def _mailbox_config_dir(self, profile_key: str) -> Path:
-        configured = str(self._settings.agently_cli_config_root or "").strip()
-        if configured:
-            root = Path(configured).expanduser()
-        else:
-            root = Path(__file__).resolve().parents[2] / self._settings.data_dir / "agently_mail_profiles"
+        root = Path(self._settings.agently_cli_config_root).expanduser()
+        if not root.is_absolute():
+            root = Path(__file__).resolve().parents[2] / root
         path = (root / profile_key).resolve()
         path.mkdir(parents=True, exist_ok=True)
         return path

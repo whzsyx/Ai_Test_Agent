@@ -44,11 +44,11 @@ class Settings(BaseSettings):
     memgraph_password: str = ""
     llm_model_table: str = "llm_model_config"
     email_config_table: str = "system_email_config"
-    redis_url: str = "redis://127.0.0.1:6379/0"
-    agently_cli_config_root: str = ""
-    agently_auth_lock_ttl_seconds: int = 600
-    agently_auth_lock_wait_seconds: float = 30.0
-    agently_auth_check_interval_seconds: float = 300.0
+    redis_url: str
+    agently_cli_config_root: str
+    agently_auth_lock_ttl_seconds: int
+    agently_auth_lock_wait_seconds: float
+    agently_auth_check_interval_seconds: float
     memory_backend: str = "postgres"
     session_backend: str = "postgres"
     tool_job_backend: str = "postgres"
@@ -173,6 +173,14 @@ class Settings(BaseSettings):
     @classmethod
     def validate_agently_positive_seconds(cls, value: float) -> float:
         return max(0.1, value)
+
+    @field_validator("redis_url", "agently_cli_config_root")
+    @classmethod
+    def validate_agently_required_strings(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("Agent Mail Redis and credential path settings are required.")
+        return normalized
 
 
 @lru_cache(maxsize=1)
