@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { NModal } from "naive-ui";
+import { NModal, NDataTable } from "naive-ui";
 
 import { api } from "../../../services/api";
 import { t } from "../../../services/i18n";
@@ -32,11 +32,22 @@ const logsTarget = ref<DockerContainer | null>(null);
 const logsContent = ref("");
 const logsLoading = ref(false);
 
+const portsOpen = ref(false);
+const portsTarget = ref<DockerContainer | null>(null);
+const portsRows = ref<{ host: string; hostPort: string; containerPort: string; protocol: string }[]>([]);
+
 const tabs = computed<{ key: TabKey; label: string }[]>(() => [
   { key: "overview", label: t("docker.tab_overview") },
   { key: "images", label: t("docker.tab_images") },
   { key: "containers", label: t("docker.tab_containers") },
   { key: "templates", label: t("docker.tab_templates") },
+]);
+
+const portsColumns = computed(() => [
+  { title: t("docker.col_host"), key: "host", width: 140 },
+  { title: t("docker.col_host_port"), key: "hostPort", width: 100 },
+  { title: t("docker.col_container_port"), key: "containerPort", width: 120 },
+  { title: t("docker.col_protocol"), key: "protocol", width: 80 },
 ]);
 
 const environment = computed(() => overview.value?.environment);
@@ -149,6 +160,31 @@ async function openLogs(container: DockerContainer) {
   } finally {
     logsLoading.value = false;
   }
+}
+
+function openPorts(container: DockerContainer) {
+  if (!container.ports) return;
+  portsTarget.value = container;
+  portsRows.value = parsePorts(container.ports);
+  portsOpen.value = true;
+}
+
+function parsePorts(raw: string) {
+  const rows: { host: string; hostPort: string; containerPort: string; protocol: string }[] = [];
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  for (const part of parts) {
+    // Format: host:port->containerPort/protocol  or  port/protocol
+    const m = /^(.+?):(\d+)->(\d+)\/(\w+)$/.exec(part);
+    if (m) {
+      rows.push({ host: m[1], hostPort: m[2], containerPort: m[3], protocol: m[4].toUpperCase() });
+    } else {
+      const m2 = /^(\d+)\/(\w+)$/.exec(part);
+      if (m2) {
+        rows.push({ host: "-", hostPort: "-", containerPort: m2[1], protocol: m2[2].toUpperCase() });
+      }
+    }
+  }
+  return rows;
 }
 
 function formatBytes(text: string) {
@@ -386,7 +422,15 @@ function stateClass(state: string) {
                 {{ container.state }}
               </td>
               <td class="docker-col-status">{{ container.status }}</td>
-              <td class="docker-col-ports mono" :title="container.ports || undefined">{{ container.ports || "-" }}</td>
+              <td
+                class="docker-col-ports mono"
+                :class="{ 'is-clickable': container.ports }"
+                :title="container.ports || undefined"
+                @click="container.ports && openPorts(container)"
+              >
+                <span>{{ container.ports || "-" }}</span>
+                <i v-if="container.ports" class="fa-solid fa-expand docker-col-ports__icon"></i>
+              </td>
               <td class="align-right">
                 <div class="docker-row-actions">
                   <button
@@ -501,6 +545,24 @@ function stateClass(state: string) {
         <pre v-if="logsLoading" class="docker-logs-content">{{ t("docker.loading_logs") }}</pre>
         <pre v-else class="docker-logs-content">{{ logsContent }}</pre>
       </div>
+    </n-modal>
+
+    <!-- Ports modal -->
+    <n-modal
+      v-model:show="portsOpen"
+      preset="card"
+      :title="portsTarget ? t('docker.ports_title', { name: portsTarget.name || portsTarget.id.slice(0, 12) }) : t('docker.col_ports')"
+      style="width: min(720px, 92vw);"
+      :bordered="false"
+    >
+      <n-data-table
+        :columns="portsColumns"
+        :data="portsRows"
+        :bordered="true"
+        :single-line="false"
+        :max-height="420"
+        size="small"
+      />
     </n-modal>
   </section>
 </template>
@@ -739,6 +801,26 @@ function stateClass(state: string) {
   -webkit-box-orient: vertical;
   line-height: 1.5;
   white-space: normal;
+  position: relative;
+}
+
+.docker-col-ports.is-clickable {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.docker-col-ports.is-clickable:hover {
+  background: var(--surface-soft);
+}
+
+.docker-col-ports__icon {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .docker-state-dot {
