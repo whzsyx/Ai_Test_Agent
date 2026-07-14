@@ -66,7 +66,7 @@ const pairedAt = computed(() => {
 });
 const pairingExpiresAt = computed(() => formatDateTime(pairingSession.value?.expires_at));
 const pairingDestroyAt = computed(() => formatDateTime(pairingSession.value?.destroy_at));
-const pairingRemaining = computed(() => formatRemaining(pairingSession.value?.expires_at, clockNow.value));
+const pairingRemaining = computed(() => formatRemaining(pairingSession.value?.destroy_at, clockNow.value));
 const connectionSummaryItems = computed(() => {
   const config = selectedConfig.value;
   if (!config) return [];

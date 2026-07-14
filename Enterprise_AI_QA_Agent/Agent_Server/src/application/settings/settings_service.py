@@ -280,9 +280,9 @@ class SettingsService:
         self._prune_channel_pairing_sessions()
         session_id = secrets.token_urlsafe(24)
         install = strategy.start_pairing(session_id=session_id)
-        expire_in = int(install.get("expire_in") or 300)
+        expire_in = max(int(install.get("expire_in") or 300), 1)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire_in)
-        destroy_at = expires_at + timedelta(minutes=30)
+        destroy_at = expires_at
         session = {
             "session_id": session_id,
             "provider": install.get("provider") or strategy.provider,
@@ -393,7 +393,12 @@ class SettingsService:
             self._channel_pairing_sessions.save(session)
             return
         strategy = channel_strategy_factory.get(str(session.get("requested_domain") or session["domain"]))
-        result = strategy.poll_pairing(session)
+        try:
+            result = strategy.poll_pairing(session)
+        except httpx.HTTPError as exc:
+            session["message"] = f"Official pairing status check timed out or failed: {exc}"
+            self._channel_pairing_sessions.save(session)
+            return
         if result.get("poll_domain"):
             session["poll_domain"] = result["poll_domain"]
         if result.get("base_url"):

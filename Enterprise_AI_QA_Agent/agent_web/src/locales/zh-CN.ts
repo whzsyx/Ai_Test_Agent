@@ -1329,7 +1329,7 @@ export default {
   "channels.qr_empty": "点击生成二维码",
   "channels.qr_valid_until": "有效期至",
   "channels.qr_destroy_at": "销毁时间",
-  "channels.qr_remaining": "剩余",
+  "channels.qr_remaining": "距销毁剩余",
   "channels.qr_remaining_minutes": "{minutes}分{seconds}秒",
   "channels.qr_remaining_seconds": "{seconds}秒",
   "channels.pairing_status": "扫码状态",

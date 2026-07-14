@@ -592,7 +592,7 @@ export default {
   "channels.qr_empty": "Generate a QR code",
   "channels.qr_valid_until": "Valid until",
   "channels.qr_destroy_at": "Destroyed at",
-  "channels.qr_remaining": "Remaining",
+  "channels.qr_remaining": "Until destroy",
   "channels.qr_remaining_minutes": "{minutes}m {seconds}s",
   "channels.qr_remaining_seconds": "{seconds}s",
   "channels.pairing_status": "Pairing status",
