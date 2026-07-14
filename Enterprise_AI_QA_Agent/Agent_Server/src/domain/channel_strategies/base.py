@@ -155,6 +155,18 @@ class ChannelStrategy:
     def build_connected_credentials(self, result: dict[str, Any]) -> dict[str, str]:
         return self.clean_credentials(result.get("credentials"))
 
+    def delete_official_bot(
+        self,
+        *,
+        public_config: dict[str, Any],
+        credentials: dict[str, str],
+    ) -> dict[str, Any]:
+        return {
+            "attempted": False,
+            "succeeded": False,
+            "message": f"{self.domain} does not expose a verified official bot deletion API in the current integration.",
+        }
+
     @staticmethod
     def _is_qr_paired(public_config: dict[str, Any]) -> bool:
         return (

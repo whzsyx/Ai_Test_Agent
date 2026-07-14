@@ -228,10 +228,20 @@ class SettingsService:
         return self._channel_config_store.to_public(self._channel_config_store.update(config_id, payload))
 
     def delete_channel_config(self, config_id: int) -> ChannelConfigActionResponse:
+        existing = self._channel_config_store.get_by_id(config_id)
+        strategy = channel_strategy_factory.get(existing.domain)
+        official_result = strategy.delete_official_bot(
+            public_config=existing.public_config,
+            credentials=self._channel_config_store.credentials_for(existing),
+        )
         deleted = self._channel_config_store.delete(config_id)
+        official_message = str(official_result.get("message") or "").strip()
+        message = f"Communication channel '{deleted.config_name}' was deleted."
+        if official_message:
+            message += f" {official_message}"
         return ChannelConfigActionResponse(
             ok=True,
-            message=f"Communication channel '{deleted.config_name}' was deleted.",
+            message=message,
             item=None,
         )
 

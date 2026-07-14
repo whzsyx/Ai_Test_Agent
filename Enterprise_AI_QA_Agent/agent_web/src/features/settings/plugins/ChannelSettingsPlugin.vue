@@ -32,6 +32,7 @@ const loading = ref(false);
 const saving = ref(false);
 const deleting = ref(false);
 const pairing = ref(false);
+const setupMode = ref<"scan" | "existing">("scan");
 const pairingSession = ref<ChannelPairingSessionPublic | null>(null);
 const qrDataUrl = ref("");
 const pairingPollTimer = ref<number | null>(null);
@@ -47,6 +48,7 @@ const hasStoredSecret = computed(() => {
   return current.credential_fields?.[selectedDefinition.value.secretField] === true;
 });
 const canPairByQr = computed(() => selectedStrategy.value.supportsPairing);
+const activeSetupMode = computed(() => (canPairByQr.value ? setupMode.value : "existing"));
 const panelEyebrow = computed(() => t(selectedStrategy.value.panelEyebrowKey));
 const manualFields = computed(() => selectedStrategy.value.manualFields(hasStoredSecret.value));
 const pairedDevice = computed(() => {
@@ -305,6 +307,7 @@ watch(selectedDomain, () => {
   stopPairingPoll();
   pairingSession.value = null;
   qrDataUrl.value = "";
+  setupMode.value = canPairByQr.value ? "scan" : "existing";
   applyConfigToForm();
 });
 onMounted(loadSettings);
@@ -318,11 +321,6 @@ onBeforeUnmount(stopPairingPoll);
         <h3>{{ t("channels.title") }}</h3>
         <p>{{ t("channels.desc") }}</p>
       </div>
-    </div>
-
-    <div class="channel-settings__notice">
-      <i class="fa-solid fa-circle-info"></i>
-      <span>{{ t("channels.notice") }}</span>
     </div>
 
     <div class="channel-settings__layout">
@@ -382,17 +380,56 @@ onBeforeUnmount(stopPairingPoll);
               </div>
             </div>
           </section>
+
+          <section class="channel-settings__summary-card channel-settings__delete-card">
+            <div class="channel-settings__summary-head">
+              <strong>{{ t("channels.delete_bot_title") }}</strong>
+              <small>{{ t("channels.delete_bot_hint") }}</small>
+            </div>
+            <button
+              type="button"
+              class="settings-model-card__action settings-model-card__action-danger"
+              :disabled="deleting"
+              @click="deleteChannel"
+            >
+              <i class="fa-solid fa-trash-can"></i>
+              <span>{{ deleting ? t("channels.deleting") : t("channels.delete_bot") }}</span>
+            </button>
+          </section>
         </div>
 
-        <div v-if="canPairByQr" class="channel-settings__pairing">
+        <div v-if="!selectedConfig" class="channel-settings__setup-switch">
+          <button
+            type="button"
+            class="channel-settings__setup-option channel-settings__setup-option-scan"
+            :class="{ active: activeSetupMode === 'scan' }"
+            :disabled="!canPairByQr"
+            @click="setupMode = 'scan'"
+          >
+            <i class="fa-solid fa-qrcode"></i>
+            <span>
+              <strong>{{ t("channels.setup_scan_new") }}</strong>
+              <small>{{ canPairByQr ? t("channels.setup_scan_new_hint") : t("channels.qq_no_qr") }}</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            class="channel-settings__setup-option channel-settings__setup-option-existing"
+            :class="{ active: activeSetupMode === 'existing' }"
+            @click="setupMode = 'existing'"
+          >
+            <i class="fa-solid fa-robot"></i>
+            <span>
+              <strong>{{ t("channels.setup_existing") }}</strong>
+              <small>{{ t("channels.setup_existing_hint") }}</small>
+            </span>
+          </button>
+        </div>
+
+        <div v-if="!selectedConfig && activeSetupMode === 'scan' && canPairByQr" class="channel-settings__pairing">
           <div class="channel-settings__pairing-main">
             <strong>{{ t(selectedStrategy.pairingTitleKey) }}</strong>
             <p>{{ t(selectedStrategy.pairingDescriptionKey) }}</p>
-            <div v-if="pairedDevice" class="channel-settings__paired">
-              <i class="fa-solid fa-circle-check"></i>
-              <span>{{ t("channels.bound_device", { device: pairedDevice }) }}</span>
-              <small v-if="pairedAt">{{ pairedAt }}</small>
-            </div>
             <button type="button" class="settings-model-card__action settings-model-card__action-activate" :disabled="pairing" @click="startPairing">
               <i class="fa-solid fa-qrcode"></i>
               <span>{{ pairing ? t("channels.qr_generating") : t("channels.qr_start") }}</span>
@@ -408,14 +445,17 @@ onBeforeUnmount(stopPairingPoll);
           </div>
 
           <div v-if="pairingSession" class="channel-settings__pairing-status">
-            <span>{{ t("channels.pairing_status") }}：{{ t(`channels.pairing_${pairingSession.status}`) }}</span>
+            <span>{{ t("channels.pairing_status") }} - {{ t(`channels.pairing_${pairingSession.status}`) }}</span>
             <small v-if="pairingSession.message">{{ pairingSession.message }}</small>
             <a :href="pairingSession.pairing_url" target="_blank" rel="noreferrer">{{ t("channels.open_pairing_link") }}</a>
           </div>
         </div>
 
-        <details class="channel-settings__advanced" :open="!canPairByQr">
-          <summary>{{ t(selectedStrategy.manualSummaryKey) }}</summary>
+        <section v-if="!selectedConfig && activeSetupMode === 'existing'" class="channel-settings__existing">
+          <div class="channel-settings__existing-head">
+            <strong>{{ t("channels.configure_existing_bot") }}</strong>
+            <span>{{ t(selectedStrategy.manualSummaryKey) }}</span>
+          </div>
 
           <div class="channel-settings__form">
             <label class="channel-settings__field">
@@ -465,14 +505,6 @@ onBeforeUnmount(stopPairingPoll);
               </label>
             </template>
 
-            <label v-if="selectedConfig && hasStoredSecret" class="channel-settings__switch channel-settings__switch-danger">
-              <input v-model="form.clear_credentials" type="checkbox" />
-              <span>
-                <strong>{{ t("channels.clear_credentials") }}</strong>
-                <small>{{ t("channels.clear_credentials_desc") }}</small>
-              </span>
-            </label>
-
             <label class="channel-settings__field channel-settings__field-full">
               <span>{{ t("channels.description") }}</span>
               <textarea v-model="form.description" rows="3" :placeholder="t('channels.description_ph')"></textarea>
@@ -484,18 +516,8 @@ onBeforeUnmount(stopPairingPoll);
               <i class="fa-solid fa-floppy-disk"></i>
               <span>{{ saving ? t("channels.saving") : t("channels.save") }}</span>
             </button>
-            <button
-              v-if="selectedConfig"
-              type="button"
-              class="settings-model-card__action settings-model-card__action-danger"
-              :disabled="deleting || saving"
-              @click="deleteChannel"
-            >
-              <i class="fa-solid fa-trash-can"></i>
-              <span>{{ deleting ? t("channels.deleting") : t("channels.delete") }}</span>
-            </button>
           </div>
-        </details>
+        </section>
       </div>
     </div>
   </section>
@@ -716,6 +738,89 @@ onBeforeUnmount(stopPairingPoll);
   font-size: 12px;
 }
 
+.channel-settings__delete-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.channel-settings__setup-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.channel-settings__setup-option {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 92px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--surface, #ffffff);
+  color: var(--text, #0f172a);
+  text-align: left;
+  padding: 14px;
+  cursor: pointer;
+}
+
+.channel-settings__setup-option.active {
+  border-color: rgba(37, 99, 235, 0.5);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.channel-settings__setup-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.channel-settings__setup-option i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
+.channel-settings__setup-option-scan i {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+
+.channel-settings__setup-option-existing i {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+
+.channel-settings__setup-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.channel-settings__setup-option small,
+.channel-settings__existing-head span {
+  color: var(--muted, #64748b);
+  line-height: 1.5;
+}
+
+.channel-settings__existing {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--surface-muted, #f8fafc);
+  padding: 14px;
+}
+
+.channel-settings__existing-head {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
 .channel-settings__pairing {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
@@ -928,7 +1033,8 @@ onBeforeUnmount(stopPairingPoll);
   }
 
   .channel-settings__connected,
-  .channel-settings__summary-grid {
+  .channel-settings__summary-grid,
+  .channel-settings__setup-switch {
     grid-template-columns: 1fr;
   }
 

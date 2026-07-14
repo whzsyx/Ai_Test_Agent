@@ -194,6 +194,9 @@ class MySQLChannelConfigStore:
             conn.commit()
         return deleted
 
+    def credentials_for(self, record: ChannelConfigRecord) -> dict[str, str]:
+        return self._codec.decrypt(record.credential_ciphertext)
+
     def to_public(self, record: ChannelConfigRecord) -> ChannelConfigPublic:
         credential_flags = self._credential_flags(record)
         status = compute_channel_status(
