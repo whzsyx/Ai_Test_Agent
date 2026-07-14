@@ -90,8 +90,18 @@ const approvalModeOptions = [
 const toast = useMessage();
 const loading = ref(false);
 const saving = ref(false);
-const draft = ref<ChannelAdvancedSettings>(defaultAdvancedSettings());
-const listText = reactive<Record<string, string>>({});
+const draft = reactive<ChannelAdvancedSettings>(defaultAdvancedSettings());
+const listText = reactive<Record<PlatformKey, {
+  users: string;
+  groups: string;
+  approvers: string;
+  admins: string;
+  self: string;
+}>>({
+  qq: { users: "", groups: "", approvers: "", admins: "", self: "" },
+  feishu: { users: "", groups: "", approvers: "", admins: "", self: "" },
+  weixin: { users: "", groups: "", approvers: "", admins: "", self: "" },
+});
 
 const connectionOptions = computed(() => props.configs.map((item) => ({
   value: String(item.id),
@@ -115,11 +125,11 @@ function close() {
 async function loadAdvancedSettings() {
   loading.value = true;
   try {
-    draft.value = mergeAdvancedSettings(await api.getChannelAdvancedSettings());
+    replaceDraft(mergeAdvancedSettings(await api.getChannelAdvancedSettings()));
     syncListTextFromDraft();
   } catch (error) {
     toast.error(error instanceof Error ? error.message : t("channels.advanced_load_failed"));
-    draft.value = defaultAdvancedSettings();
+    replaceDraft(defaultAdvancedSettings());
     syncListTextFromDraft();
   } finally {
     loading.value = false;
@@ -130,7 +140,7 @@ async function saveAdvancedSettings() {
   saving.value = true;
   try {
     syncDraftListsFromText();
-    draft.value = mergeAdvancedSettings(await api.updateChannelAdvancedSettings(draft.value));
+    replaceDraft(mergeAdvancedSettings(await api.updateChannelAdvancedSettings(snapshotDraft())));
     syncListTextFromDraft();
     toast.success(t("channels.advanced_save_success"));
     emit("update:show", false);
@@ -142,35 +152,35 @@ async function saveAdvancedSettings() {
 }
 
 function setAccessMode(mode: "trusted" | "everyone") {
-  draft.value.allowlist.enabled = true;
-  draft.value.allowlist.allow_all = mode === "everyone";
+  draft.allowlist.enabled = true;
+  draft.allowlist.allow_all = mode === "everyone";
 }
 
 function addRoute() {
-  draft.value.routes.push(defaultRoute());
+  draft.routes.push(defaultRoute());
 }
 
 function removeRoute(index: number) {
-  draft.value.routes.splice(index, 1);
+  draft.routes.splice(index, 1);
 }
 
 function syncListTextFromDraft() {
   for (const platform of accessPlatforms) {
-    listText[platform.users] = stringifyList(draft.value.allowlist[platform.users]);
-    listText[platform.groups] = stringifyList(draft.value.allowlist[platform.groups]);
-    listText[platform.approvers] = stringifyList(draft.value.allowlist[platform.approvers]);
-    listText[platform.admins] = stringifyList(draft.value.allowlist[platform.admins]);
-    listText[`self_${platform.key}`] = stringifyList(draft.value.self_user_ids[platform.key]);
+    listText[platform.key].users = stringifyList(draft.allowlist[platform.users]);
+    listText[platform.key].groups = stringifyList(draft.allowlist[platform.groups]);
+    listText[platform.key].approvers = stringifyList(draft.allowlist[platform.approvers]);
+    listText[platform.key].admins = stringifyList(draft.allowlist[platform.admins]);
+    listText[platform.key].self = stringifyList(draft.self_user_ids[platform.key]);
   }
 }
 
 function syncDraftListsFromText() {
   for (const platform of accessPlatforms) {
-    draft.value.allowlist[platform.users] = parseList(listText[platform.users]);
-    draft.value.allowlist[platform.groups] = parseList(listText[platform.groups]);
-    draft.value.allowlist[platform.approvers] = parseList(listText[platform.approvers]);
-    draft.value.allowlist[platform.admins] = parseList(listText[platform.admins]);
-    draft.value.self_user_ids[platform.key] = parseList(listText[`self_${platform.key}`]);
+    draft.allowlist[platform.users] = parseList(listText[platform.key].users);
+    draft.allowlist[platform.groups] = parseList(listText[platform.key].groups);
+    draft.allowlist[platform.approvers] = parseList(listText[platform.key].approvers);
+    draft.allowlist[platform.admins] = parseList(listText[platform.key].admins);
+    draft.self_user_ids[platform.key] = parseList(listText[platform.key].self);
   }
 }
 
@@ -254,6 +264,24 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
     routes: Array.isArray(source.routes) ? source.routes.map((route) => ({ ...defaultRoute(), ...route })) : [],
   };
 }
+
+function replaceDraft(next: ChannelAdvancedSettings) {
+  const normalized = mergeAdvancedSettings(next);
+  draft.allowlist = normalized.allowlist;
+  draft.max_steps = normalized.max_steps;
+  draft.debounce_ms = normalized.debounce_ms;
+  draft.queue_mode = normalized.queue_mode;
+  draft.queue_cap = normalized.queue_cap;
+  draft.queue_drop = normalized.queue_drop;
+  draft.ignore_self_messages = normalized.ignore_self_messages;
+  draft.self_user_ids = normalized.self_user_ids;
+  draft.pairing = normalized.pairing;
+  draft.routes = normalized.routes;
+}
+
+function snapshotDraft(): ChannelAdvancedSettings {
+  return JSON.parse(JSON.stringify(draft)) as ChannelAdvancedSettings;
+}
 </script>
 
 <template>
@@ -261,20 +289,21 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
     :show="show"
     class="channel-advanced-modal-shell"
     :mask-closable="!saving"
+    preset="card"
+    :bordered="false"
+    :segmented="{ content: true, footer: true }"
     transform-origin="center"
     @update:show="emit('update:show', $event)"
   >
-    <section class="channel-advanced-modal">
+    <template #header>
       <header class="channel-advanced-modal__head">
         <div>
           <span>{{ t("channels.advanced_eyebrow") }}</span>
           <h3>{{ t("channels.advanced_title") }}</h3>
           <p>{{ t("channels.advanced_desc") }}</p>
         </div>
-        <button type="button" class="channel-advanced-modal__close" :disabled="saving" @click="close">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
       </header>
+    </template>
 
       <div class="channel-advanced-modal__body" :aria-busy="loading">
         <section class="channel-advanced-panel">
@@ -323,11 +352,11 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
               <strong>{{ t(platform.labelKey) }}</strong>
               <label>
                 <span>{{ t("channels.advanced_users") }}</span>
-                <textarea v-model="listText[platform.users]" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
+                <textarea v-model="listText[platform.key].users" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
               </label>
               <label>
                 <span>{{ t("channels.advanced_groups") }}</span>
-                <textarea v-model="listText[platform.groups]" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
+                <textarea v-model="listText[platform.key].groups" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
               </label>
             </article>
           </div>
@@ -345,11 +374,11 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
                 <strong>{{ t(platform.labelKey) }}</strong>
                 <label>
                   <span>{{ t("channels.advanced_approvers") }}</span>
-                  <textarea v-model="listText[platform.approvers]" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
+                  <textarea v-model="listText[platform.key].approvers" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
                 </label>
                 <label>
                   <span>{{ t("channels.advanced_admins") }}</span>
-                  <textarea v-model="listText[platform.admins]" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
+                  <textarea v-model="listText[platform.key].admins" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
                 </label>
               </article>
             </div>
@@ -408,7 +437,7 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
               <strong>{{ t(platform.labelKey) }}</strong>
               <label>
                 <span>{{ t("channels.advanced_self_user_ids") }}</span>
-                <textarea v-model="listText[`self_${platform.key}`]" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
+                <textarea v-model="listText[platform.key].self" rows="3" :placeholder="t('channels.advanced_list_ph')"></textarea>
               </label>
             </article>
           </div>
@@ -507,13 +536,14 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
         </section>
       </div>
 
+      <template #footer>
       <footer class="channel-advanced-modal__foot">
         <NButton quaternary :disabled="saving" @click="close">{{ t("common.cancel") }}</NButton>
         <NButton type="primary" :loading="saving" :disabled="loading" @click="saveAdvancedSettings">
           {{ t("channels.advanced_save") }}
         </NButton>
       </footer>
-    </section>
+      </template>
   </NModal>
 </template>
 
@@ -522,22 +552,12 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
   width: min(1120px, calc(100vw - 36px));
 }
 
-.channel-advanced-modal {
-  overflow: hidden;
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: 12px;
-  background: var(--surface, #ffffff);
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
-}
-
 .channel-advanced-modal__head,
 .channel-advanced-modal__foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--border, #e2e8f0);
 }
 
 .channel-advanced-modal__head span {
@@ -559,26 +579,11 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
   line-height: 1.55;
 }
 
-.channel-advanced-modal__close,
 .channel-advanced-route__head button {
   border: 0;
   background: transparent;
   color: var(--muted, #64748b);
   cursor: pointer;
-}
-
-.channel-advanced-modal__close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  font-size: 18px;
-}
-
-.channel-advanced-modal__close:hover {
-  background: var(--surface-muted, #f8fafc);
 }
 
 .channel-advanced-modal__body {
@@ -587,14 +592,11 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
   flex-direction: column;
   gap: 16px;
   overflow: auto;
-  padding: 18px 20px;
   background: color-mix(in srgb, var(--surface-muted, #f8fafc) 68%, transparent);
 }
 
 .channel-advanced-modal__foot {
   justify-content: flex-end;
-  border-top: 1px solid var(--border, #e2e8f0);
-  border-bottom: 0;
 }
 
 .channel-advanced-panel,
@@ -724,6 +726,9 @@ function mergeAdvancedSettings(value: Partial<ChannelAdvancedSettings> | null | 
   font: inherit;
   outline: none;
   padding: 10px 11px;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .channel-advanced-platform textarea {
