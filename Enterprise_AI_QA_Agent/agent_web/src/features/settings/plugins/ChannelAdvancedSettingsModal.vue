@@ -288,6 +288,7 @@ function snapshotDraft(): ChannelAdvancedSettings {
   <NModal
     :show="show"
     class="channel-advanced-modal-shell"
+    style="width: min(1120px, calc(100vw - 48px)); max-width: 1120px;"
     :mask-closable="!saving"
     preset="card"
     :bordered="false"
