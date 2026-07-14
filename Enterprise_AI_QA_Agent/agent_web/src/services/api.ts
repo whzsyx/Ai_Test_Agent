@@ -5,6 +5,7 @@ import type {
   ApiDocImportUrlRequest,
   ApiDocUploadRequest,
   ApiDocUpdateRequest,
+  ChannelAdvancedSettings,
   ChannelConfigActionResponse,
   ChannelConfigCreateRequest,
   ChannelConfigPublic,
@@ -281,6 +282,15 @@ export const api = {
   },
   listChannelConfigs(): Promise<ChannelConfigPublic[]> {
     return request("/api/v1/settings/channels");
+  },
+  getChannelAdvancedSettings(): Promise<ChannelAdvancedSettings> {
+    return request("/api/v1/settings/channels/advanced");
+  },
+  updateChannelAdvancedSettings(payload: ChannelAdvancedSettings): Promise<ChannelAdvancedSettings> {
+    return request("/api/v1/settings/channels/advanced", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
   },
   createChannelConfig(payload: ChannelConfigCreateRequest): Promise<ChannelConfigPublic> {
     return request("/api/v1/settings/channels", {

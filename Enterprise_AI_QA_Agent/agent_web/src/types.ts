@@ -439,6 +439,60 @@ export interface ChannelPairingSessionPublic {
   item?: ChannelConfigPublic | null;
 }
 
+export interface ChannelAdvancedAllowlist {
+  enabled: boolean;
+  allow_all: boolean;
+  qq_users: string[];
+  feishu_users: string[];
+  weixin_users: string[];
+  qq_groups: string[];
+  feishu_groups: string[];
+  weixin_groups: string[];
+  qq_approvers: string[];
+  feishu_approvers: string[];
+  weixin_approvers: string[];
+  qq_admins: string[];
+  feishu_admins: string[];
+  weixin_admins: string[];
+}
+
+export interface ChannelAdvancedSelfUserIds {
+  qq: string[];
+  feishu: string[];
+  weixin: string[];
+}
+
+export interface ChannelAdvancedPairing {
+  enabled: boolean;
+  request_ttl_minutes: number;
+  max_pending_per_platform: number;
+}
+
+export interface ChannelAdvancedRoute {
+  connection_id: string;
+  platform: "" | ChannelDomain | string;
+  chat_type: "" | "dm" | "group" | "guild" | "direct" | "thread" | string;
+  chat_id: string;
+  user_id: string;
+  thread_id: string;
+  model: string;
+  tool_approval_mode: "" | "ask" | "auto" | "yolo" | "inherit" | string;
+  workspace_root: string;
+}
+
+export interface ChannelAdvancedSettings {
+  allowlist: ChannelAdvancedAllowlist;
+  max_steps: number;
+  debounce_ms: number;
+  queue_mode: "steer" | "followup" | "collect" | "interrupt" | string;
+  queue_cap: number;
+  queue_drop: "summarize" | "old" | "new" | string;
+  ignore_self_messages: boolean;
+  self_user_ids: ChannelAdvancedSelfUserIds;
+  pairing: ChannelAdvancedPairing;
+  routes: ChannelAdvancedRoute[];
+}
+
 // --- Agent Mailbox types ---------------------------------------------------
 
 export type MailboxProviderKey = string;

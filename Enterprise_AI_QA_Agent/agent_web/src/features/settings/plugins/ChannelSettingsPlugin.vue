@@ -9,6 +9,7 @@ import {
   createEmptyChannelForm,
   getChannelStrategy,
 } from "../channelStrategies";
+import ChannelAdvancedSettingsModal from "./ChannelAdvancedSettingsModal.vue";
 import type { ChannelForm } from "../channelStrategies";
 import { api } from "../../../services/api";
 import { t } from "../../../services/i18n";
@@ -32,6 +33,7 @@ const loading = ref(false);
 const saving = ref(false);
 const deleting = ref(false);
 const pairing = ref(false);
+const advancedOpen = ref(false);
 const setupMode = ref<"scan" | "existing">("scan");
 const pairingSession = ref<ChannelPairingSessionPublic | null>(null);
 const qrDataUrl = ref("");
@@ -349,9 +351,15 @@ onBeforeUnmount(stopPairingPoll);
             <h4>{{ t(selectedDefinition.labelKey) }}</h4>
             <p>{{ t(selectedDefinition.summaryKey) }}</p>
           </div>
-          <span class="channel-settings__status" :class="statusClass(selectedConfig?.status)">
-            {{ statusLabel(selectedDomain, selectedConfig) }}
-          </span>
+          <div class="channel-settings__panel-tools">
+            <button type="button" class="channel-settings__advanced-button" @click="advancedOpen = true">
+              <i class="fa-solid fa-sliders"></i>
+              <span>{{ t("channels.advanced_title") }}</span>
+            </button>
+            <span class="channel-settings__status" :class="statusClass(selectedConfig?.status)">
+              {{ statusLabel(selectedDomain, selectedConfig) }}
+            </span>
+          </div>
         </div>
 
         <div v-if="selectedConfig" class="channel-settings__connected">
@@ -520,6 +528,8 @@ onBeforeUnmount(stopPairingPoll);
         </section>
       </div>
     </div>
+
+    <ChannelAdvancedSettingsModal v-model:show="advancedOpen" :configs="configs" />
   </section>
 </template>
 
@@ -634,6 +644,31 @@ onBeforeUnmount(stopPairingPoll);
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 18px;
+}
+
+.channel-settings__panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.channel-settings__advanced-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 7px 11px;
+}
+
+.channel-settings__advanced-button:hover {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.12);
 }
 
 .channel-settings__eyebrow {
@@ -1051,6 +1086,15 @@ onBeforeUnmount(stopPairingPoll);
   .channel-settings__actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .channel-settings__panel-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channel-settings__advanced-button {
+    justify-content: center;
   }
 }
 </style>

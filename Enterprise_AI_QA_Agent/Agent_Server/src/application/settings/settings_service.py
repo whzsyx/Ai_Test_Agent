@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
 import secrets
 from time import perf_counter
 
@@ -15,6 +17,7 @@ from src.infrastructure.channel_config_store import MySQLChannelConfigStore
 from src.infrastructure.email_config_store import AGENT_MAIL_PROVIDERS, MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
 from src.schemas.channel_config import (
+    ChannelAdvancedSettings,
     ChannelConfigActionResponse,
     ChannelConfigCreateRequest,
     ChannelPairingSessionPublic,
@@ -245,6 +248,26 @@ class SettingsService:
             item=None,
         )
 
+    def get_channel_advanced_settings(self) -> ChannelAdvancedSettings:
+        if not _CHANNEL_ADVANCED_SETTINGS_FILE.exists():
+            return ChannelAdvancedSettings()
+        try:
+            data = json.loads(_CHANNEL_ADVANCED_SETTINGS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        return ChannelAdvancedSettings.model_validate(data)
+
+    def update_channel_advanced_settings(self, payload: ChannelAdvancedSettings) -> ChannelAdvancedSettings:
+        data = payload.model_dump(mode="json")
+        _CHANNEL_ADVANCED_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CHANNEL_ADVANCED_SETTINGS_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return ChannelAdvancedSettings.model_validate(data)
+
     def start_channel_pairing(
         self,
         domain: str,
@@ -433,3 +456,6 @@ class SettingsService:
                 session["status"] = "expired"
             if now - expires_at > timedelta(minutes=30):
                 self._channel_pairing_sessions.pop(session_id, None)
+
+
+_CHANNEL_ADVANCED_SETTINGS_FILE = Path(__file__).resolve().parents[3] / "src" / "data" / "channel_advanced_settings.json"

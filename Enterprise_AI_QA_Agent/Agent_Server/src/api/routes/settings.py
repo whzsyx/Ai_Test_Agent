@@ -8,7 +8,12 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from src.schemas.channel_config import ChannelConfigCreateRequest, ChannelConfigUpdateRequest, ChannelPairingStartRequest
+from src.schemas.channel_config import (
+    ChannelAdvancedSettings,
+    ChannelConfigCreateRequest,
+    ChannelConfigUpdateRequest,
+    ChannelPairingStartRequest,
+)
 from src.schemas.email_config import EmailConfigCreateRequest, EmailConfigUpdateRequest
 from src.schemas.settings import ModelConfigUpdateRequest
 
@@ -102,6 +107,16 @@ async def delete_email_config(config_id: int, request: Request):
 @router.get("/channels")
 async def list_channel_configs(request: Request):
     return request.app.state.settings_service.list_channel_configs()
+
+
+@router.get("/channels/advanced")
+async def get_channel_advanced_settings(request: Request):
+    return request.app.state.settings_service.get_channel_advanced_settings()
+
+
+@router.put("/channels/advanced")
+async def update_channel_advanced_settings(payload: ChannelAdvancedSettings, request: Request):
+    return request.app.state.settings_service.update_channel_advanced_settings(payload)
 
 
 @router.post("/channels")
