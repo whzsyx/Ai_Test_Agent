@@ -10,8 +10,11 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.schemas.channel_config import (
     ChannelAdvancedSettings,
+    ChannelGatewaySessionReleaseRequest,
+    ChannelInboundMessage,
     ChannelConfigCreateRequest,
     ChannelConfigUpdateRequest,
+    ChannelPairingApproveRequest,
     ChannelPairingStartRequest,
 )
 from src.schemas.email_config import EmailConfigCreateRequest, EmailConfigUpdateRequest
@@ -117,6 +120,29 @@ async def get_channel_advanced_settings(request: Request):
 @router.put("/channels/advanced")
 async def update_channel_advanced_settings(payload: ChannelAdvancedSettings, request: Request):
     return request.app.state.settings_service.update_channel_advanced_settings(payload)
+
+
+@router.post("/channels/gateway/evaluate")
+async def evaluate_channel_inbound(payload: ChannelInboundMessage, request: Request):
+    return request.app.state.settings_service.evaluate_channel_inbound(payload)
+
+
+@router.get("/channels/gateway/pairing")
+async def list_channel_pairing_requests(request: Request):
+    return request.app.state.settings_service.list_channel_pairing_requests()
+
+
+@router.post("/channels/gateway/pairing/approve")
+async def approve_channel_pairing(payload: ChannelPairingApproveRequest, request: Request):
+    try:
+        return request.app.state.settings_service.approve_channel_pairing(payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Pairing request not found or expired.") from exc
+
+
+@router.post("/channels/gateway/session/release")
+async def release_channel_gateway_session(payload: ChannelGatewaySessionReleaseRequest, request: Request):
+    return request.app.state.settings_service.release_channel_session(payload)
 
 
 @router.post("/channels")

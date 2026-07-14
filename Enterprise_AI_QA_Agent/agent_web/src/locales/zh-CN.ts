@@ -151,7 +151,7 @@ export default {
   "settings.integrations": "管理平台接入",
   "settings.channels": "通讯渠道设置",
   "settings.storage": "存储设置",
-  "settings.docker": "镜像+容器管理",
+  "settings.docker": "镜像与容器管理",
   "settings.about": "关于系统",
   "settings.save": "保存通用设置",
   "settings.reset": "恢复默认",
@@ -432,7 +432,7 @@ export default {
   "storage.developing": "模块开发中...",
 
   // Docker Management
-  "docker.title": "镜像 + 容器管理",
+  "docker.title": "镜像与容器管理",
   "docker.desc": "检测当前运行环境是否具备系统所需的 Docker 镜像，并支持镜像拉取、容器启停与一键创建容器。",
   "docker.refresh": "刷新",
   "docker.status_cli": "Docker CLI",

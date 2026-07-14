@@ -6,11 +6,17 @@ import type {
   ApiDocUploadRequest,
   ApiDocUpdateRequest,
   ChannelAdvancedSettings,
+  ChannelGatewayDecision,
+  ChannelGatewaySessionReleaseRequest,
+  ChannelGatewaySessionReleaseResponse,
+  ChannelInboundMessage,
   ChannelConfigActionResponse,
   ChannelConfigCreateRequest,
   ChannelConfigPublic,
   ChannelConfigUpdateRequest,
   ChannelDomain,
+  ChannelPairingApproveRequest,
+  ChannelPairingRequestPublic,
   ChannelPairingSessionPublic,
   ChannelPairingStartRequest,
   ConversationResponse,
@@ -289,6 +295,27 @@ export const api = {
   updateChannelAdvancedSettings(payload: ChannelAdvancedSettings): Promise<ChannelAdvancedSettings> {
     return request("/api/v1/settings/channels/advanced", {
       method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  evaluateChannelInbound(payload: ChannelInboundMessage): Promise<ChannelGatewayDecision> {
+    return request("/api/v1/settings/channels/gateway/evaluate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  listChannelPairingRequests(): Promise<ChannelPairingRequestPublic[]> {
+    return request("/api/v1/settings/channels/gateway/pairing");
+  },
+  approveChannelPairing(payload: ChannelPairingApproveRequest): Promise<ChannelPairingRequestPublic> {
+    return request("/api/v1/settings/channels/gateway/pairing/approve", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  releaseChannelGatewaySession(payload: ChannelGatewaySessionReleaseRequest): Promise<ChannelGatewaySessionReleaseResponse> {
+    return request("/api/v1/settings/channels/gateway/session/release", {
+      method: "POST",
       body: JSON.stringify(payload),
     });
   },

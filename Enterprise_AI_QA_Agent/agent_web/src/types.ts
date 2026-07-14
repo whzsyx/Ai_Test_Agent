@@ -494,6 +494,90 @@ export interface ChannelAdvancedSettings {
   routes: ChannelAdvancedRoute[];
 }
 
+export interface ChannelInboundMessage {
+  connection_id?: string;
+  platform: ChannelDomain | string;
+  domain?: ChannelDomain | string;
+  chat_type: "dm" | "group" | "guild" | "direct" | "thread" | string;
+  chat_id: string;
+  user_id: string;
+  user_name?: string;
+  operator_id?: string;
+  thread_id?: string;
+  message_id?: string;
+  text?: string;
+  is_from_self?: boolean;
+  claim_session?: boolean;
+}
+
+export interface ChannelGatewayRouteDecision {
+  connection_id: string;
+  platform: string;
+  chat_type: string;
+  chat_id: string;
+  user_id: string;
+  thread_id: string;
+  workspace_root: string;
+  model: string;
+  tool_approval_mode: string;
+}
+
+export interface ChannelGatewayQueueDecision {
+  session_key: string;
+  mode: string;
+  cap: number;
+  drop: string;
+  active: boolean;
+  queued: boolean;
+  rejected: boolean;
+  dropped: boolean;
+  pending: number;
+}
+
+export interface ChannelPairingRequestPublic {
+  code: string;
+  platform: string;
+  connection_id: string;
+  domain: string;
+  chat_type: string;
+  chat_id: string;
+  user_id: string;
+  user_name?: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface ChannelGatewayDecision {
+  allowed: boolean;
+  action: "dispatch" | "ignore" | "reject" | "pairing_required" | "steer" | "queued" | "interrupt" | string;
+  reason: string;
+  message: string;
+  is_admin: boolean;
+  is_approver: boolean;
+  max_steps: number;
+  debounce_ms: number;
+  route: ChannelGatewayRouteDecision;
+  queue?: ChannelGatewayQueueDecision | null;
+  pairing?: ChannelPairingRequestPublic | null;
+}
+
+export interface ChannelPairingApproveRequest {
+  code: string;
+  approve: boolean;
+}
+
+export interface ChannelGatewaySessionReleaseRequest {
+  session_key: string;
+}
+
+export interface ChannelGatewaySessionReleaseResponse {
+  session_key: string;
+  active: boolean;
+  next_message?: ChannelInboundMessage | null;
+  pending: number;
+  dropped_summaries: string[];
+}
+
 // --- Agent Mailbox types ---------------------------------------------------
 
 export type MailboxProviderKey = string;

@@ -14,6 +14,15 @@ ChannelStatus = Literal["unconfigured", "configured", "disabled"]
 ChannelPairingStatus = Literal["pending", "confirmed", "expired"]
 ChannelQueueMode = Literal["steer", "followup", "collect", "interrupt"]
 ChannelQueueDrop = Literal["summarize", "old", "new"]
+ChannelGatewayAction = Literal[
+    "dispatch",
+    "ignore",
+    "reject",
+    "pairing_required",
+    "steer",
+    "queued",
+    "interrupt",
+]
 
 
 def channel_definition(domain: str) -> dict[str, Any]:
@@ -236,6 +245,123 @@ class ChannelAdvancedSettings(BaseModel):
     self_user_ids: ChannelAdvancedSelfUserIds = Field(default_factory=ChannelAdvancedSelfUserIds)
     pairing: ChannelAdvancedPairing = Field(default_factory=ChannelAdvancedPairing)
     routes: list[ChannelAdvancedRoute] = Field(default_factory=list)
+
+
+class ChannelInboundMessage(BaseModel):
+    connection_id: str = ""
+    platform: ChannelDomain | str
+    domain: ChannelDomain | str = ""
+    chat_type: str = "dm"
+    chat_id: str
+    user_id: str
+    user_name: str = ""
+    operator_id: str = ""
+    thread_id: str = ""
+    message_id: str = ""
+    text: str = ""
+    is_from_self: bool = False
+    claim_session: bool = True
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _clean_strings(cls, value: Any, info):
+        if info.field_name in {"is_from_self", "claim_session"}:
+            return value
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ChannelInboundMessage":
+        if self.domain == "":
+            self.domain = self.platform
+        if self.chat_type not in {"dm", "group", "guild", "direct", "thread"}:
+            self.chat_type = "dm"
+        return self
+
+
+class ChannelGatewayRouteDecision(BaseModel):
+    connection_id: str = ""
+    platform: str = ""
+    chat_type: str = ""
+    chat_id: str = ""
+    user_id: str = ""
+    thread_id: str = ""
+    workspace_root: str = ""
+    model: str = ""
+    tool_approval_mode: str = ""
+
+
+class ChannelGatewayQueueDecision(BaseModel):
+    session_key: str
+    mode: ChannelQueueMode
+    cap: int
+    drop: ChannelQueueDrop
+    active: bool = False
+    queued: bool = False
+    rejected: bool = False
+    dropped: bool = False
+    pending: int = 0
+
+
+class ChannelPairingRequestPublic(BaseModel):
+    code: str
+    platform: str
+    connection_id: str = ""
+    domain: str = ""
+    chat_type: str
+    chat_id: str
+    user_id: str
+    user_name: str = ""
+    created_at: datetime
+    expires_at: datetime
+
+
+class ChannelGatewayDecision(BaseModel):
+    allowed: bool
+    action: ChannelGatewayAction
+    reason: str = ""
+    message: str = ""
+    is_admin: bool = False
+    is_approver: bool = False
+    max_steps: int = 25
+    debounce_ms: int = 1500
+    route: ChannelGatewayRouteDecision = Field(default_factory=ChannelGatewayRouteDecision)
+    queue: ChannelGatewayQueueDecision | None = None
+    pairing: ChannelPairingRequestPublic | None = None
+
+
+class ChannelPairingApproveRequest(BaseModel):
+    code: str
+    approve: bool = True
+
+    @field_validator("code")
+    @classmethod
+    def _clean_code(cls, value: str) -> str:
+        text = str(value or "").strip().upper()
+        if not text:
+            raise ValueError("Pairing code is required.")
+        return text
+
+
+class ChannelGatewaySessionReleaseRequest(BaseModel):
+    session_key: str
+
+    @field_validator("session_key")
+    @classmethod
+    def _clean_key(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Session key is required.")
+        return text
+
+
+class ChannelGatewaySessionReleaseResponse(BaseModel):
+    session_key: str
+    active: bool
+    next_message: ChannelInboundMessage | None = None
+    pending: int = 0
+    dropped_summaries: list[str] = Field(default_factory=list)
 
 
 def _clean_optional(value: str | None) -> str | None:

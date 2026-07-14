@@ -11,6 +11,7 @@ import httpx
 from src.application.model_adapters import AdapterRegistry, build_default_adapter_registry
 from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.application.models.oauth_token_service import OAuthTokenService
+from src.application.settings.channel_gateway_policy import ChannelGatewayPolicyService
 from src.core.config import Settings
 from src.domain.channel_strategies import channel_strategy_factory
 from src.infrastructure.channel_pairing_store import ChannelPairingSessionStore
@@ -19,8 +20,14 @@ from src.infrastructure.email_config_store import AGENT_MAIL_PROVIDERS, MySQLEma
 from src.infrastructure.model_config_store import MySQLModelConfigStore
 from src.schemas.channel_config import (
     ChannelAdvancedSettings,
+    ChannelGatewayDecision,
+    ChannelGatewaySessionReleaseRequest,
+    ChannelGatewaySessionReleaseResponse,
+    ChannelInboundMessage,
     ChannelConfigActionResponse,
     ChannelConfigCreateRequest,
+    ChannelPairingApproveRequest,
+    ChannelPairingRequestPublic,
     ChannelPairingSessionPublic,
     ChannelPairingStartRequest,
     ChannelConfigPublic,
@@ -61,6 +68,11 @@ class SettingsService:
             request_timeout=settings.llm_request_timeout_seconds,
         )
         self._channel_pairing_sessions = ChannelPairingSessionStore(settings.redis_url)
+        self._channel_gateway_policy = ChannelGatewayPolicyService(
+            settings_loader=self.get_channel_advanced_settings,
+            settings_saver=self.update_channel_advanced_settings,
+            pairing_store_path=_CHANNEL_PAIRING_REQUESTS_FILE,
+        )
 
     def list_model_configs(self):
         return [self._model_config_store.to_public(item) for item in self._model_config_store.list_all()]
@@ -268,6 +280,24 @@ class SettingsService:
             encoding="utf-8",
         )
         return ChannelAdvancedSettings.model_validate(data)
+
+    def evaluate_channel_inbound(self, payload: ChannelInboundMessage) -> ChannelGatewayDecision:
+        return self._channel_gateway_policy.evaluate_inbound(payload)
+
+    def list_channel_pairing_requests(self) -> list[ChannelPairingRequestPublic]:
+        return self._channel_gateway_policy.list_pairing_requests()
+
+    def approve_channel_pairing(self, payload: ChannelPairingApproveRequest) -> ChannelPairingRequestPublic:
+        try:
+            return self._channel_gateway_policy.approve_pairing(payload.code, payload.approve)
+        except KeyError as exc:
+            raise KeyError(payload.code) from exc
+
+    def release_channel_session(
+        self,
+        payload: ChannelGatewaySessionReleaseRequest,
+    ) -> ChannelGatewaySessionReleaseResponse:
+        return self._channel_gateway_policy.release_session(payload.session_key)
 
     def start_channel_pairing(
         self,
@@ -490,3 +520,4 @@ class SettingsService:
 
 
 _CHANNEL_ADVANCED_SETTINGS_FILE = Path(__file__).resolve().parents[3] / "src" / "data" / "channel_advanced_settings.json"
+_CHANNEL_PAIRING_REQUESTS_FILE = Path(__file__).resolve().parents[3] / "src" / "data" / "channel_pairing_requests.json"
