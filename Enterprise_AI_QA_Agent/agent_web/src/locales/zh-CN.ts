@@ -498,6 +498,17 @@ export default {
   "docker.container_action_success": "容器 {name} 已执行 {action}。",
   "docker.load_failed": "加载 Docker 信息失败。",
   "docker.action_failed": "操作失败。",
+  "docker.category_infrastructure": "基础服务",
+  "docker.category_security": "安全测试",
+  "docker.category_performance": "性能测试",
+  "docker.purpose_redis": "用于分布式锁和系统运行状态协调。",
+  "docker.purpose_minio": "用于存储产物、附件和测试报告。",
+  "docker.purpose_mysql": "用于存储模型、邮箱和系统配置。",
+  "docker.purpose_postgres": "用于存储会话、记忆、任务和运行状态。",
+  "docker.purpose_memgraph": "用于存储知识图谱和界面关系图数据。",
+  "docker.purpose_security_runner": "提供隔离的安全测试命令执行环境。",
+  "docker.purpose_k6": "提供 k6 性能测试和冒烟测试运行环境。",
+  "docker.purpose_jmeter": "提供 JMeter 性能测试运行环境。",
 
   // Platform Settings
   "platform.title": "管理平台接入",

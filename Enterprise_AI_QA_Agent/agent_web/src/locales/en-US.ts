@@ -497,6 +497,17 @@ export default {
   "docker.container_action_success": "Action {action} executed on container {name}.",
   "docker.load_failed": "Failed to load Docker information.",
   "docker.action_failed": "Action failed.",
+  "docker.category_infrastructure": "Core Services",
+  "docker.category_security": "Security Testing",
+  "docker.category_performance": "Performance Testing",
+  "docker.purpose_redis": "Distributed locks and shared runtime coordination.",
+  "docker.purpose_minio": "Artifact, attachment, and report object storage.",
+  "docker.purpose_mysql": "Model, mailbox, and system configuration storage.",
+  "docker.purpose_postgres": "Session, memory, job, and runtime state storage.",
+  "docker.purpose_memgraph": "Knowledge graph and UI relationship storage.",
+  "docker.purpose_security_runner": "Isolated command environment for security testing.",
+  "docker.purpose_k6": "k6 runtime for performance and smoke testing.",
+  "docker.purpose_jmeter": "JMeter runtime for performance testing.",
 
   // Platform Settings
   "platform.title": "Platform Integrations",

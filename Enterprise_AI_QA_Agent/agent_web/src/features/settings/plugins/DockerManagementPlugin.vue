@@ -59,6 +59,33 @@ const images = computed(() => overview.value?.images ?? []);
 const containers = computed(() => overview.value?.containers ?? []);
 const templates = computed(() => overview.value?.templates ?? []);
 
+const categoryTranslationKeys: Record<string, string> = {
+  infrastructure: "docker.category_infrastructure",
+  security: "docker.category_security",
+  performance: "docker.category_performance",
+};
+
+const purposeTranslationKeys: Record<string, string> = {
+  redis: "docker.purpose_redis",
+  minio: "docker.purpose_minio",
+  mysql: "docker.purpose_mysql",
+  postgres: "docker.purpose_postgres",
+  memgraph: "docker.purpose_memgraph",
+  security_runner: "docker.purpose_security_runner",
+  perf_k6_default: "docker.purpose_k6",
+  perf_jmeter_default: "docker.purpose_jmeter",
+};
+
+function categoryLabel(category: string) {
+  const key = categoryTranslationKeys[category.toLowerCase()];
+  return key ? t(key) : category;
+}
+
+function purposeLabel(key: string, fallback: string) {
+  const translationKey = purposeTranslationKeys[key];
+  return translationKey ? t(translationKey) : fallback;
+}
+
 const daemonReady = computed(() => environment.value?.daemon_available ?? false);
 const cliReady = computed(() => environment.value?.cli_available ?? false);
 
@@ -339,7 +366,7 @@ function stateClass(state: string) {
             </span>
           </div>
           <strong class="docker-required-card__image">{{ item.image }}</strong>
-          <p class="docker-required-card__purpose">{{ item.purpose }}</p>
+          <p class="docker-required-card__purpose">{{ purposeLabel(item.key, item.purpose) }}</p>
           <div class="docker-required-card__meta">
             <span>{{ t("docker.containers_count") }}: {{ item.container_count }}</span>
             <span v-if="item.size">{{ item.size }}</span>
@@ -517,11 +544,11 @@ function stateClass(state: string) {
       <div class="docker-templates-grid">
         <div v-for="template in templates" :key="template.key" class="docker-template-card">
           <div class="docker-template-card__head">
-            <span class="docker-template-card__category">{{ template.category }}</span>
+            <span class="docker-template-card__category">{{ categoryLabel(template.category) }}</span>
           </div>
           <strong class="docker-template-card__title">{{ template.default_name }}</strong>
           <p class="docker-template-card__image mono">{{ template.image }}</p>
-          <p class="docker-template-card__purpose">{{ template.purpose }}</p>
+          <p class="docker-template-card__purpose">{{ purposeLabel(template.key, template.purpose) }}</p>
           <div class="docker-template-card__meta">
             <div v-if="template.ports.length">
               <i class="fa-solid fa-network-wired"></i>
