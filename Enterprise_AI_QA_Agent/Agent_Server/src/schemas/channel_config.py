@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 ChannelProvider = Literal["qq", "feishu", "weixin"]
 ChannelDomain = Literal["qq", "feishu", "lark", "weixin"]
 ChannelStatus = Literal["unconfigured", "configured", "disabled"]
+ChannelPairingStatus = Literal["pending", "confirmed", "expired"]
 
 
 CHANNEL_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -61,7 +62,12 @@ def clean_public_config(domain: str, value: dict[str, Any] | None) -> dict[str, 
     if not isinstance(value, dict):
         return {}
     definition = channel_definition(domain)
-    allowed = set(definition["public_fields"])
+    allowed = set(definition["public_fields"]) | {
+        "auth_method",
+        "pairing_session_id",
+        "paired_device",
+        "paired_at",
+    }
     cleaned: dict[str, Any] = {}
     for key, item in value.items():
         if key not in allowed:
@@ -97,6 +103,8 @@ def compute_channel_status(
     public_config: dict[str, Any],
     credential_flags: dict[str, bool],
 ) -> ChannelStatus:
+    if public_config.get("auth_method") == "qr_pairing" and str(public_config.get("paired_at") or "").strip():
+        return "configured" if enabled else "disabled"
     definition = channel_definition(domain)
     for key in definition["required_public"]:
         value = public_config.get(key)
@@ -193,6 +201,24 @@ class ChannelConfigUpdateRequest(BaseModel):
 class ChannelConfigActionResponse(BaseModel):
     ok: bool
     message: str
+    item: ChannelConfigPublic | None = None
+
+
+class ChannelPairingStartRequest(BaseModel):
+    config_name: str | None = None
+    enabled: bool = True
+    device_hint: str | None = None
+
+
+class ChannelPairingSessionPublic(BaseModel):
+    session_id: str
+    provider: ChannelProvider
+    domain: ChannelDomain
+    status: ChannelPairingStatus
+    pairing_url: str
+    qr_payload: str
+    expires_at: datetime
+    confirmed_at: datetime | None = None
     item: ChannelConfigPublic | None = None
 
 

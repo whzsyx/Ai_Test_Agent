@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
-from src.schemas.channel_config import ChannelConfigCreateRequest, ChannelConfigUpdateRequest
+from src.schemas.channel_config import ChannelConfigCreateRequest, ChannelConfigUpdateRequest, ChannelPairingStartRequest
 from src.schemas.email_config import EmailConfigCreateRequest, EmailConfigUpdateRequest
 from src.schemas.settings import ModelConfigUpdateRequest
 
@@ -131,6 +132,92 @@ async def delete_channel_config(config_id: int, request: Request):
         return request.app.state.settings_service.delete_channel_config(config_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Communication channel '{config_id}' not found.") from exc
+
+
+@router.post("/channels/{domain}/pairing/start")
+async def start_channel_pairing(domain: str, payload: ChannelPairingStartRequest, request: Request):
+    try:
+        return request.app.state.settings_service.start_channel_pairing(
+            domain,
+            payload,
+            str(request.base_url),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/channels/pairing/{session_id}")
+async def get_channel_pairing(session_id: str, request: Request):
+    try:
+        return request.app.state.settings_service.get_channel_pairing(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Pairing session not found.") from exc
+
+
+@router.get("/channels/pairing/{session_id}/mobile", response_class=HTMLResponse)
+async def channel_pairing_mobile_page(session_id: str, request: Request):
+    try:
+        session = request.app.state.settings_service.get_channel_pairing(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Pairing session not found.") from exc
+
+    confirm_url = f"{request.app.state.settings.api_v1_prefix.rstrip()}/settings/channels/pairing/{html.escape(session_id)}/confirm"
+    if session.status == "confirmed":
+        body = "<h1>已绑定</h1><p>这个通讯渠道已经完成手机扫码绑定。</p>"
+    elif session.status == "expired":
+        body = "<h1>二维码已过期</h1><p>请回到电脑端重新生成二维码。</p>"
+    else:
+        domain = html.escape(session.domain)
+        body = f"""
+        <h1>绑定 {domain} 通讯渠道</h1>
+        <p>确认后，此手机扫码会话会被记录到系统的通讯渠道设置中。当前步骤只完成绑定配置，不会启动机器人或接收消息。</p>
+        <label>设备名称 <input id="deviceName" value="Mobile device" /></label>
+        <button id="confirmBtn">确认绑定</button>
+        <p id="result"></p>
+        <script>
+          const button = document.getElementById("confirmBtn");
+          const result = document.getElementById("result");
+          button.addEventListener("click", async () => {{
+            button.disabled = true;
+            const name = encodeURIComponent(document.getElementById("deviceName").value || "Mobile device");
+            const response = await fetch("{confirm_url}?device_name=" + name, {{ method: "POST" }});
+            result.textContent = response.ok ? "绑定完成，可以回到电脑端继续。" : "绑定失败，请重新生成二维码。";
+          }});
+        </script>
+        """
+    return HTMLResponse(
+        f"""
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>通讯渠道扫码绑定</title>
+          <style>
+            body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #0f172a; }}
+            main {{ max-width: 520px; margin: 0 auto; padding: 32px 20px; }}
+            h1 {{ font-size: 24px; margin: 0 0 14px; }}
+            p {{ color: #475569; line-height: 1.7; }}
+            label {{ display: flex; flex-direction: column; gap: 8px; margin: 20px 0; color: #334155; }}
+            input {{ border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; font: inherit; }}
+            button {{ width: 100%; border: 0; border-radius: 8px; padding: 13px 16px; background: #2563eb; color: white; font: inherit; font-weight: 700; }}
+            button:disabled {{ opacity: .65; }}
+          </style>
+        </head>
+        <body><main>{body}</main></body>
+        </html>
+        """
+    )
+
+
+@router.post("/channels/pairing/{session_id}/confirm")
+async def confirm_channel_pairing(session_id: str, request: Request, device_name: str | None = None):
+    try:
+        return request.app.state.settings_service.confirm_channel_pairing(session_id, device_name=device_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Pairing session not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

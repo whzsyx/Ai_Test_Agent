@@ -9,6 +9,9 @@ import type {
   ChannelConfigCreateRequest,
   ChannelConfigPublic,
   ChannelConfigUpdateRequest,
+  ChannelDomain,
+  ChannelPairingSessionPublic,
+  ChannelPairingStartRequest,
   ConversationResponse,
   DockerContainerActionRequest,
   DockerContainerActionResponse,
@@ -295,6 +298,15 @@ export const api = {
     return request(`/api/v1/settings/channels/${configId}`, {
       method: "DELETE",
     });
+  },
+  startChannelPairing(domain: ChannelDomain, payload: ChannelPairingStartRequest): Promise<ChannelPairingSessionPublic> {
+    return request(`/api/v1/settings/channels/${encodeURIComponent(domain)}/pairing/start`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getChannelPairing(sessionId: string): Promise<ChannelPairingSessionPublic> {
+    return request(`/api/v1/settings/channels/pairing/${encodeURIComponent(sessionId)}`);
   },
 
   // --- Agent Mailbox API ---------------------------------------------------

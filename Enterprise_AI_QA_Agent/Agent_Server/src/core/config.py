@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     email_config_table: str = "system_email_config"
     channel_config_table: str = "system_channel_config"
     channel_credential_encryption_key: str = ""
+    channel_pairing_public_base_url: str = ""
     redis_url: str
     agently_cli_config_root: str
     agently_auth_lock_ttl_seconds: int

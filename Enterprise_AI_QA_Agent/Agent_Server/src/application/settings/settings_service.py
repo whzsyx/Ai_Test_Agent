@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import secrets
 from time import perf_counter
 
 import httpx
@@ -14,8 +16,11 @@ from src.infrastructure.model_config_store import MySQLModelConfigStore
 from src.schemas.channel_config import (
     ChannelConfigActionResponse,
     ChannelConfigCreateRequest,
+    ChannelPairingSessionPublic,
+    ChannelPairingStartRequest,
     ChannelConfigPublic,
     ChannelConfigUpdateRequest,
+    channel_definition,
 )
 from src.schemas.email_config import (
     EmailConfigActionResponse,
@@ -51,6 +56,7 @@ class SettingsService:
             settings=settings,
             request_timeout=settings.llm_request_timeout_seconds,
         )
+        self._channel_pairing_sessions: dict[str, dict] = {}
 
     def list_model_configs(self):
         return [self._model_config_store.to_public(item) for item in self._model_config_store.list_all()]
@@ -228,3 +234,117 @@ class SettingsService:
             message=f"Communication channel '{deleted.config_name}' was deleted.",
             item=None,
         )
+
+    def start_channel_pairing(
+        self,
+        domain: str,
+        payload: ChannelPairingStartRequest,
+        base_url: str,
+    ) -> ChannelPairingSessionPublic:
+        definition = channel_definition(domain)
+        if domain == "qq":
+            raise ValueError("QQ official bot does not support QR pairing. Configure App ID and App Secret instead.")
+        self._prune_channel_pairing_sessions()
+        session_id = secrets.token_urlsafe(24)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        api_prefix = self._settings.api_v1_prefix.rstrip("/")
+        public_base_url = (self._settings.channel_pairing_public_base_url or base_url).strip()
+        pairing_url = f"{public_base_url.rstrip('/')}{api_prefix}/settings/channels/pairing/{session_id}/mobile"
+        session = {
+            "session_id": session_id,
+            "provider": definition["provider"],
+            "domain": domain,
+            "status": "pending",
+            "pairing_url": pairing_url,
+            "qr_payload": pairing_url,
+            "expires_at": expires_at,
+            "confirmed_at": None,
+            "config_name": payload.config_name,
+            "enabled": payload.enabled,
+            "device_hint": payload.device_hint,
+            "item": None,
+        }
+        self._channel_pairing_sessions[session_id] = session
+        return self._pairing_session_public(session)
+
+    def get_channel_pairing(self, session_id: str) -> ChannelPairingSessionPublic:
+        self._prune_channel_pairing_sessions()
+        session = self._channel_pairing_sessions.get(session_id)
+        if not session:
+            raise KeyError(session_id)
+        return self._pairing_session_public(session)
+
+    def confirm_channel_pairing(self, session_id: str, device_name: str | None = None) -> ChannelPairingSessionPublic:
+        self._prune_channel_pairing_sessions()
+        session = self._channel_pairing_sessions.get(session_id)
+        if not session:
+            raise KeyError(session_id)
+        if session["status"] == "expired":
+            raise ValueError("Pairing session has expired.")
+        domain = str(session["domain"])
+        definition = channel_definition(domain)
+        now = datetime.now(timezone.utc)
+        device = (device_name or session.get("device_hint") or "Mobile device").strip() or "Mobile device"
+        config_name = (session.get("config_name") or f"{domain.upper()} QR Binding").strip()
+        existing = next((item for item in self._channel_config_store.list_all() if item.domain == domain), None)
+        public_config = dict(existing.public_config if existing else {})
+        public_config.update({
+            "auth_method": "qr_pairing",
+            "pairing_session_id": session_id,
+            "paired_device": device,
+            "paired_at": now.isoformat(),
+        })
+        if existing:
+            saved = self._channel_config_store.update(
+                int(existing.id or 0),
+                ChannelConfigUpdateRequest(
+                    config_name=config_name,
+                    provider=definition["provider"],
+                    domain=domain,
+                    enabled=bool(session.get("enabled", True)),
+                    public_config=public_config,
+                    credentials=None,
+                    clear_credentials=False,
+                    description=existing.description,
+                ),
+            )
+        else:
+            saved = self._channel_config_store.create(
+                ChannelConfigCreateRequest(
+                    config_name=config_name,
+                    provider=definition["provider"],
+                    domain=domain,
+                    enabled=bool(session.get("enabled", True)),
+                    public_config=public_config,
+                    credentials=None,
+                    description=None,
+                ),
+            )
+        session["status"] = "confirmed"
+        session["confirmed_at"] = now
+        session["item"] = self._channel_config_store.to_public(saved)
+        return self._pairing_session_public(session)
+
+    def _pairing_session_public(self, session: dict) -> ChannelPairingSessionPublic:
+        if session["status"] == "pending" and datetime.now(timezone.utc) >= session["expires_at"]:
+            session["status"] = "expired"
+        return ChannelPairingSessionPublic(
+            session_id=session["session_id"],
+            provider=session["provider"],
+            domain=session["domain"],
+            status=session["status"],
+            pairing_url=session["pairing_url"],
+            qr_payload=session["qr_payload"],
+            expires_at=session["expires_at"],
+            confirmed_at=session.get("confirmed_at"),
+            item=session.get("item"),
+        )
+
+    def _prune_channel_pairing_sessions(self) -> None:
+        now = datetime.now(timezone.utc)
+        for session_id, session in list(self._channel_pairing_sessions.items()):
+            expires_at = session["expires_at"]
+            if session["status"] == "pending" and now >= expires_at:
+                session["status"] = "expired"
+            if now - expires_at > timedelta(minutes=30):
+                self._channel_pairing_sessions.pop(session_id, None)

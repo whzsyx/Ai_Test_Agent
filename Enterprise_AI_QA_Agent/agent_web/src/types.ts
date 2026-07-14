@@ -382,6 +382,7 @@ export interface EmailConfigActionResponse {
 export type ChannelProvider = "qq" | "feishu" | "weixin";
 export type ChannelDomain = "qq" | "feishu" | "lark" | "weixin";
 export type ChannelStatus = "unconfigured" | "configured" | "disabled";
+export type ChannelPairingStatus = "pending" | "confirmed" | "expired";
 
 export interface ChannelConfigPublic {
   id: number;
@@ -415,6 +416,24 @@ export interface ChannelConfigUpdateRequest extends ChannelConfigCreateRequest {
 export interface ChannelConfigActionResponse {
   ok: boolean;
   message: string;
+  item?: ChannelConfigPublic | null;
+}
+
+export interface ChannelPairingStartRequest {
+  config_name?: string | null;
+  enabled?: boolean;
+  device_hint?: string | null;
+}
+
+export interface ChannelPairingSessionPublic {
+  session_id: string;
+  provider: ChannelProvider;
+  domain: ChannelDomain;
+  status: ChannelPairingStatus;
+  pairing_url: string;
+  qr_payload: string;
+  expires_at: string;
+  confirmed_at?: string | null;
   item?: ChannelConfigPublic | null;
 }
 
