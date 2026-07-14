@@ -57,6 +57,37 @@ const pairedAt = computed(() => {
   const value = selectedConfig.value?.public_config?.paired_at;
   return value === undefined || value === null ? "" : String(value);
 });
+const connectionSummaryItems = computed(() => {
+  const config = selectedConfig.value;
+  if (!config) return [];
+  return [
+    { labelKey: "channels.summary_channel", value: t(selectedDefinition.value.labelKey) },
+    { labelKey: "channels.summary_remote_id", value: channelRemoteId(config), mono: true },
+    { labelKey: "channels.summary_scope", value: t("channels.scope_global") },
+    { labelKey: "channels.summary_status", value: statusLabel(config.domain, config) },
+  ];
+});
+const credentialSummaryItems = computed(() => {
+  const config = selectedConfig.value;
+  if (!config) return [];
+  const items: Array<{ labelKey: string; value: string; mono?: boolean }> = [];
+  if (config.domain === "weixin") {
+    items.push({ labelKey: "channels.summary_account_id", value: publicText(config, "account_id"), mono: true });
+    items.push({ labelKey: "channels.summary_token", value: credentialLabel(config, "token") });
+    items.push({ labelKey: "channels.summary_api_base", value: publicText(config, "api_base"), mono: true });
+  } else {
+    items.push({ labelKey: "channels.summary_app_id", value: publicText(config, "app_id"), mono: true });
+    items.push({ labelKey: "channels.summary_secret", value: credentialLabel(config, "app_secret") });
+    if (config.domain === "qq") {
+      items.push({ labelKey: "channels.summary_sandbox", value: config.public_config?.sandbox_mode === true ? t("channels.yes") : t("channels.no") });
+    } else {
+      items.push({ labelKey: "channels.summary_connection_mode", value: connectionModeLabel(publicText(config, "connection_mode")) });
+    }
+  }
+  items.push({ labelKey: "channels.summary_auth_method", value: authMethodLabel(publicText(config, "auth_method")) });
+  items.push({ labelKey: "channels.summary_authorized_at", value: publicText(config, "paired_at") });
+  return items;
+});
 
 function statusLabel(domain: ChannelDomain, config?: ChannelConfigPublic) {
   return getChannelStrategy(domain).statusLabel(config?.status);
@@ -72,6 +103,39 @@ function message(type: "success" | "error", value: string) {
 
 function defaultName() {
   return selectedStrategy.value.defaultName();
+}
+
+function publicText(config: ChannelConfigPublic, key: string) {
+  const value = config.public_config?.[key];
+  const text = value === undefined || value === null ? "" : String(value).trim();
+  return text || "-";
+}
+
+function channelRemoteId(config: ChannelConfigPublic) {
+  const keys = ["remote_id", "user_id", "paired_device", "account_id"];
+  for (const key of keys) {
+    const value = publicText(config, key);
+    if (value && value !== "-") return value;
+  }
+  return "-";
+}
+
+function credentialLabel(config: ChannelConfigPublic, key: string) {
+  return config.credential_fields?.[key] === true ? t("channels.secret_saved") : t("channels.secret_missing");
+}
+
+function connectionModeLabel(value: string) {
+  if (value === "websocket") return t("channels.mode_websocket");
+  if (value === "webhook") return t("channels.mode_webhook");
+  if (value === "reserved") return t("channels.mode_reserved");
+  if (value === "event_callback") return t("channels.mode_event_callback");
+  return value || "-";
+}
+
+function authMethodLabel(value: string) {
+  if (value === "official_qr") return t("channels.auth_official_qr");
+  if (value === "qr_pairing") return t("channels.auth_qr_pairing");
+  return t("channels.auth_manual");
 }
 
 function getFieldValue(key: keyof ChannelForm) {
@@ -290,6 +354,34 @@ onBeforeUnmount(stopPairingPoll);
           <span class="channel-settings__status" :class="statusClass(selectedConfig?.status)">
             {{ statusLabel(selectedDomain, selectedConfig) }}
           </span>
+        </div>
+
+        <div v-if="selectedConfig" class="channel-settings__connected">
+          <section class="channel-settings__summary-card">
+            <div class="channel-settings__summary-head">
+              <strong>{{ t("channels.connection_summary") }}</strong>
+              <small>{{ t("channels.summary_phase_hint") }}</small>
+            </div>
+            <div class="channel-settings__summary-grid">
+              <div v-for="item in connectionSummaryItems" :key="item.labelKey" class="channel-settings__summary-item">
+                <span>{{ t(item.labelKey) }}</span>
+                <strong :class="{ 'is-mono': item.mono }">{{ item.value }}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="channel-settings__summary-card">
+            <div class="channel-settings__summary-head">
+              <strong>{{ t("channels.credential_summary") }}</strong>
+              <small>{{ t("channels.credential_summary_hint") }}</small>
+            </div>
+            <div class="channel-settings__summary-grid">
+              <div v-for="item in credentialSummaryItems" :key="item.labelKey" class="channel-settings__summary-item">
+                <span>{{ t(item.labelKey) }}</span>
+                <strong :class="{ 'is-mono': item.mono }">{{ item.value }}</strong>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div v-if="canPairByQr" class="channel-settings__pairing">
@@ -559,6 +651,71 @@ onBeforeUnmount(stopPairingPoll);
   display: inline-block;
 }
 
+.channel-settings__connected {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.channel-settings__summary-card {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--surface, #ffffff);
+  padding: 14px;
+}
+
+.channel-settings__summary-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.channel-settings__summary-head strong {
+  color: var(--text, #0f172a);
+}
+
+.channel-settings__summary-head small {
+  color: var(--muted, #64748b);
+  line-height: 1.45;
+}
+
+.channel-settings__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.channel-settings__summary-item {
+  min-width: 0;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--surface-muted, #f8fafc);
+  padding: 10px 12px;
+}
+
+.channel-settings__summary-item span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.channel-settings__summary-item strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text, #0f172a);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-settings__summary-item strong.is-mono {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .channel-settings__pairing {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
@@ -767,6 +924,11 @@ onBeforeUnmount(stopPairingPoll);
   }
 
   .channel-settings__form {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-settings__connected,
+  .channel-settings__summary-grid {
     grid-template-columns: 1fr;
   }
 

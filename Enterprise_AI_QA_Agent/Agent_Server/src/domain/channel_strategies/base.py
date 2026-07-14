@@ -9,6 +9,8 @@ PAIRING_PUBLIC_FIELDS = frozenset({
     "auth_method",
     "pairing_session_id",
     "paired_device",
+    "remote_id",
+    "user_id",
     "paired_at",
 })
 
@@ -146,6 +148,8 @@ class ChannelStrategy:
         })
         if result.get("user_id"):
             public_config["paired_device"] = str(result["user_id"])
+            public_config["remote_id"] = str(result["user_id"])
+            public_config["user_id"] = str(result["user_id"])
         return self.clean_public_config(public_config)
 
     def build_connected_credentials(self, result: dict[str, Any]) -> dict[str, str]:

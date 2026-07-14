@@ -26,7 +26,10 @@ class WeixinChannelStrategy(ChannelStrategy):
 
     def clean_public_config(self, value: dict[str, Any] | None) -> dict[str, Any]:
         cleaned = super().clean_public_config(value)
-        result = {"account_id": str(cleaned.get("account_id") or "").strip()}
+        result = {
+            "account_id": str(cleaned.get("account_id") or "").strip(),
+            "api_base": str(cleaned.get("api_base") or "").strip(),
+        }
         for key in PAIRING_PUBLIC_FIELDS:
             if key in cleaned:
                 result[key] = cleaned[key]
