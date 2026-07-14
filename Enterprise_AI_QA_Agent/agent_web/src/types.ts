@@ -434,6 +434,8 @@ export interface ChannelPairingSessionPublic {
   qr_payload: string;
   expires_at: string;
   confirmed_at?: string | null;
+  interval?: number | null;
+  message?: string | null;
   item?: ChannelConfigPublic | null;
 }
 

@@ -3,14 +3,19 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useMessage } from "naive-ui";
 import * as QRCode from "qrcode";
 import type { SettingsPluginDefinition } from "../plugins";
+import {
+  channelOrder,
+  channelStrategies,
+  createEmptyChannelForm,
+  getChannelStrategy,
+} from "../channelStrategies";
+import type { ChannelForm } from "../channelStrategies";
 import { api } from "../../../services/api";
 import { t } from "../../../services/i18n";
 import type {
-  ChannelConfigCreateRequest,
   ChannelConfigPublic,
   ChannelDomain,
   ChannelPairingSessionPublic,
-  ChannelProvider,
   ChannelStatus,
 } from "../../../types";
 
@@ -18,22 +23,7 @@ defineProps<{
   plugin?: SettingsPluginDefinition;
 }>();
 
-type ChannelDefinition = {
-  domain: ChannelDomain;
-  provider: ChannelProvider;
-  labelKey: string;
-  summaryKey: string;
-  icon: string;
-  secretField: "app_secret" | "token";
-  supportsPairing: boolean;
-};
-
-const channels: ChannelDefinition[] = [
-  { domain: "qq", provider: "qq", labelKey: "channels.qq", summaryKey: "channels.qq_desc", icon: "fa-brands fa-qq", secretField: "app_secret", supportsPairing: false },
-  { domain: "feishu", provider: "feishu", labelKey: "channels.feishu", summaryKey: "channels.feishu_desc", icon: "fa-solid fa-paper-plane", secretField: "app_secret", supportsPairing: true },
-  { domain: "lark", provider: "feishu", labelKey: "channels.lark", summaryKey: "channels.lark_desc", icon: "fa-solid fa-globe", secretField: "app_secret", supportsPairing: true },
-  { domain: "weixin", provider: "weixin", labelKey: "channels.weixin", summaryKey: "channels.weixin_desc", icon: "fa-brands fa-weixin", secretField: "token", supportsPairing: true },
-];
+const channels = channelOrder.map((domain) => channelStrategies[domain].definition);
 
 const toast = useMessage();
 const configs = ref<ChannelConfigPublic[]>([]);
@@ -45,20 +35,10 @@ const pairing = ref(false);
 const pairingSession = ref<ChannelPairingSessionPublic | null>(null);
 const qrDataUrl = ref("");
 const pairingPollTimer = ref<number | null>(null);
-const form = reactive({
-  config_name: "",
-  enabled: false,
-  app_id: "",
-  account_id: "",
-  app_secret: "",
-  token: "",
-  sandbox_mode: false,
-  connection_mode: "event_callback",
-  description: "",
-  clear_credentials: false,
-});
+const form = reactive(createEmptyChannelForm());
 
-const selectedDefinition = computed(() => channels.find((item) => item.domain === selectedDomain.value) || channels[0]);
+const selectedStrategy = computed(() => getChannelStrategy(selectedDomain.value));
+const selectedDefinition = computed(() => selectedStrategy.value.definition);
 const selectedConfig = computed(() => configs.value.find((item) => item.domain === selectedDomain.value) || null);
 const configByDomain = computed(() => new Map(configs.value.map((item) => [item.domain, item])));
 const hasStoredSecret = computed(() => {
@@ -66,11 +46,9 @@ const hasStoredSecret = computed(() => {
   if (!current) return false;
   return current.credential_fields?.[selectedDefinition.value.secretField] === true;
 });
-const isWeixin = computed(() => selectedDomain.value === "weixin");
-const isQq = computed(() => selectedDomain.value === "qq");
-const isFeishuLike = computed(() => selectedDomain.value === "feishu" || selectedDomain.value === "lark");
-const canPairByQr = computed(() => selectedDefinition.value.supportsPairing);
-const panelEyebrow = computed(() => canPairByQr.value ? t("channels.scan_first") : t("channels.qq_manual_first"));
+const canPairByQr = computed(() => selectedStrategy.value.supportsPairing);
+const panelEyebrow = computed(() => t(selectedStrategy.value.panelEyebrowKey));
+const manualFields = computed(() => selectedStrategy.value.manualFields(hasStoredSecret.value));
 const pairedDevice = computed(() => {
   const value = selectedConfig.value?.public_config?.paired_device;
   return value === undefined || value === null ? "" : String(value);
@@ -80,15 +58,8 @@ const pairedAt = computed(() => {
   return value === undefined || value === null ? "" : String(value);
 });
 
-function statusLabel(status?: ChannelStatus, domain: ChannelDomain = selectedDomain.value) {
-  if (domain === "qq") {
-    if (status === "configured") return t("channels.status_qq_configured");
-    if (status === "disabled") return t("channels.status_disabled");
-    return t("channels.status_qq_unconfigured");
-  }
-  if (status === "configured") return t("channels.status_configured");
-  if (status === "disabled") return t("channels.status_disabled");
-  return t("channels.status_unconfigured");
+function statusLabel(domain: ChannelDomain, config?: ChannelConfigPublic) {
+  return getChannelStrategy(domain).statusLabel(config?.status);
 }
 
 function statusClass(status?: ChannelStatus) {
@@ -99,28 +70,33 @@ function message(type: "success" | "error", value: string) {
   toast[type](value, { duration: type === "success" ? 2400 : 4200 });
 }
 
-function defaultName(definition: ChannelDefinition) {
-  return `${t(definition.labelKey)} ${t("channels.config_suffix")}`;
+function defaultName() {
+  return selectedStrategy.value.defaultName();
 }
 
-function readText(config: ChannelConfigPublic | null, key: string) {
-  const value = config?.public_config?.[key];
+function getFieldValue(key: keyof ChannelForm) {
+  const value = form[key];
   return value === undefined || value === null ? "" : String(value);
 }
 
+function getBooleanFieldValue(key: keyof ChannelForm) {
+  return form[key] === true;
+}
+
+function readInputValue(event: Event) {
+  return (event.target as HTMLInputElement | HTMLSelectElement).value;
+}
+
+function readInputChecked(event: Event) {
+  return (event.target as HTMLInputElement).checked;
+}
+
+function setFieldValue(key: keyof ChannelForm, value: string | boolean) {
+  (form as Record<keyof ChannelForm, string | boolean>)[key] = value;
+}
+
 function applyConfigToForm() {
-  const definition = selectedDefinition.value;
-  const config = selectedConfig.value;
-  form.config_name = config?.config_name || defaultName(definition);
-  form.enabled = config?.enabled || false;
-  form.app_id = readText(config, "app_id");
-  form.account_id = readText(config, "account_id");
-  form.app_secret = "";
-  form.token = "";
-  form.sandbox_mode = config?.public_config?.sandbox_mode === true;
-  form.connection_mode = readText(config, "connection_mode") || "event_callback";
-  form.description = config?.description || "";
-  form.clear_credentials = false;
+  selectedStrategy.value.applyConfig(form, selectedConfig.value);
 }
 
 async function loadSettings() {
@@ -143,6 +119,10 @@ function stopPairingPoll() {
 }
 
 async function renderQr(payload: string) {
+  if (payload.startsWith("data:image/")) {
+    qrDataUrl.value = payload;
+    return;
+  }
   qrDataUrl.value = await QRCode.toDataURL(payload, {
     errorCorrectionLevel: "M",
     margin: 1,
@@ -153,10 +133,11 @@ async function renderQr(payload: string) {
 
 function schedulePairingPoll() {
   stopPairingPoll();
+  const intervalSeconds = pairingSession.value?.interval || 3;
   pairingPollTimer.value = window.setTimeout(() => {
     pairingPollTimer.value = null;
     void pollPairing();
-  }, 1500);
+  }, Math.max(intervalSeconds, 2) * 1000);
 }
 
 async function startPairing() {
@@ -168,7 +149,7 @@ async function startPairing() {
   stopPairingPoll();
   try {
     const session = await api.startChannelPairing(selectedDomain.value, {
-      config_name: form.config_name.trim() || defaultName(selectedDefinition.value),
+      config_name: form.config_name.trim() || selectedStrategy.value.defaultName(),
       enabled: true,
       device_hint: "Mobile device",
     });
@@ -194,7 +175,7 @@ async function pollPairing() {
           ...configs.value.filter((item) => item.id !== session.item?.id && item.domain !== session.item?.domain),
           session.item,
         ];
-        configs.value.sort((a, b) => channels.findIndex((item) => item.domain === a.domain) - channels.findIndex((item) => item.domain === b.domain));
+        configs.value.sort((a, b) => channelOrder.indexOf(a.domain) - channelOrder.indexOf(b.domain));
         applyConfigToForm();
       }
       message("success", t("channels.pairing_confirmed_message"));
@@ -213,34 +194,8 @@ async function pollPairing() {
   }
 }
 
-function publicConfig(): Record<string, unknown> {
-  if (isWeixin.value) {
-    return { account_id: form.account_id.trim() };
-  }
-  if (isQq.value) {
-    return { app_id: form.app_id.trim(), sandbox_mode: form.sandbox_mode };
-  }
-  return { app_id: form.app_id.trim(), connection_mode: form.connection_mode };
-}
-
-function credentials(): Record<string, string> | null {
-  if (isWeixin.value) {
-    return form.token.trim() ? { token: form.token.trim() } : null;
-  }
-  return form.app_secret.trim() ? { app_secret: form.app_secret.trim() } : null;
-}
-
-function buildPayload(): ChannelConfigCreateRequest {
-  const definition = selectedDefinition.value;
-  return {
-    config_name: form.config_name.trim() || defaultName(definition),
-    provider: definition.provider,
-    domain: definition.domain,
-    enabled: form.enabled,
-    public_config: publicConfig(),
-    credentials: credentials(),
-    description: form.description.trim() || null,
-  };
+function buildPayload() {
+  return selectedStrategy.value.buildPayload(form);
 }
 
 async function saveChannel() {
@@ -255,7 +210,7 @@ async function saveChannel() {
       ...configs.value.filter((item) => item.id !== saved.id && item.domain !== saved.domain),
       saved,
     ];
-    configs.value.sort((a, b) => channels.findIndex((item) => item.domain === a.domain) - channels.findIndex((item) => item.domain === b.domain));
+    configs.value.sort((a, b) => channelOrder.indexOf(a.domain) - channelOrder.indexOf(b.domain));
     message("success", t("channels.save_success"));
     applyConfigToForm();
   } catch (error) {
@@ -319,7 +274,7 @@ onBeforeUnmount(stopPairingPoll);
           <i :class="item.icon"></i>
           <span>
             <strong>{{ t(item.labelKey) }}</strong>
-            <small>{{ statusLabel(configByDomain.get(item.domain)?.status, item.domain) }}</small>
+            <small>{{ statusLabel(item.domain, configByDomain.get(item.domain)) }}</small>
           </span>
           <em :class="statusClass(configByDomain.get(item.domain)?.status)"></em>
         </button>
@@ -333,14 +288,14 @@ onBeforeUnmount(stopPairingPoll);
             <p>{{ t(selectedDefinition.summaryKey) }}</p>
           </div>
           <span class="channel-settings__status" :class="statusClass(selectedConfig?.status)">
-            {{ statusLabel(selectedConfig?.status, selectedDomain) }}
+            {{ statusLabel(selectedDomain, selectedConfig) }}
           </span>
         </div>
 
         <div v-if="canPairByQr" class="channel-settings__pairing">
           <div class="channel-settings__pairing-main">
-            <strong>{{ t("channels.scan_bind_title") }}</strong>
-            <p>{{ t("channels.scan_bind_desc") }}</p>
+            <strong>{{ t(selectedStrategy.pairingTitleKey) }}</strong>
+            <p>{{ t(selectedStrategy.pairingDescriptionKey) }}</p>
             <div v-if="pairedDevice" class="channel-settings__paired">
               <i class="fa-solid fa-circle-check"></i>
               <span>{{ t("channels.bound_device", { device: pairedDevice }) }}</span>
@@ -362,17 +317,18 @@ onBeforeUnmount(stopPairingPoll);
 
           <div v-if="pairingSession" class="channel-settings__pairing-status">
             <span>{{ t("channels.pairing_status") }}：{{ t(`channels.pairing_${pairingSession.status}`) }}</span>
+            <small v-if="pairingSession.message">{{ pairingSession.message }}</small>
             <a :href="pairingSession.pairing_url" target="_blank" rel="noreferrer">{{ t("channels.open_pairing_link") }}</a>
           </div>
         </div>
 
         <details class="channel-settings__advanced" :open="!canPairByQr">
-          <summary>{{ canPairByQr ? t("channels.advanced_manual") : t("channels.qq_official_config") }}</summary>
+          <summary>{{ t(selectedStrategy.manualSummaryKey) }}</summary>
 
           <div class="channel-settings__form">
             <label class="channel-settings__field">
               <span>{{ t("channels.config_name") }}</span>
-              <input v-model="form.config_name" type="text" :placeholder="defaultName(selectedDefinition)" />
+              <input v-model="form.config_name" type="text" :placeholder="defaultName()" />
             </label>
 
             <label class="channel-settings__switch">
@@ -383,50 +339,39 @@ onBeforeUnmount(stopPairingPoll);
               </span>
             </label>
 
-            <label v-if="isWeixin" class="channel-settings__field">
-              <span>{{ t("channels.account_id") }}</span>
-              <input v-model="form.account_id" type="text" placeholder="gh_xxxxxxxx" />
-            </label>
+            <template v-for="field in manualFields" :key="field.key">
+              <label v-if="field.kind === 'switch'" class="channel-settings__switch">
+                <input
+                  type="checkbox"
+                  :checked="getBooleanFieldValue(field.key)"
+                  @change="setFieldValue(field.key, readInputChecked($event))"
+                />
+                <span>
+                  <strong>{{ t(field.labelKey) }}</strong>
+                  <small>{{ t(field.hintKey) }}</small>
+                </span>
+              </label>
 
-            <label v-else class="channel-settings__field">
-              <span>{{ t("channels.app_id") }}</span>
-              <input v-model="form.app_id" type="text" placeholder="App ID" />
-            </label>
+              <label v-else-if="field.kind === 'select'" class="channel-settings__field">
+                <span>{{ t(field.labelKey) }}</span>
+                <select :value="getFieldValue(field.key)" @change="setFieldValue(field.key, readInputValue($event))">
+                  <option v-for="option in field.options" :key="option.value" :value="option.value">
+                    {{ t(option.labelKey) }}
+                  </option>
+                </select>
+              </label>
 
-            <label v-if="isQq" class="channel-settings__switch">
-              <input v-model="form.sandbox_mode" type="checkbox" />
-              <span>
-                <strong>{{ t("channels.sandbox_mode") }}</strong>
-                <small>{{ t("channels.sandbox_mode_desc") }}</small>
-              </span>
-            </label>
-
-            <label v-if="isFeishuLike" class="channel-settings__field">
-              <span>{{ t("channels.connection_mode") }}</span>
-              <select v-model="form.connection_mode">
-                <option value="event_callback">{{ t("channels.mode_event_callback") }}</option>
-                <option value="webhook">{{ t("channels.mode_webhook") }}</option>
-                <option value="reserved">{{ t("channels.mode_reserved") }}</option>
-              </select>
-            </label>
-
-            <label class="channel-settings__field">
-              <span>{{ isWeixin ? t("channels.token") : t("channels.app_secret") }}</span>
-              <input
-                v-if="isWeixin"
-                v-model="form.token"
-                type="password"
-                autocomplete="new-password"
-                :placeholder="hasStoredSecret ? t('channels.secret_saved_ph') : t('channels.secret_ph')"
-              />
-              <input
-                v-else
-                v-model="form.app_secret"
-                type="password"
-                autocomplete="new-password"
-                :placeholder="hasStoredSecret ? t('channels.secret_saved_ph') : t('channels.secret_ph')"
-              />
-            </label>
+              <label v-else class="channel-settings__field">
+                <span>{{ t(field.labelKey) }}</span>
+                <input
+                  :type="field.kind"
+                  :value="getFieldValue(field.key)"
+                  :autocomplete="field.autocomplete || undefined"
+                  :placeholder="field.placeholder || ''"
+                  @input="setFieldValue(field.key, readInputValue($event))"
+                />
+              </label>
+            </template>
 
             <label v-if="selectedConfig && hasStoredSecret" class="channel-settings__switch channel-settings__switch-danger">
               <input v-model="form.clear_credentials" type="checkbox" />

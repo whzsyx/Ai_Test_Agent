@@ -10,9 +10,9 @@ from cryptography.fernet import Fernet
 from sqlalchemy.exc import IntegrityError
 
 from src.core.config import Settings
+from src.domain.channel_strategies import channel_strategy_factory
 from src.infrastructure.sqlalchemy_runtime import mysql_raw_connection
 from src.schemas.channel_config import (
-    CHANNEL_DEFINITIONS,
     ChannelConfigCreateRequest,
     ChannelConfigPublic,
     ChannelConfigRecord,
@@ -223,8 +223,7 @@ class MySQLChannelConfigStore:
         return self._codec.encrypt(credentials)
 
     def _credential_flags(self, record: ChannelConfigRecord) -> dict[str, bool]:
-        definition = CHANNEL_DEFINITIONS[record.domain]
-        fields = tuple(definition["credential_fields"])
+        fields = channel_strategy_factory.get(record.domain).definition.credential_fields
         decrypted = self._codec.decrypt(record.credential_ciphertext)
         if decrypted:
             return {field: bool(decrypted.get(field)) for field in fields}

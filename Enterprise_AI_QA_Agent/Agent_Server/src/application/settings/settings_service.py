@@ -10,6 +10,7 @@ from src.application.model_adapters import AdapterRegistry, build_default_adapte
 from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.core.config import Settings
+from src.domain.channel_strategies import channel_strategy_factory
 from src.infrastructure.channel_config_store import MySQLChannelConfigStore
 from src.infrastructure.email_config_store import AGENT_MAIL_PROVIDERS, MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
@@ -20,7 +21,6 @@ from src.schemas.channel_config import (
     ChannelPairingStartRequest,
     ChannelConfigPublic,
     ChannelConfigUpdateRequest,
-    channel_definition,
 )
 from src.schemas.email_config import (
     EmailConfigActionResponse,
@@ -241,29 +241,33 @@ class SettingsService:
         payload: ChannelPairingStartRequest,
         base_url: str,
     ) -> ChannelPairingSessionPublic:
-        definition = channel_definition(domain)
-        if domain == "qq":
-            raise ValueError("QQ official bot does not support QR pairing. Configure App ID and App Secret instead.")
+        strategy = channel_strategy_factory.get(domain)
+        strategy.ensure_pairing_supported()
         self._prune_channel_pairing_sessions()
         session_id = secrets.token_urlsafe(24)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-        api_prefix = self._settings.api_v1_prefix.rstrip("/")
-        public_base_url = (self._settings.channel_pairing_public_base_url or base_url).strip()
-        pairing_url = f"{public_base_url.rstrip('/')}{api_prefix}/settings/channels/pairing/{session_id}/mobile"
+        install = strategy.start_pairing(session_id=session_id)
+        expire_in = int(install.get("expire_in") or 300)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire_in)
         session = {
             "session_id": session_id,
-            "provider": definition["provider"],
-            "domain": domain,
+            "provider": install.get("provider") or strategy.provider,
+            "domain": install.get("domain") or strategy.domain,
+            "requested_domain": strategy.domain,
             "status": "pending",
-            "pairing_url": pairing_url,
-            "qr_payload": pairing_url,
+            "pairing_url": install.get("pairing_url") or install.get("qr_payload") or "",
+            "qr_payload": install.get("qr_payload") or install.get("pairing_url") or "",
             "expires_at": expires_at,
             "confirmed_at": None,
             "config_name": payload.config_name,
             "enabled": payload.enabled,
             "device_hint": payload.device_hint,
+            "interval": int(install.get("interval") or 3),
+            "message": install.get("message"),
             "item": None,
         }
+        for key, value in install.items():
+            if key not in session:
+                session[key] = value
         self._channel_pairing_sessions[session_id] = session
         return self._pairing_session_public(session)
 
@@ -272,6 +276,8 @@ class SettingsService:
         session = self._channel_pairing_sessions.get(session_id)
         if not session:
             raise KeyError(session_id)
+        if session.get("status") == "pending":
+            self._poll_channel_pairing_session(session)
         return self._pairing_session_public(session)
 
     def confirm_channel_pairing(self, session_id: str, device_name: str | None = None) -> ChannelPairingSessionPublic:
@@ -279,28 +285,30 @@ class SettingsService:
         session = self._channel_pairing_sessions.get(session_id)
         if not session:
             raise KeyError(session_id)
+        if session.get("device_code") or session.get("qrcode"):
+            raise ValueError("Official channel pairing must be confirmed by the provider scan flow.")
         if session["status"] == "expired":
             raise ValueError("Pairing session has expired.")
         domain = str(session["domain"])
-        definition = channel_definition(domain)
+        strategy = channel_strategy_factory.get(domain)
+        strategy.ensure_pairing_supported()
         now = datetime.now(timezone.utc)
         device = (device_name or session.get("device_hint") or "Mobile device").strip() or "Mobile device"
-        config_name = (session.get("config_name") or f"{domain.upper()} QR Binding").strip()
+        config_name = (session.get("config_name") or strategy.pairing_config_name()).strip()
         existing = next((item for item in self._channel_config_store.list_all() if item.domain == domain), None)
-        public_config = dict(existing.public_config if existing else {})
-        public_config.update({
-            "auth_method": "qr_pairing",
-            "pairing_session_id": session_id,
-            "paired_device": device,
-            "paired_at": now.isoformat(),
-        })
+        public_config = strategy.build_pairing_public_config(
+            existing_public_config=existing.public_config if existing else None,
+            session_id=session_id,
+            device=device,
+            paired_at=now,
+        )
         if existing:
             saved = self._channel_config_store.update(
                 int(existing.id or 0),
                 ChannelConfigUpdateRequest(
                     config_name=config_name,
-                    provider=definition["provider"],
-                    domain=domain,
+                    provider=strategy.provider,
+                    domain=strategy.domain,
                     enabled=bool(session.get("enabled", True)),
                     public_config=public_config,
                     credentials=None,
@@ -312,8 +320,8 @@ class SettingsService:
             saved = self._channel_config_store.create(
                 ChannelConfigCreateRequest(
                     config_name=config_name,
-                    provider=definition["provider"],
-                    domain=domain,
+                    provider=strategy.provider,
+                    domain=strategy.domain,
                     enabled=bool(session.get("enabled", True)),
                     public_config=public_config,
                     credentials=None,
@@ -324,6 +332,71 @@ class SettingsService:
         session["confirmed_at"] = now
         session["item"] = self._channel_config_store.to_public(saved)
         return self._pairing_session_public(session)
+
+    def _poll_channel_pairing_session(self, session: dict) -> None:
+        if session["status"] != "pending":
+            return
+        if datetime.now(timezone.utc) >= session["expires_at"]:
+            session["status"] = "expired"
+            session["message"] = "Pairing session expired."
+            return
+        strategy = channel_strategy_factory.get(str(session.get("requested_domain") or session["domain"]))
+        result = strategy.poll_pairing(session)
+        if result.get("poll_domain"):
+            session["poll_domain"] = result["poll_domain"]
+        if result.get("base_url"):
+            session["base_url"] = result["base_url"]
+        if result.get("message"):
+            session["message"] = result["message"]
+        if not result.get("done"):
+            return
+        self._complete_official_channel_pairing(session, result)
+
+    def _complete_official_channel_pairing(self, session: dict, result: dict) -> None:
+        domain = str(result.get("domain") or session["domain"])
+        strategy = channel_strategy_factory.get(domain)
+        now = datetime.now(timezone.utc)
+        config_name = (session.get("config_name") or strategy.pairing_config_name()).strip()
+        existing = next((item for item in self._channel_config_store.list_all() if item.domain == domain), None)
+        public_config = strategy.build_connected_public_config(
+            existing_public_config=existing.public_config if existing else None,
+            result=result,
+            session_id=str(session["session_id"]),
+            connected_at=now,
+        )
+        credentials = strategy.build_connected_credentials(result)
+        if existing:
+            saved = self._channel_config_store.update(
+                int(existing.id or 0),
+                ChannelConfigUpdateRequest(
+                    config_name=config_name,
+                    provider=strategy.provider,
+                    domain=strategy.domain,
+                    enabled=bool(session.get("enabled", True)),
+                    public_config=public_config,
+                    credentials=credentials,
+                    clear_credentials=False,
+                    description=existing.description,
+                ),
+            )
+        else:
+            saved = self._channel_config_store.create(
+                ChannelConfigCreateRequest(
+                    config_name=config_name,
+                    provider=strategy.provider,
+                    domain=strategy.domain,
+                    enabled=bool(session.get("enabled", True)),
+                    public_config=public_config,
+                    credentials=credentials,
+                    description=None,
+                ),
+            )
+        session["status"] = "confirmed"
+        session["domain"] = strategy.domain
+        session["provider"] = strategy.provider
+        session["confirmed_at"] = now
+        session["message"] = result.get("message") or "Channel connected."
+        session["item"] = self._channel_config_store.to_public(saved)
 
     def _pairing_session_public(self, session: dict) -> ChannelPairingSessionPublic:
         if session["status"] == "pending" and datetime.now(timezone.utc) >= session["expires_at"]:
@@ -337,6 +410,8 @@ class SettingsService:
             qr_payload=session["qr_payload"],
             expires_at=session["expires_at"],
             confirmed_at=session.get("confirmed_at"),
+            interval=session.get("interval"),
+            message=session.get("message"),
             item=session.get("item"),
         )
 

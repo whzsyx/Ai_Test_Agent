@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.domain.channel_strategies import CHANNEL_DEFINITIONS, channel_strategy_factory
+
 
 ChannelProvider = Literal["qq", "feishu", "weixin"]
 ChannelDomain = Literal["qq", "feishu", "lark", "weixin"]
@@ -12,88 +14,20 @@ ChannelStatus = Literal["unconfigured", "configured", "disabled"]
 ChannelPairingStatus = Literal["pending", "confirmed", "expired"]
 
 
-CHANNEL_DEFINITIONS: dict[str, dict[str, Any]] = {
-    "qq": {
-        "provider": "qq",
-        "domain": "qq",
-        "public_fields": ("app_id", "sandbox_mode"),
-        "required_public": ("app_id",),
-        "credential_fields": ("app_secret",),
-    },
-    "feishu": {
-        "provider": "feishu",
-        "domain": "feishu",
-        "public_fields": ("app_id", "connection_mode"),
-        "required_public": ("app_id",),
-        "credential_fields": ("app_secret",),
-    },
-    "lark": {
-        "provider": "feishu",
-        "domain": "lark",
-        "public_fields": ("app_id", "connection_mode"),
-        "required_public": ("app_id",),
-        "credential_fields": ("app_secret",),
-    },
-    "weixin": {
-        "provider": "weixin",
-        "domain": "weixin",
-        "public_fields": ("account_id",),
-        "required_public": ("account_id",),
-        "credential_fields": ("token",),
-    },
-}
-
-
 def channel_definition(domain: str) -> dict[str, Any]:
-    try:
-        return CHANNEL_DEFINITIONS[domain]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported communication channel domain '{domain}'.") from exc
+    return channel_strategy_factory.get(domain).definition.as_dict()
 
 
 def validate_provider_domain(provider: str, domain: str) -> None:
-    definition = channel_definition(domain)
-    expected = str(definition["provider"])
-    if provider != expected:
-        raise ValueError(f"Domain '{domain}' must use provider '{expected}'.")
+    channel_strategy_factory.get(domain).validate_provider(provider)
 
 
 def clean_public_config(domain: str, value: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    definition = channel_definition(domain)
-    allowed = set(definition["public_fields"]) | {
-        "auth_method",
-        "pairing_session_id",
-        "paired_device",
-        "paired_at",
-    }
-    cleaned: dict[str, Any] = {}
-    for key, item in value.items():
-        if key not in allowed:
-            continue
-        if isinstance(item, str):
-            cleaned[key] = item.strip()
-        else:
-            cleaned[key] = item
-    return cleaned
+    return channel_strategy_factory.get(domain).clean_public_config(value)
 
 
 def clean_credentials(domain: str, value: dict[str, Any] | None) -> dict[str, str]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError("Credentials must be an object.")
-    definition = channel_definition(domain)
-    allowed = set(definition["credential_fields"])
-    cleaned: dict[str, str] = {}
-    for key, item in value.items():
-        if key not in allowed:
-            continue
-        text = "" if item is None else str(item).strip()
-        if text:
-            cleaned[key] = text
-    return cleaned
+    return channel_strategy_factory.get(domain).clean_credentials(value)
 
 
 def compute_channel_status(
@@ -103,17 +37,11 @@ def compute_channel_status(
     public_config: dict[str, Any],
     credential_flags: dict[str, bool],
 ) -> ChannelStatus:
-    if public_config.get("auth_method") == "qr_pairing" and str(public_config.get("paired_at") or "").strip():
-        return "configured" if enabled else "disabled"
-    definition = channel_definition(domain)
-    for key in definition["required_public"]:
-        value = public_config.get(key)
-        if value is None or str(value).strip() == "":
-            return "unconfigured"
-    for key in definition["credential_fields"]:
-        if not credential_flags.get(key):
-            return "unconfigured"
-    return "configured" if enabled else "disabled"
+    return channel_strategy_factory.get(domain).compute_status(
+        enabled=enabled,
+        public_config=public_config,
+        credential_flags=credential_flags,
+    )
 
 
 class ChannelConfigRecord(BaseModel):
@@ -219,6 +147,8 @@ class ChannelPairingSessionPublic(BaseModel):
     qr_payload: str
     expires_at: datetime
     confirmed_at: datetime | None = None
+    interval: int | None = None
+    message: str | None = None
     item: ChannelConfigPublic | None = None
 
 

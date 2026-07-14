@@ -152,6 +152,8 @@ async def get_channel_pairing(session_id: str, request: Request):
         return request.app.state.settings_service.get_channel_pairing(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Pairing session not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/channels/pairing/{session_id}/mobile", response_class=HTMLResponse)
@@ -160,6 +162,8 @@ async def channel_pairing_mobile_page(session_id: str, request: Request):
         session = request.app.state.settings_service.get_channel_pairing(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Pairing session not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     confirm_url = f"{request.app.state.settings.api_v1_prefix.rstrip()}/settings/channels/pairing/{html.escape(session_id)}/confirm"
     if session.status == "confirmed":
