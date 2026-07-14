@@ -433,6 +433,7 @@ export interface ChannelPairingSessionPublic {
   pairing_url: string;
   qr_payload: string;
   expires_at: string;
+  destroy_at: string;
   confirmed_at?: string | null;
   interval?: number | null;
   message?: string | null;

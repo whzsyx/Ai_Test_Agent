@@ -318,6 +318,9 @@ export const api = {
   getChannelPairing(sessionId: string): Promise<ChannelPairingSessionPublic> {
     return request(`/api/v1/settings/channels/pairing/${encodeURIComponent(sessionId)}`);
   },
+  getActiveChannelPairing(domain: ChannelDomain): Promise<ChannelPairingSessionPublic | null> {
+    return request(`/api/v1/settings/channels/${encodeURIComponent(domain)}/pairing/active`);
+  },
 
   // --- Agent Mailbox API ---------------------------------------------------
 

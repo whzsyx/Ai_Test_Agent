@@ -148,6 +148,7 @@ class ChannelPairingSessionPublic(BaseModel):
     pairing_url: str
     qr_payload: str
     expires_at: datetime
+    destroy_at: datetime
     confirmed_at: datetime | None = None
     interval: int | None = None
     message: str | None = None

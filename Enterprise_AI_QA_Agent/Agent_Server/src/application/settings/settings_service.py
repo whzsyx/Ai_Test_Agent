@@ -13,6 +13,7 @@ from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.core.config import Settings
 from src.domain.channel_strategies import channel_strategy_factory
+from src.infrastructure.channel_pairing_store import ChannelPairingSessionStore
 from src.infrastructure.channel_config_store import MySQLChannelConfigStore
 from src.infrastructure.email_config_store import AGENT_MAIL_PROVIDERS, MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
@@ -59,7 +60,7 @@ class SettingsService:
             settings=settings,
             request_timeout=settings.llm_request_timeout_seconds,
         )
-        self._channel_pairing_sessions: dict[str, dict] = {}
+        self._channel_pairing_sessions = ChannelPairingSessionStore(settings.redis_url)
 
     def list_model_configs(self):
         return [self._model_config_store.to_public(item) for item in self._model_config_store.list_all()]
@@ -281,6 +282,7 @@ class SettingsService:
         install = strategy.start_pairing(session_id=session_id)
         expire_in = int(install.get("expire_in") or 300)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire_in)
+        destroy_at = expires_at + timedelta(minutes=30)
         session = {
             "session_id": session_id,
             "provider": install.get("provider") or strategy.provider,
@@ -289,7 +291,9 @@ class SettingsService:
             "status": "pending",
             "pairing_url": install.get("pairing_url") or install.get("qr_payload") or "",
             "qr_payload": install.get("qr_payload") or install.get("pairing_url") or "",
+            "created_at": datetime.now(timezone.utc),
             "expires_at": expires_at,
+            "destroy_at": destroy_at,
             "confirmed_at": None,
             "config_name": payload.config_name,
             "enabled": payload.enabled,
@@ -301,7 +305,20 @@ class SettingsService:
         for key, value in install.items():
             if key not in session:
                 session[key] = value
-        self._channel_pairing_sessions[session_id] = session
+        self._channel_pairing_sessions.save(session)
+        return self._pairing_session_public(session)
+
+    def get_active_channel_pairing(self, domain: str) -> ChannelPairingSessionPublic | None:
+        strategy = channel_strategy_factory.get(domain)
+        strategy.ensure_pairing_supported()
+        self._prune_channel_pairing_sessions()
+        session = self._channel_pairing_sessions.latest_pending_for_domain(strategy.domain)
+        if not session:
+            return None
+        if session.get("status") == "pending":
+            self._poll_channel_pairing_session(session)
+        if session.get("status") != "pending":
+            return None
         return self._pairing_session_public(session)
 
     def get_channel_pairing(self, session_id: str) -> ChannelPairingSessionPublic:
@@ -364,6 +381,7 @@ class SettingsService:
         session["status"] = "confirmed"
         session["confirmed_at"] = now
         session["item"] = self._channel_config_store.to_public(saved)
+        self._channel_pairing_sessions.save(session)
         return self._pairing_session_public(session)
 
     def _poll_channel_pairing_session(self, session: dict) -> None:
@@ -372,6 +390,7 @@ class SettingsService:
         if datetime.now(timezone.utc) >= session["expires_at"]:
             session["status"] = "expired"
             session["message"] = "Pairing session expired."
+            self._channel_pairing_sessions.save(session)
             return
         strategy = channel_strategy_factory.get(str(session.get("requested_domain") or session["domain"]))
         result = strategy.poll_pairing(session)
@@ -382,8 +401,10 @@ class SettingsService:
         if result.get("message"):
             session["message"] = result["message"]
         if not result.get("done"):
+            self._channel_pairing_sessions.save(session)
             return
         self._complete_official_channel_pairing(session, result)
+        self._channel_pairing_sessions.save(session)
 
     def _complete_official_channel_pairing(self, session: dict, result: dict) -> None:
         domain = str(result.get("domain") or session["domain"])
@@ -430,10 +451,12 @@ class SettingsService:
         session["confirmed_at"] = now
         session["message"] = result.get("message") or "Channel connected."
         session["item"] = self._channel_config_store.to_public(saved)
+        self._channel_pairing_sessions.save(session)
 
     def _pairing_session_public(self, session: dict) -> ChannelPairingSessionPublic:
         if session["status"] == "pending" and datetime.now(timezone.utc) >= session["expires_at"]:
             session["status"] = "expired"
+            self._channel_pairing_sessions.save(session)
         return ChannelPairingSessionPublic(
             session_id=session["session_id"],
             provider=session["provider"],
@@ -442,6 +465,7 @@ class SettingsService:
             pairing_url=session["pairing_url"],
             qr_payload=session["qr_payload"],
             expires_at=session["expires_at"],
+            destroy_at=session["destroy_at"],
             confirmed_at=session.get("confirmed_at"),
             interval=session.get("interval"),
             message=session.get("message"),
@@ -450,12 +474,14 @@ class SettingsService:
 
     def _prune_channel_pairing_sessions(self) -> None:
         now = datetime.now(timezone.utc)
-        for session_id, session in list(self._channel_pairing_sessions.items()):
+        for session in self._channel_pairing_sessions.list_all():
             expires_at = session["expires_at"]
             if session["status"] == "pending" and now >= expires_at:
                 session["status"] = "expired"
-            if now - expires_at > timedelta(minutes=30):
-                self._channel_pairing_sessions.pop(session_id, None)
+                self._channel_pairing_sessions.save(session)
+            if now >= session.get("destroy_at", expires_at + timedelta(minutes=30)):
+                self._channel_pairing_sessions.delete(str(session["session_id"]))
+        self._channel_pairing_sessions.prune()
 
 
 _CHANNEL_ADVANCED_SETTINGS_FILE = Path(__file__).resolve().parents[3] / "src" / "data" / "channel_advanced_settings.json"

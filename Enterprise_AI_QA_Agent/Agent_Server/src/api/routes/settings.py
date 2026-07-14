@@ -161,6 +161,14 @@ async def start_channel_pairing(domain: str, payload: ChannelPairingStartRequest
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/channels/{domain}/pairing/active")
+async def get_active_channel_pairing(domain: str, request: Request):
+    try:
+        return request.app.state.settings_service.get_active_channel_pairing(domain)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/channels/pairing/{session_id}")
 async def get_channel_pairing(session_id: str, request: Request):
     try:

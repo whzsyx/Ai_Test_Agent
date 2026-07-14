@@ -33,11 +33,14 @@ const loading = ref(false);
 const saving = ref(false);
 const deleting = ref(false);
 const pairing = ref(false);
+const restoringPairing = ref(false);
 const advancedOpen = ref(false);
 const setupMode = ref<"scan" | "existing">("scan");
 const pairingSession = ref<ChannelPairingSessionPublic | null>(null);
 const qrDataUrl = ref("");
 const pairingPollTimer = ref<number | null>(null);
+const clockTimer = ref<number | null>(null);
+const clockNow = ref(Date.now());
 const form = reactive(createEmptyChannelForm());
 
 const selectedStrategy = computed(() => getChannelStrategy(selectedDomain.value));
@@ -61,6 +64,9 @@ const pairedAt = computed(() => {
   const value = selectedConfig.value?.public_config?.paired_at;
   return value === undefined || value === null ? "" : String(value);
 });
+const pairingExpiresAt = computed(() => formatDateTime(pairingSession.value?.expires_at));
+const pairingDestroyAt = computed(() => formatDateTime(pairingSession.value?.destroy_at));
+const pairingRemaining = computed(() => formatRemaining(pairingSession.value?.expires_at, clockNow.value));
 const connectionSummaryItems = computed(() => {
   const config = selectedConfig.value;
   if (!config) return [];
@@ -159,6 +165,40 @@ function readInputChecked(event: Event) {
   return (event.target as HTMLInputElement).checked;
 }
 
+function parseTime(value?: string | null) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function formatDateTime(value?: string | null) {
+  const time = parseTime(value);
+  if (!time) return "-";
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(time));
+}
+
+function formatRemaining(value?: string | null, now = Date.now()) {
+  const time = parseTime(value);
+  if (!time) return "-";
+  const totalSeconds = Math.max(0, Math.ceil((time - now) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? t("channels.qr_remaining_minutes", { minutes, seconds }) : t("channels.qr_remaining_seconds", { seconds });
+}
+
+function isUsablePairingSession(session: ChannelPairingSessionPublic | null) {
+  if (!session || session.status !== "pending") return false;
+  const now = Date.now();
+  return parseTime(session.expires_at) > now && parseTime(session.destroy_at) > now;
+}
+
 function setFieldValue(key: keyof ChannelForm, value: string | boolean) {
   (form as Record<keyof ChannelForm, string | boolean>)[key] = value;
 }
@@ -186,6 +226,21 @@ function stopPairingPoll() {
   }
 }
 
+function stopClock() {
+  if (clockTimer.value !== null) {
+    window.clearInterval(clockTimer.value);
+    clockTimer.value = null;
+  }
+}
+
+function startClock() {
+  stopClock();
+  clockNow.value = Date.now();
+  clockTimer.value = window.setInterval(() => {
+    clockNow.value = Date.now();
+  }, 1000);
+}
+
 async function renderQr(payload: string) {
   if (payload.startsWith("data:image/")) {
     qrDataUrl.value = payload;
@@ -197,6 +252,21 @@ async function renderQr(payload: string) {
     width: 240,
     color: { dark: "#0f172a", light: "#ffffff" },
   });
+}
+
+async function applyPairingSession(session: ChannelPairingSessionPublic | null) {
+  if (!isUsablePairingSession(session)) {
+    pairingSession.value = null;
+    qrDataUrl.value = "";
+    stopPairingPoll();
+    stopClock();
+    return false;
+  }
+  pairingSession.value = session;
+  await renderQr(session.qr_payload);
+  startClock();
+  schedulePairingPoll();
+  return true;
 }
 
 function schedulePairingPoll() {
@@ -221,13 +291,27 @@ async function startPairing() {
       enabled: true,
       device_hint: "Mobile device",
     });
-    pairingSession.value = session;
-    await renderQr(session.qr_payload);
-    schedulePairingPoll();
+    await applyPairingSession(session);
   } catch (error) {
     message("error", error instanceof Error ? error.message : t("channels.pairing_start_failed"));
   } finally {
     pairing.value = false;
+  }
+}
+
+async function restoreActivePairing() {
+  if (!canPairByQr.value || selectedConfig.value) {
+    await applyPairingSession(null);
+    return;
+  }
+  restoringPairing.value = true;
+  try {
+    const session = await api.getActiveChannelPairing(selectedDomain.value);
+    await applyPairingSession(session);
+  } catch {
+    await applyPairingSession(null);
+  } finally {
+    restoringPairing.value = false;
   }
 }
 
@@ -248,17 +332,20 @@ async function pollPairing() {
       }
       message("success", t("channels.pairing_confirmed_message"));
       stopPairingPoll();
+      stopClock();
       return;
     }
     if (session.status === "expired") {
       message("error", t("channels.pairing_expired_message"));
       stopPairingPoll();
+      stopClock();
       return;
     }
-    schedulePairingPoll();
+    await applyPairingSession(session);
   } catch (error) {
     message("error", error instanceof Error ? error.message : t("channels.pairing_poll_failed"));
     stopPairingPoll();
+    stopClock();
   }
 }
 
@@ -311,9 +398,16 @@ watch(selectedDomain, () => {
   qrDataUrl.value = "";
   setupMode.value = canPairByQr.value ? "scan" : "existing";
   applyConfigToForm();
+  void restoreActivePairing();
 });
-onMounted(loadSettings);
-onBeforeUnmount(stopPairingPoll);
+onMounted(async () => {
+  await loadSettings();
+  await restoreActivePairing();
+});
+onBeforeUnmount(() => {
+  stopPairingPoll();
+  stopClock();
+});
 </script>
 
 <template>
@@ -438,9 +532,14 @@ onBeforeUnmount(stopPairingPoll);
           <div class="channel-settings__pairing-main">
             <strong>{{ t(selectedStrategy.pairingTitleKey) }}</strong>
             <p>{{ t(selectedStrategy.pairingDescriptionKey) }}</p>
-            <button type="button" class="settings-model-card__action settings-model-card__action-activate" :disabled="pairing" @click="startPairing">
+            <button
+              type="button"
+              class="settings-model-card__action settings-model-card__action-activate"
+              :disabled="pairing || restoringPairing"
+              @click="startPairing"
+            >
               <i class="fa-solid fa-qrcode"></i>
-              <span>{{ pairing ? t("channels.qr_generating") : t("channels.qr_start") }}</span>
+              <span>{{ pairing ? t("channels.qr_generating") : restoringPairing ? t("channels.qr_restoring") : t("channels.qr_start") }}</span>
             </button>
           </div>
 
@@ -454,6 +553,9 @@ onBeforeUnmount(stopPairingPoll);
 
           <div v-if="pairingSession" class="channel-settings__pairing-status">
             <span>{{ t("channels.pairing_status") }} - {{ t(`channels.pairing_${pairingSession.status}`) }}</span>
+            <span>{{ t("channels.qr_valid_until") }} {{ pairingExpiresAt }}</span>
+            <span>{{ t("channels.qr_destroy_at") }} {{ pairingDestroyAt }}</span>
+            <span>{{ t("channels.qr_remaining") }} {{ pairingRemaining }}</span>
             <small v-if="pairingSession.message">{{ pairingSession.message }}</small>
             <a :href="pairingSession.pairing_url" target="_blank" rel="noreferrer">{{ t("channels.open_pairing_link") }}</a>
           </div>
