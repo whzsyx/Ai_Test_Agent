@@ -63,6 +63,7 @@ from src.application.runtime.tool_runtime_service import ToolRuntimeService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
 from src.core.config import get_settings
 from src.graph.builder import build_agent_graph
+from src.infrastructure.channel_config_store import MySQLChannelConfigStore
 from src.infrastructure.email_config_store import MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
 from src.infrastructure.postgres_vector_memory_store import PostgresVectorMemoryStore
@@ -89,6 +90,8 @@ async def lifespan(app: FastAPI):
     model_config_store.initialize()
     email_config_store = MySQLEmailConfigStore(settings)
     email_config_store.initialize()
+    channel_config_store = MySQLChannelConfigStore(settings)
+    channel_config_store.initialize()
     model_registry = ModelRegistry(model_config_store)
     skill_registry = SkillRegistry()
     mcp_registry = MCPRegistry()
@@ -223,6 +226,7 @@ async def lifespan(app: FastAPI):
     app.state.tool_registry = tool_registry
     app.state.model_config_store = model_config_store
     app.state.email_config_store = email_config_store
+    app.state.channel_config_store = channel_config_store
     app.state.model_registry = model_registry
     app.state.skill_registry = skill_registry
     app.state.skill_management_service = skill_management_service
@@ -307,6 +311,7 @@ async def lifespan(app: FastAPI):
         settings=settings,
         model_config_store=model_config_store,
         email_config_store=email_config_store,
+        channel_config_store=channel_config_store,
         adapter_registry=adapter_registry,
         oauth_token_service=oauth_token_service,
     )

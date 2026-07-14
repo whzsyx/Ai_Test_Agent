@@ -379,6 +379,45 @@ export interface EmailConfigActionResponse {
   item?: EmailConfigPublic | null;
 }
 
+export type ChannelProvider = "qq" | "feishu" | "weixin";
+export type ChannelDomain = "qq" | "feishu" | "lark" | "weixin";
+export type ChannelStatus = "unconfigured" | "configured" | "disabled";
+
+export interface ChannelConfigPublic {
+  id: number;
+  config_name: string;
+  provider: ChannelProvider;
+  domain: ChannelDomain;
+  enabled: boolean;
+  status: ChannelStatus;
+  public_config: Record<string, unknown>;
+  credential_fields: Record<string, boolean>;
+  has_credentials: boolean;
+  description?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ChannelConfigCreateRequest {
+  config_name: string;
+  provider: ChannelProvider;
+  domain: ChannelDomain;
+  enabled: boolean;
+  public_config: Record<string, unknown>;
+  credentials?: Record<string, string> | null;
+  description?: string | null;
+}
+
+export interface ChannelConfigUpdateRequest extends ChannelConfigCreateRequest {
+  clear_credentials?: boolean;
+}
+
+export interface ChannelConfigActionResponse {
+  ok: boolean;
+  message: string;
+  item?: ChannelConfigPublic | null;
+}
+
 // --- Agent Mailbox types ---------------------------------------------------
 
 export type MailboxProviderKey = string;

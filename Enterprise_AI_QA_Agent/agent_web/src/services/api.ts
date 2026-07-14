@@ -5,6 +5,10 @@ import type {
   ApiDocImportUrlRequest,
   ApiDocUploadRequest,
   ApiDocUpdateRequest,
+  ChannelConfigActionResponse,
+  ChannelConfigCreateRequest,
+  ChannelConfigPublic,
+  ChannelConfigUpdateRequest,
   ConversationResponse,
   DockerContainerActionRequest,
   DockerContainerActionResponse,
@@ -269,6 +273,26 @@ export const api = {
   },
   deleteEmailConfig(configId: number): Promise<EmailConfigActionResponse> {
     return request(`/api/v1/settings/email/${configId}`, {
+      method: "DELETE",
+    });
+  },
+  listChannelConfigs(): Promise<ChannelConfigPublic[]> {
+    return request("/api/v1/settings/channels");
+  },
+  createChannelConfig(payload: ChannelConfigCreateRequest): Promise<ChannelConfigPublic> {
+    return request("/api/v1/settings/channels", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateChannelConfig(configId: number, payload: ChannelConfigUpdateRequest): Promise<ChannelConfigPublic> {
+    return request(`/api/v1/settings/channels/${configId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteChannelConfig(configId: number): Promise<ChannelConfigActionResponse> {
+    return request(`/api/v1/settings/channels/${configId}`, {
       method: "DELETE",
     });
   },

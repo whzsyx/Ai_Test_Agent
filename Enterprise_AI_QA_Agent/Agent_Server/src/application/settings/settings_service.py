@@ -8,8 +8,15 @@ from src.application.model_adapters import AdapterRegistry, build_default_adapte
 from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.application.models.oauth_token_service import OAuthTokenService
 from src.core.config import Settings
+from src.infrastructure.channel_config_store import MySQLChannelConfigStore
 from src.infrastructure.email_config_store import AGENT_MAIL_PROVIDERS, MySQLEmailConfigStore
 from src.infrastructure.model_config_store import MySQLModelConfigStore
+from src.schemas.channel_config import (
+    ChannelConfigActionResponse,
+    ChannelConfigCreateRequest,
+    ChannelConfigPublic,
+    ChannelConfigUpdateRequest,
+)
 from src.schemas.email_config import (
     EmailConfigActionResponse,
     EmailConfigCreateRequest,
@@ -30,12 +37,14 @@ class SettingsService:
         settings: Settings,
         model_config_store: MySQLModelConfigStore,
         email_config_store: MySQLEmailConfigStore,
+        channel_config_store: MySQLChannelConfigStore,
         adapter_registry: AdapterRegistry | None = None,
         oauth_token_service: OAuthTokenService | None = None,
     ) -> None:
         self._settings = settings
         self._model_config_store = model_config_store
         self._email_config_store = email_config_store
+        self._channel_config_store = channel_config_store
         self._adapter_registry = adapter_registry or build_default_adapter_registry()
         self._compatibility = ModelCompatibilityLayer(adapter_registry=self._adapter_registry)
         self._oauth_token_service = oauth_token_service or OAuthTokenService(
@@ -200,3 +209,22 @@ class SettingsService:
         if hasattr(public_item, "__dict__"):
             return EmailConfigPublic.model_validate(vars(public_item))
         return EmailConfigPublic.model_validate(public_item)
+
+    # Communication channel settings ----------------------------------------
+
+    def list_channel_configs(self) -> list[ChannelConfigPublic]:
+        return [self._channel_config_store.to_public(item) for item in self._channel_config_store.list_all()]
+
+    def create_channel_config(self, payload: ChannelConfigCreateRequest) -> ChannelConfigPublic:
+        return self._channel_config_store.to_public(self._channel_config_store.create(payload))
+
+    def update_channel_config(self, config_id: int, payload: ChannelConfigUpdateRequest) -> ChannelConfigPublic:
+        return self._channel_config_store.to_public(self._channel_config_store.update(config_id, payload))
+
+    def delete_channel_config(self, config_id: int) -> ChannelConfigActionResponse:
+        deleted = self._channel_config_store.delete(config_id)
+        return ChannelConfigActionResponse(
+            ok=True,
+            message=f"Communication channel '{deleted.config_name}' was deleted.",
+            item=None,
+        )

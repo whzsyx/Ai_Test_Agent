@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 
+from src.schemas.channel_config import ChannelConfigCreateRequest, ChannelConfigUpdateRequest
 from src.schemas.email_config import EmailConfigCreateRequest, EmailConfigUpdateRequest
 from src.schemas.settings import ModelConfigUpdateRequest
 
@@ -95,6 +96,41 @@ async def delete_email_config(config_id: int, request: Request):
         return request.app.state.settings_service.delete_email_config(config_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Email channel '{config_id}' not found.") from exc
+
+
+@router.get("/channels")
+async def list_channel_configs(request: Request):
+    return request.app.state.settings_service.list_channel_configs()
+
+
+@router.post("/channels")
+async def create_channel_config(payload: ChannelConfigCreateRequest, request: Request):
+    try:
+        return request.app.state.settings_service.create_channel_config(payload)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already exists" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.patch("/channels/{config_id}")
+async def update_channel_config(config_id: int, payload: ChannelConfigUpdateRequest, request: Request):
+    try:
+        return request.app.state.settings_service.update_channel_config(config_id, payload)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Communication channel '{config_id}' not found.") from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already exists" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.delete("/channels/{config_id}")
+async def delete_channel_config(config_id: int, request: Request):
+    try:
+        return request.app.state.settings_service.delete_channel_config(config_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Communication channel '{config_id}' not found.") from exc
 
 
 # ---------------------------------------------------------------------------
