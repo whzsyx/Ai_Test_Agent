@@ -5,21 +5,20 @@ import { api } from "../services/api";
 import { t } from "../services/i18n";
 import { formatServerDateTime } from "../utils/datetime";
 import type {
-  SessionDetail,
+  ReportListPage,
   SessionSummary,
-  SessionSummaryPage,
   ToolArtifactRecord,
   VerificationResult,
   WorkerDispatchRecord,
 } from "../types";
 
 interface ReportEntry {
-  session: SessionDetail;
+  session: SessionSummary;
   artifacts: ToolArtifactRecord[];
   verifications: VerificationResult[];
   workerDispatches: WorkerDispatchRecord[];
   reportMeta: Record<string, unknown>;
-  reportSession: SessionDetail | null;
+  reportSessionId: string;
   reportArtifacts: ToolArtifactRecord[];
 }
 
@@ -31,7 +30,7 @@ interface ReportsCachePayload {
   nextOffset: number;
 }
 
-const REPORTS_CACHE_KEY = "enterprise-ai-qa:reports-cache";
+const REPORTS_CACHE_KEY = "enterprise-ai-qa:reports-cache-v2";
 const REPORTS_CACHE_TTL_MS = 2 * 60 * 1000;
 const REPORTS_PAGE_SIZE = 10;
 
@@ -103,17 +102,6 @@ const selectedWorkerSummary = computed(() => {
   return summary;
 });
 
-function workerDispatchesFromSession(session: SessionDetail): WorkerDispatchRecord[] {
-  const rawValue = session.metadata?.worker_dispatches;
-  if (!Array.isArray(rawValue)) {
-    return [];
-  }
-  return rawValue.filter(
-    (item): item is WorkerDispatchRecord =>
-      typeof item === "object" && item !== null,
-  );
-}
-
 function artifactInlineContent(artifact?: ToolArtifactRecord | null): string {
   if (!artifact) {
     return "";
@@ -121,29 +109,6 @@ function artifactInlineContent(artifact?: ToolArtifactRecord | null): string {
   const metadata = artifact.metadata || {};
   const inlineText = metadata.__content_text;
   return typeof inlineText === "string" ? inlineText.trim() : "";
-}
-
-function readReportMeta(session: SessionDetail): Record<string, unknown> {
-  const rawValue = session.metadata?.code_review_report;
-  if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) {
-    return {};
-  }
-  return rawValue as Record<string, unknown>;
-}
-
-function reportSessionIdFromEntry(entry: {
-  session: SessionDetail;
-  workerDispatches: WorkerDispatchRecord[];
-  reportMeta: Record<string, unknown>;
-}): string {
-  const explicit = String(entry.reportMeta.report_session_id || "").trim();
-  if (explicit) {
-    return explicit;
-  }
-  const completionWorker = entry.workerDispatches.find((item) =>
-    Boolean((item as Record<string, unknown>).is_completion_worker),
-  );
-  return String(completionWorker?.child_session_id || "").trim();
 }
 
 function gradeForSession(entry: ReportEntry): string {
@@ -423,59 +388,17 @@ function hydrateReportsFromCache(payload: ReportsCachePayload) {
   nextOffset.value = Number(payload.nextOffset || payload.reports.length || 0);
 }
 
-async function buildReportEntries(summaries: SessionSummary[]) {
-  const details = await Promise.all(summaries.map((item) => api.getSession(item.id)));
-
-  const baseEntries = await Promise.all(
-    details.map(async (session) => {
-      const [artifacts, verifications] = await Promise.all([
-        api.listArtifacts(session.id),
-        api.listVerifications(session.id),
-      ]);
-      return {
-        session,
-        artifacts,
-        verifications: verifications.verification_results || [],
-        workerDispatches: workerDispatchesFromSession(session),
-        reportMeta: readReportMeta(session),
-      };
-    }),
-  );
-
-  return Promise.all(
-    baseEntries.map(async (entry) => {
-      const reportSessionId = reportSessionIdFromEntry(entry);
-      if (!reportSessionId || reportSessionId === entry.session.id) {
-        return {
-          ...entry,
-          reportSession: null,
-          reportArtifacts: [],
-        };
-      }
-      try {
-        const [reportSession, reportArtifacts] = await Promise.all([
-          api.getSession(reportSessionId),
-          api.listArtifacts(reportSessionId),
-        ]);
-        return {
-          ...entry,
-          reportSession,
-          reportArtifacts,
-        };
-      } catch {
-        return {
-          ...entry,
-          reportSession: null,
-          reportArtifacts: [],
-        };
-      }
-    }),
-  );
-}
-
 async function fetchReportsPage(offset: number, limit = REPORTS_PAGE_SIZE) {
-  const page: SessionSummaryPage = await api.listSessionsPage(limit, offset, "code_review");
-  const entries = await buildReportEntries(page.items);
+  const page: ReportListPage = await api.listReportsPage(limit, offset);
+  const entries: ReportEntry[] = page.items.map((item) => ({
+    session: item.session,
+    artifacts: item.artifacts,
+    verifications: item.verifications,
+    workerDispatches: item.worker_dispatches,
+    reportMeta: item.report_meta,
+    reportSessionId: String(item.report_session_id || ""),
+    reportArtifacts: item.report_artifacts,
+  }));
   return {
     entries,
     hasMore: page.has_more,
@@ -659,11 +582,11 @@ onMounted(() => {
           </article>
           <article class="kpi-card">
             <span class="kpi-label">{{ t("reports.kpi_report_session") }}</span>
-            <strong>{{ selectedReport.reportSession ? t("reports.session_ready") : t("reports.session_pending") }}</strong>
+            <strong>{{ selectedReport.reportSessionId ? t("reports.session_ready") : t("reports.session_pending") }}</strong>
             <p>
               {{
-                selectedReport.reportSession
-                  ? `#${selectedReport.reportSession.id.slice(0, 8)}`
+                selectedReport.reportSessionId
+                  ? `#${selectedReport.reportSessionId.slice(0, 8)}`
                   : t("reports.session_not_complete")
               }}
             </p>

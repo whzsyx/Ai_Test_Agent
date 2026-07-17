@@ -44,6 +44,7 @@ import type {
   ModelConfigConnectionTestResponse,
   ModelConfigPublic,
   ModelConfigUpdateRequest,
+  ReportListPage,
   SessionDetail,
   InputAttachment,
   IntegrationCreateRequest,
@@ -401,6 +402,13 @@ export const api = {
       params.set("mode_key", modeKey);
     }
     return request(`/api/v1/sessions?${params.toString()}`);
+  },
+  listReportsPage(limit = 10, offset = 0): Promise<ReportListPage> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return request(`/api/v1/reports?${params.toString()}`);
   },
   getSession(sessionId: string): Promise<SessionDetail> {
     return request(`/api/v1/sessions/${sessionId}`);

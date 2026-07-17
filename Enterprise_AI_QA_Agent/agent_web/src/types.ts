@@ -731,6 +731,23 @@ export interface SessionSummaryPage {
   has_more: boolean;
 }
 
+export interface ReportListEntry {
+  session: SessionSummary;
+  artifacts: ToolArtifactRecord[];
+  verifications: VerificationResult[];
+  worker_dispatches: WorkerDispatchRecord[];
+  report_meta: Record<string, unknown>;
+  report_session_id?: string | null;
+  report_artifacts: ToolArtifactRecord[];
+}
+
+export interface ReportListPage {
+  items: ReportListEntry[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export interface SessionDetail {
   id: string;
   title: string;

@@ -22,6 +22,7 @@ from src.api.routes.health import router as health_router
 from src.api.routes.integrations import router as integrations_router
 from src.api.routes.knowledge import router as knowledge_router
 from src.api.routes.oauth import router as oauth_router
+from src.api.routes.reports import router as reports_router
 from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
@@ -50,6 +51,7 @@ from src.application.permissions.permission_service import PermissionService
 from src.application.prompting.prompt_assembly_service import PromptAssemblyService
 from src.application.prompting.prompt_service import PromptSubmissionService
 from src.application.registries.registry_service import RegistryService
+from src.application.report_service import ReportService
 from src.application.resources.session_resource_service import SessionResourceService
 from src.application.runtime.runtime_service import RuntimeService
 from src.application.sessions.session_service import SessionService
@@ -159,6 +161,7 @@ async def lifespan(app: FastAPI):
         heartbeat_timeout_seconds=settings.tool_job_heartbeat_timeout_seconds,
     )
     await tool_job_service.initialize()
+    report_service = ReportService(store=store, tool_job_service=tool_job_service)
     permission_service = PermissionService()
     compatibility_runner_service = CompatibilityRunnerService(
         settings=settings,
@@ -251,6 +254,7 @@ async def lifespan(app: FastAPI):
     app.state.session_backend = settings.session_backend
     app.state.tool_job_store = tool_job_store
     app.state.tool_job_service = tool_job_service
+    app.state.report_service = report_service
     app.state.tool_job_backend = settings.tool_job_backend
     app.state.knowledge_graph_service = knowledge_graph_service
     app.state.memory_backend = memory_runtime_service.backend
@@ -345,6 +349,7 @@ app.include_router(attachments_router, prefix=settings.api_v1_prefix)
 app.include_router(api_docs_router, prefix=settings.api_v1_prefix)
 app.include_router(compatibility_router, prefix=settings.api_v1_prefix)
 app.include_router(integrations_router, prefix=settings.api_v1_prefix)
+app.include_router(reports_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
 app.include_router(oauth_router, prefix=settings.api_v1_prefix)

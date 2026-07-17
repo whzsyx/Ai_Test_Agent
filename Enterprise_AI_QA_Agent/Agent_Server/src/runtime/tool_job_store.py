@@ -18,6 +18,10 @@ class ToolJobStore(Protocol):
         session_id: str | None = None,
         tool_job_id: str | None = None,
     ) -> list[ToolArtifactRecord]: ...
+    async def list_artifacts_for_sessions(
+        self,
+        session_ids: list[str],
+    ) -> list[ToolArtifactRecord]: ...
     async def mark_stale_running_jobs(self, timeout_seconds: int) -> list[ToolJobRecord]: ...
 
 
@@ -60,6 +64,20 @@ class InMemoryToolJobStore:
             values = [item for item in values if item.session_id == session_id]
         if tool_job_id:
             values = [item for item in values if item.tool_job_id == tool_job_id]
+        return sorted(values, key=lambda item: item.created_at)
+
+    async def list_artifacts_for_sessions(
+        self,
+        session_ids: list[str],
+    ) -> list[ToolArtifactRecord]:
+        normalized_ids = {str(item).strip() for item in session_ids if str(item).strip()}
+        if not normalized_ids:
+            return []
+        values = [
+            item
+            for item in self._artifacts.values()
+            if item.session_id in normalized_ids
+        ]
         return sorted(values, key=lambda item: item.created_at)
 
     async def mark_stale_running_jobs(self, timeout_seconds: int) -> list[ToolJobRecord]:

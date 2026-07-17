@@ -36,6 +36,12 @@ class PostgresToolJobStore:
     ) -> list[ToolArtifactRecord]:
         return await asyncio.to_thread(self._list_artifacts_sync, session_id, tool_job_id)
 
+    async def list_artifacts_for_sessions(
+        self,
+        session_ids: list[str],
+    ) -> list[ToolArtifactRecord]:
+        return await asyncio.to_thread(self._list_artifacts_for_sessions_sync, session_ids)
+
     async def mark_stale_running_jobs(self, timeout_seconds: int) -> list[ToolJobRecord]:
         return await asyncio.to_thread(self._mark_stale_running_jobs_sync, timeout_seconds)
 
@@ -266,6 +272,29 @@ class PostgresToolJobStore:
                     ORDER BY created_at ASC
                     """,
                     params,
+                )
+                rows = cur.fetchall() or []
+        return [_artifact_from_row(row) for row in rows]
+
+    def _list_artifacts_for_sessions_sync(
+        self,
+        session_ids: list[str],
+    ) -> list[ToolArtifactRecord]:
+        normalized_ids = list(
+            dict.fromkeys(str(item).strip() for item in session_ids if str(item).strip())
+        )
+        if not normalized_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(normalized_ids))
+        with postgres_connect(self._settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT * FROM {self._settings.postgres_tool_artifact_table}
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY created_at ASC
+                    """,
+                    tuple(normalized_ids),
                 )
                 rows = cur.fetchall() or []
         return [_artifact_from_row(row) for row in rows]
