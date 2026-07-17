@@ -37,7 +37,12 @@ const dockedPlaceholder = computed(() => t("home.placeholder_docked"));
 const heroPlaceholder = computed(() => t("home.placeholder"));
 const busyTitle = computed(() => t("home.busy"));
 const idleTitle = computed(() => t("home.idle"));
-const placeholder = computed(() => (props.docked ? dockedPlaceholder.value : heroPlaceholder.value));
+const placeholder = computed(() => {
+  if (sessionStore.selectedModeKey === "compatibility_testing") {
+    return "直接回答御策天检的问题，例如：这是 Android App，产品名叫测试，版本 1.0.0；按 Enter 发送";
+  }
+  return props.docked ? dockedPlaceholder.value : heroPlaceholder.value;
+});
 const buttonTitle = computed(() => (sessionStore.isBusy ? busyTitle.value : idleTitle.value));
 function translatedModeLabel(modeKey?: string | null, fallback?: string | null) {
   const normalizedKey = String(modeKey || "").trim();

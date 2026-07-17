@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { api } from "../../services/api";
 import { useSessionStore } from "../../stores/session";
@@ -59,6 +59,18 @@ const priorityFlows = ref("");
 const excludeScope = ref("");
 const forbiddenActions = ref("");
 const dataPolicy = ref("test data only");
+const wizardStep = ref(1);
+const wizardStepTouched = ref<number[]>([]);
+const wizardReplies = ref<Record<number, string>>({});
+const processedWizardMessageIds = new Set<string>();
+const wizardSteps = [
+  { id: 1, label: "产品", title: "先认识一下要测试的产品", prompt: "它是什么类型、叫什么名字、当前版本是多少？" },
+  { id: 2, label: "接入", title: "把产品交给 Runner", prompt: "告诉我可访问的入口，或提供安装包 / 启动方式。" },
+  { id: 3, label: "登录", title: "测试需要怎样登录？", prompt: "选择认证方式；如果需要凭据，只填写安全引用，不要直接粘贴密码。" },
+  { id: 4, label: "范围", title: "这次重点验证哪些路径？", prompt: "列出模块和关键流程，我会据此生成用例。" },
+  { id: 5, label: "边界", title: "哪些动作必须被保护？", prompt: "告诉我禁测范围、禁止动作，以及测试数据策略。" },
+  { id: 6, label: "确认", title: "准备好生成测试计划了吗？", prompt: "检查下面的摘要，确认后我会生成环境矩阵和测试用例。" },
+];
 let refreshTimer: number | undefined;
 
 const productTypes = [
@@ -182,6 +194,104 @@ const usesWebEntrypoint = computed(() => ["web", "h5"].includes(productType.valu
 const usesMobileEntrypoint = computed(() => ["android_app", "ios_app"].includes(productType.value));
 const usesMiniProgramEntrypoint = computed(() => ["wechat_mini_program", "alipay_mini_program"].includes(productType.value));
 const usesLinuxEntrypoint = computed(() => productType.value === "linux_app");
+const currentWizardStep = computed(() => wizardSteps.find((step) => step.id === wizardStep.value) ?? wizardSteps[0]);
+const wizardProgress = computed(() => Math.round((wizardStep.value / wizardSteps.length) * 100));
+const wizardIsLastStep = computed(() => wizardStep.value === wizardSteps.length);
+
+function wizardStepComplete(step: number) {
+  return Boolean(wizardReplies.value[step]) || step === 3;
+}
+
+function wizardAnswer(step: number) {
+  if (wizardReplies.value[step]) return wizardReplies.value[step];
+  if (step === 1) return [productName.value || "未命名产品", productVersion.value ? `v${productVersion.value}` : "版本待定", productTypes.find((item) => item.value === productType.value)?.label].filter(Boolean).join(" · ");
+  if (step === 2) return [entryUrl.value, artifactUri.value, command.value].filter((value) => value.trim()).join(" · ") || "稍后补充接入信息";
+  if (step === 3) return authStrategies.find((item) => item.value === authStrategy.value)?.label || "未指定";
+  if (step === 4) return [testScope.value, priorityFlows.value].filter((value) => value.trim()).join("；") || "暂未指定重点流程";
+  if (step === 5) return [excludeScope.value ? `排除：${excludeScope.value}` : "", forbiddenActions.value ? `禁止：${forbiddenActions.value}` : "", dataPolicy.value ? `数据：${dataPolicy.value}` : ""].filter(Boolean).join("；");
+  return "已检查摘要，准备生成";
+}
+
+function markWizardStep(step: number) {
+  if (!wizardStepTouched.value.includes(step)) wizardStepTouched.value = [...wizardStepTouched.value, step];
+}
+
+function nextWizardStep() {
+  if (!wizardStepComplete(wizardStep.value)) return;
+  markWizardStep(wizardStep.value);
+  wizardStep.value = Math.min(wizardSteps.length, wizardStep.value + 1);
+}
+
+function previousWizardStep() {
+  wizardStep.value = Math.max(1, wizardStep.value - 1);
+}
+
+function goToWizardStep(step: number) {
+  if (step <= wizardStep.value || wizardStepTouched.value.includes(step - 1)) wizardStep.value = step;
+}
+
+function applyNaturalLanguageAnswer(step: number, content: string) {
+  const answer = content.trim();
+  if (step === 1) {
+    const normalized = answer.toLowerCase();
+    const type = normalized.includes("android") ? "android_app"
+      : normalized.includes("ios") || normalized.includes("iphone") ? "ios_app"
+        : normalized.includes("linux") ? "linux_app"
+          : normalized.includes("小程序") ? (normalized.includes("支付宝") ? "alipay_mini_program" : "wechat_mini_program")
+            : normalized.includes("h5") ? "h5" : normalized.includes("web") ? "web" : productType.value;
+    productType.value = type;
+    const versionMatch = answer.match(/(?:版本|v)\s*[:：]?\s*([\dA-Za-z._-]+)/i);
+    if (versionMatch) productVersion.value = versionMatch[1];
+    const nameMatch = answer.match(/(?:产品名(?:叫|是)?|产品名称(?:叫|是)?|叫)\s*[“「]?([^，,。；;\s”」]+)[”」]?/i);
+    if (nameMatch) productName.value = nameMatch[1];
+  } else if (step === 2) {
+    const urlMatch = answer.match(/https?:\/\/[^\s，,。；;)）]+/i);
+    if (urlMatch) entryUrl.value = urlMatch[0];
+    const artifactMatch = answer.match(/[^\s，,。；;]+\.(?:apk|ipa|aab|deb|AppImage|zip)/i);
+    if (artifactMatch) artifactUri.value = artifactMatch[0];
+    const commandMatch = answer.match(/(?:启动命令|运行)\s*[:：]?\s*([^，,。；;]+)/i);
+    if (commandMatch) command.value = commandMatch[1].trim();
+  } else if (step === 3) {
+    if (/无需|不需要|免登录/.test(answer)) authStrategy.value = "none";
+    else if (/token/i.test(answer)) authStrategy.value = "token";
+    else if (/cookie/i.test(answer)) authStrategy.value = "cookie";
+    else if (/人工|手动/.test(answer)) authStrategy.value = "manual";
+    else if (/账号|帐号|密码/.test(answer)) authStrategy.value = "account";
+    const urlMatch = answer.match(/https?:\/\/[^\s，,。；;)）]+/i);
+    if (urlMatch) baseApi.value = urlMatch[0];
+  } else if (step === 4) {
+    testScope.value = answer;
+    priorityFlows.value = answer;
+  } else if (step === 5) {
+    if (/排除|不测|不包含/.test(answer)) excludeScope.value = answer;
+    if (/禁止|不要|不能|不可/.test(answer)) forbiddenActions.value = answer;
+    dataPolicy.value = answer;
+  }
+}
+
+function handleWizardMessage(messageId: string, content: string) {
+  if (!messageId || processedWizardMessageIds.has(messageId) || !content.trim()) return;
+  processedWizardMessageIds.add(messageId);
+  const step = wizardStep.value;
+  wizardReplies.value = { ...wizardReplies.value, [step]: content.trim() };
+  applyNaturalLanguageAnswer(step, content);
+  markWizardStep(step);
+  if (step < wizardSteps.length) {
+    wizardStep.value = step + 1;
+  } else if (/确认|生成|开始|可以/.test(content)) {
+    void draftCompatibilityPlan();
+  }
+}
+
+watch(
+  () => sessionStore.messages,
+  (messages) => {
+    if (sessionStore.selectedModeKey !== "compatibility_testing") return;
+    const latestUserMessage = [...messages].reverse().find((message) => message.role === "user");
+    if (latestUserMessage) handleWizardMessage(latestUserMessage.id, latestUserMessage.content);
+  },
+  { deep: true },
+);
 
 function availabilityTone(availability: string) {
   if (availability === "available") return "online";
@@ -688,6 +798,9 @@ async function confirmDispatch(plan: CompatibilityPlan) {
 }
 
 onMounted(() => {
+  for (const message of sessionStore.messages) {
+    processedWizardMessageIds.add(message.id);
+  }
   void refreshRunnerState();
   refreshTimer = window.setInterval(() => {
     void refreshRunnerState();
@@ -713,7 +826,103 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div class="compatibility-intake">
+    <div class="compatibility-wizard">
+      <div class="wizard-progress-head">
+        <div>
+          <span class="wizard-eyebrow">对话式配置 · {{ wizardStep }}/{{ wizardSteps.length }}</span>
+          <strong>{{ currentWizardStep.title }}</strong>
+          <p>{{ currentWizardStep.prompt }}</p>
+        </div>
+        <span class="wizard-progress-value">{{ wizardProgress }}%</span>
+      </div>
+      <div class="wizard-progress-track"><span :style="{ width: `${wizardProgress}%` }"></span></div>
+
+      <div class="wizard-steps" aria-label="配置进度">
+        <button
+          v-for="step in wizardSteps"
+          :key="step.id"
+          type="button"
+          :class="['wizard-step', { active: step.id === wizardStep, done: wizardStepTouched.includes(step.id) }]"
+          :disabled="step.id > wizardStep && !wizardStepTouched.includes(step.id - 1)"
+          @click="goToWizardStep(step.id)"
+        >
+          <span>{{ wizardStepTouched.includes(step.id) ? "✓" : step.id }}</span>{{ step.label }}
+        </button>
+      </div>
+
+      <div class="wizard-conversation">
+        <div v-for="step in wizardSteps.filter((item) => item.id < wizardStep && wizardStepTouched.includes(item.id))" :key="`answer-${step.id}`" class="wizard-turn wizard-turn-complete">
+          <div class="wizard-avatar wizard-user-avatar">我</div>
+          <div class="wizard-turn-content">
+            <small>{{ step.title }}</small>
+            <div class="wizard-answer">{{ wizardAnswer(step.id) }}</div>
+          </div>
+          <button type="button" class="wizard-edit" @click="goToWizardStep(step.id)">修改</button>
+        </div>
+
+        <div class="wizard-turn wizard-turn-active">
+          <div class="wizard-avatar">蛛</div>
+          <div class="wizard-turn-content">
+            <small>御策天检</small>
+            <div class="wizard-question">{{ currentWizardStep.prompt }}</div>
+            <div class="wizard-chat-hint">
+              <p>请直接在页面底部的聊天框回答，我会自动识别信息并继续下一步。</p>
+              <div class="wizard-chat-example">例如：<strong>“这是 Android App，产品名叫测试，版本 1.0.0”</strong></div>
+              <div v-if="wizardReplies[wizardStep]" class="wizard-detected">
+                <span>已识别本轮回答</span>
+                <strong>{{ wizardReplies[wizardStep] }}</strong>
+              </div>
+            </div>
+            <div v-if="false">
+            <div v-if="wizardStep === 1" class="wizard-fields wizard-fields-3">
+              <label><span>产品类型</span><select v-model="productType"><option v-for="type in productTypes" :key="type.value" :value="type.value">{{ type.label }}</option></select></label>
+              <label><span>产品名称</span><input v-model="productName" type="text" placeholder="例如：企业工作台" /></label>
+              <label><span>版本</span><input v-model="productVersion" type="text" placeholder="1.0.0" /></label>
+            </div>
+            <div v-else-if="wizardStep === 2" class="wizard-fields wizard-fields-2">
+              <label v-if="usesWebEntrypoint"><span>入口 URL</span><input v-model="entryUrl" type="url" placeholder="https://test.example.com" /></label>
+              <label v-if="usesMobileEntrypoint || usesMiniProgramEntrypoint || usesLinuxEntrypoint"><span>构建产物</span><input v-model="artifactUri" type="text" placeholder="apk / ipa / dist / deb / AppImage" /></label>
+              <label v-if="productType === 'android_app'"><span>包名</span><input v-model="packageName" type="text" placeholder="com.example.app" /></label>
+              <label v-if="productType === 'android_app'"><span>Activity</span><input v-model="activity" type="text" placeholder=".MainActivity" /></label>
+              <label v-if="productType === 'ios_app'"><span>Bundle ID</span><input v-model="bundleId" type="text" placeholder="com.example.ios" /></label>
+              <label v-if="usesMiniProgramEntrypoint"><span>小程序路径</span><input v-model="miniProgramPath" type="text" placeholder="dist/wechat" /></label>
+              <label v-if="usesLinuxEntrypoint"><span>启动命令</span><input v-model="command" type="text" placeholder="./app --test" /></label>
+            </div>
+            <div v-else-if="wizardStep === 3" class="wizard-fields wizard-fields-2">
+              <label><span>认证方式</span><select v-model="authStrategy"><option v-for="strategy in authStrategies" :key="strategy.value" :value="strategy.value">{{ strategy.label }}</option></select></label>
+              <label><span>Base API（可选）</span><input v-model="baseApi" type="url" placeholder="https://api-test.example.com" /></label>
+              <label v-if="authStrategy === 'account'"><span>账号引用</span><input v-model="usernameRef" type="text" placeholder="secret://qa-user" /></label>
+              <label v-if="authStrategy === 'account'"><span>密码引用</span><input v-model="passwordRef" type="text" placeholder="secret://qa-password" /></label>
+              <label v-if="authStrategy === 'token'"><span>Token 引用</span><input v-model="tokenRef" type="text" placeholder="secret://qa-token" /></label>
+              <label class="wizard-check"><input v-model="requiresVpn" type="checkbox" /><span>需要 VPN 才能访问</span></label>
+            </div>
+            <div v-else-if="wizardStep === 4" class="wizard-fields">
+              <label><span>测试模块</span><textarea v-model="testScope" rows="2" placeholder="登录、首页、搜索、订单"></textarea></label>
+              <label><span>核心流程</span><textarea v-model="priorityFlows" rows="2" placeholder="登录后搜索商品并查看详情"></textarea></label>
+            </div>
+            <div v-else-if="wizardStep === 5" class="wizard-fields">
+              <label><span>排除范围</span><textarea v-model="excludeScope" rows="2" placeholder="真实支付、生产数据删除"></textarea></label>
+              <label><span>禁止动作</span><textarea v-model="forbiddenActions" rows="2" placeholder="删除数据、真实扣款、发送外部消息"></textarea></label>
+              <label><span>数据策略</span><input v-model="dataPolicy" type="text" placeholder="仅使用测试数据" /></label>
+            </div>
+            <div v-else class="wizard-review">
+              <div class="wizard-review-row"><span>产品</span><strong>{{ wizardAnswer(1) }}</strong></div>
+              <div class="wizard-review-row"><span>接入</span><strong>{{ wizardAnswer(2) }}</strong></div>
+              <div class="wizard-review-row"><span>认证</span><strong>{{ wizardAnswer(3) }}</strong></div>
+              <div class="wizard-review-row"><span>范围</span><strong>{{ wizardAnswer(4) }}</strong></div>
+              <div class="wizard-review-row"><span>边界</span><strong>{{ wizardAnswer(5) }}</strong></div>
+            </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wizard-actions">
+        <span class="wizard-hint">{{ wizardStep === wizardSteps.length ? "确认后，AI 会生成兼容性测试计划" : "请在下方聊天框直接回答，按 Enter 发送" }}</span>
+      </div>
+    </div>
+
+    <div v-if="false" class="compatibility-intake">
       <div class="compatibility-subhead">
         <strong>产品接入</strong>
         <span class="registry-tag light">Manifest</span>
@@ -1179,6 +1388,164 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.compatibility-wizard {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--accent) 6%), var(--surface));
+}
+
+.wizard-progress-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wizard-progress-head strong,
+.wizard-turn-content small,
+.wizard-question {
+  display: block;
+}
+
+.wizard-progress-head strong {
+  margin-top: 4px;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.wizard-progress-head p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.wizard-eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.wizard-progress-value {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.wizard-progress-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.wizard-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .24s ease;
+}
+
+.wizard-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wizard-step span {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.wizard-step.active { color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.wizard-step.active span,
+.wizard-step.done span { border-color: var(--accent); color: var(--accent); }
+.wizard-step:disabled { cursor: not-allowed; opacity: .55; }
+
+.wizard-conversation { display: grid; gap: 12px; }
+
+.wizard-turn { display: flex; align-items: flex-start; gap: 10px; }
+.wizard-turn-complete { opacity: .82; }
+.wizard-avatar {
+  display: grid;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--accent-contrast, #fff);
+  background: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+.wizard-user-avatar { color: var(--text); background: var(--surface-subtle, rgba(127, 127, 127, .12)); }
+
+.wizard-turn-content { min-width: 0; flex: 1; }
+.wizard-turn-content small { color: var(--text-muted); font-size: 11px; }
+.wizard-question { margin: 2px 0 12px; color: var(--text); font-size: 14px; line-height: 1.5; }
+.wizard-answer { margin-top: 3px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--surface-subtle, rgba(127, 127, 127, .06)); font-size: 13px; }
+.wizard-edit { align-self: center; border: 0; color: var(--accent); background: transparent; font-size: 12px; cursor: pointer; }
+.wizard-chat-hint { display: grid; gap: 8px; padding: 14px; border: 1px dashed color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.wizard-chat-hint p { margin: 0; color: var(--text); font-size: 13px; line-height: 1.6; }
+.wizard-chat-example { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.wizard-chat-example strong { color: var(--text); font-weight: 500; }
+.wizard-detected { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid var(--border); }
+.wizard-detected span { color: var(--accent); font-size: 11px; }
+.wizard-detected strong { color: var(--text); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+
+.wizard-fields { display: grid; gap: 10px; }
+.wizard-fields-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wizard-fields-3 { grid-template-columns: 1.2fr 1.5fr .8fr; }
+.wizard-fields label { display: grid; gap: 5px; min-width: 0; }
+.wizard-fields label > span { color: var(--text-muted); font-size: 12px; }
+.wizard-fields input, .wizard-fields select, .wizard-fields textarea { width: 100%; padding: 10px 11px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: var(--surface); font: inherit; font-size: 13px; }
+.wizard-fields textarea { resize: vertical; }
+.wizard-check { display: flex !important; align-items: center; align-self: end; grid-auto-flow: column; justify-content: flex-start; }
+.wizard-check input { width: auto; }
+
+.wizard-review { display: grid; gap: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; }
+.wizard-review-row { display: grid; grid-template-columns: 64px 1fr; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.wizard-review-row:last-child { border-bottom: 0; }
+.wizard-review-row span { color: var(--text-muted); }
+.wizard-review-row strong { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+
+.wizard-actions { display: flex; align-items: center; gap: 10px; }
+.wizard-secondary { padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: transparent; cursor: pointer; }
+.wizard-hint { margin-right: auto; color: var(--text-muted); font-size: 12px; }
+
+@media (max-width: 720px) {
+  .compatibility-wizard { padding: 14px; }
+  .wizard-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .wizard-fields-2, .wizard-fields-3 { grid-template-columns: 1fr; }
+  .wizard-actions { flex-wrap: wrap; }
+  .wizard-hint { width: 100%; order: -1; }
+}
+
 .compatibility-section {
   display: grid;
   gap: 8px;

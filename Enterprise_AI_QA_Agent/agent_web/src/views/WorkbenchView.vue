@@ -4,7 +4,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import ApprovalPanel from "../components/chat/ApprovalPanel.vue";
 import ChatComposer from "../components/chat/ChatComposer.vue";
 import ChatTimeline from "../components/chat/ChatTimeline.vue";
-import CompatibilityTestingPanel from "../components/chat/CompatibilityTestingPanel.vue";
 import RuntimeStatusPanel from "../components/chat/RuntimeStatusPanel.vue";
 import { useSessionStore } from "../stores/session";
 import { t } from "../services/i18n";
@@ -12,12 +11,7 @@ import { t } from "../services/i18n";
 const sessionStore = useSessionStore();
 const hasConversation = computed(() => sessionStore.messages.length > 0);
 const hasPendingApprovals = computed(() => sessionStore.pendingApprovals.length > 0);
-const isCompatibilityMode = computed(() => sessionStore.selectedModeKey === "compatibility_testing");
-const hasCompatibilityJobs = computed(() =>
-  sessionStore.recentToolJobs.some((job) => job.tool_key === "compatibility-test-runner"),
-);
-const showCompatibilityPanel = computed(() => isCompatibilityMode.value || (hasConversation.value && hasCompatibilityJobs.value));
-const isWorkbenchActive = computed(() => hasConversation.value || showCompatibilityPanel.value);
+const isWorkbenchActive = computed(() => hasConversation.value);
 const heroTitle = computed(() => t("home.title"));
 const heroSubtitle = computed(() => t("home.subtitle"));
 const composerAnchorRef = ref<HTMLElement | null>(null);
@@ -76,7 +70,6 @@ onBeforeUnmount(() => {
       </Transition>
 
       <div class="home-thread-shell" :class="{ 'home-thread-shell-active': isWorkbenchActive }">
-        <CompatibilityTestingPanel v-if="showCompatibilityPanel" />
         <ChatTimeline :messages="sessionStore.messages" />
         <p v-if="sessionStore.error" class="error-text home-inline-error">{{ sessionStore.error }}</p>
       </div>
