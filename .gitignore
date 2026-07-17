@@ -307,6 +307,7 @@ tests/
 !Enterprise_AI_QA_Agent/Agent_Server/tests/
 Enterprise_AI_QA_Agent/Agent_Server/tests/**
 !Enterprise_AI_QA_Agent/Agent_Server/tests/test_compatibility_runner_service.py
+!Enterprise_AI_QA_Agent/Agent_Server/tests/test_report_service.py
 data/
 .pytest_cli_runtime/
 ui-main/
