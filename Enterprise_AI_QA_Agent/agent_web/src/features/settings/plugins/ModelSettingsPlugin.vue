@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref, watch } from "vue";
 import { NSelect, type SelectOption } from "naive-ui";
 
 import { api } from "../../../services/api";
@@ -48,6 +48,7 @@ const oauthFlowState = ref<string | null>(null);
 const oauthFlowStatus = ref<OAuthStatusResponse | null>(null);
 const oauthPolling = ref(false);
 let oauthPollTimer: ReturnType<typeof setInterval> | null = null;
+let pageLoadController: AbortController | null = null;
 
 // OAuth model discovery
 const oauthAvailableModels = ref<OAuthModelItem[]>([]);
@@ -179,17 +180,21 @@ const showOAuthConfigNameField = computed(
     (!oauthHasModelListing.value || oauthAvailableModels.value.length === 0),
 );
 
-onMounted(() => {
-  void loadSettings();
-  void loadOAuthProviders();
+onActivated(() => {
+  pageLoadController?.abort();
+  pageLoadController = new AbortController();
+  void loadSettings(pageLoadController.signal);
+  void loadOAuthProviders(pageLoadController.signal);
 });
+
+onDeactivated(stopPageActivity);
 
 onBeforeUnmount(() => {
   if (messageTimer) {
     clearTimeout(messageTimer);
     messageTimer = null;
   }
-  stopOAuthPoll();
+  stopPageActivity();
 });
 
 watch(
@@ -204,22 +209,34 @@ watch(appliesToTaskExecution, (enabled) => {
   if (!enabled) modelDraft.is_active = false;
 });
 
-async function loadSettings() {
+function stopPageActivity() {
+  pageLoadController?.abort();
+  pageLoadController = null;
+  stopOAuthPoll();
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function loadSettings(signal = pageLoadController?.signal) {
   loading.value = true;
   try {
-    modelConfigs.value = await api.listModelConfigs();
+    modelConfigs.value = await api.listModelConfigs(signal);
   } catch (err) {
+    if (isAbortError(err)) return;
     showMessage("error", err instanceof Error ? err.message : t("modelSettings.load_failed"));
   } finally {
-    loading.value = false;
+    if (!signal?.aborted) loading.value = false;
   }
 }
 
-async function loadOAuthProviders() {
+async function loadOAuthProviders(signal = pageLoadController?.signal) {
   try {
-    const res = await api.listOAuthProviders();
+    const res = await api.listOAuthProviders(signal);
     oauthProviders.value = res.providers;
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) return;
     // non-critical, silently ignore
   }
 }

@@ -211,8 +211,8 @@ export const api = {
       method: "DELETE",
     });
   },
-  listModelConfigs(): Promise<ModelConfigPublic[]> {
-    return request("/api/v1/settings/models");
+  listModelConfigs(signal?: AbortSignal): Promise<ModelConfigPublic[]> {
+    return request("/api/v1/settings/models", { signal });
   },
   updateModelConfig(payload: ModelConfigUpdateRequest): Promise<ModelConfigPublic> {
     return request("/api/v1/settings/models", {
@@ -241,8 +241,8 @@ export const api = {
       method: "DELETE",
     });
   },
-  listOAuthProviders(): Promise<{ providers: import("../types").OAuthProviderProfile[] }> {
-    return request("/api/v1/oauth/providers");
+  listOAuthProviders(signal?: AbortSignal): Promise<{ providers: import("../types").OAuthProviderProfile[] }> {
+    return request("/api/v1/oauth/providers", { signal });
   },
   startOAuthFlow(payload: import("../types").OAuthStartRequest): Promise<import("../types").OAuthStartResponse> {
     return request("/api/v1/oauth/start", {
@@ -263,8 +263,8 @@ export const api = {
     if (base_url) params.set("base_url", base_url);
     return request(`/api/v1/oauth/models?${params.toString()}`);
   },
-  listEmailConfigs(): Promise<EmailConfigPublic[]> {
-    return request("/api/v1/settings/email");
+  listEmailConfigs(signal?: AbortSignal): Promise<EmailConfigPublic[]> {
+    return request("/api/v1/settings/email", { signal });
   },
   createEmailConfig(payload: EmailConfigCreateRequest): Promise<EmailConfigPublic> {
     return request("/api/v1/settings/email", {
@@ -353,18 +353,24 @@ export const api = {
 
   // --- Agent Mailbox API ---------------------------------------------------
 
-  listMailProviders(): Promise<{ providers: MailboxProviderInfo[] }> {
-    return request("/api/v1/mail/providers");
+  listMailProviders(signal?: AbortSignal): Promise<{ providers: MailboxProviderInfo[] }> {
+    return request("/api/v1/mail/providers", { signal });
   },
   mailProviderStatus(provider: string): Promise<Record<string, unknown>> {
     return request(`/api/v1/mail/providers/${provider}/status`, {
       method: "POST",
     });
   },
-  mailProviderSetupAction(provider: string, action: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  mailProviderSetupAction(
+    provider: string,
+    action: string,
+    payload: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
     return request(`/api/v1/mail/providers/${provider}/setup-action`, {
       method: "POST",
       body: JSON.stringify({ action, payload }),
+      signal,
     });
   },
   mailTestSendPrepare(payload: { recipients: string[]; subject: string; content?: string; content_html?: string; config_id?: number | null }): Promise<Record<string, unknown>> {

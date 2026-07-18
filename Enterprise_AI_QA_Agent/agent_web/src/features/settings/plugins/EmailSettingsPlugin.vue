@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref } from "vue";
 import { useMessage } from "naive-ui";
 import { api } from "../../../services/api";
 import { t } from "../../../services/i18n";
@@ -24,6 +24,8 @@ const toast = useMessage();
 const busy = ref<Record<string, boolean>>({});
 const setupById = reactive<Record<number, Setup>>({});
 const authPollTimers = new Map<number, number>();
+let backgroundController: AbortController | null = null;
+let lastBackgroundLoadAt = 0;
 const AUTH_POLL_INTERVAL_MS = 1500;
 const AUTH_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const draft = reactive({
@@ -70,16 +72,28 @@ async function action(id: number, name: string, fn: () => Promise<void>) {
   finally { const next = { ...busy.value }; delete next[actionKey]; busy.value = next; }
 }
 
-async function loadSettings() {
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function loadSettings(signal = backgroundController?.signal) {
   loading.value = true;
   try {
-    const [configs, catalog] = await Promise.all([api.listEmailConfigs(), api.listMailProviders()]);
+    const [configs, catalog] = await Promise.all([
+      api.listEmailConfigs(signal),
+      api.listMailProviders(signal),
+    ]);
     mailboxes.value = configs;
     providers.value = catalog.providers;
+    lastBackgroundLoadAt = Date.now();
     if (!providerMap.value.has(draft.provider)) draft.provider = providers.value[0]?.provider || "tencent_agently";
-    for (const item of configs) void syncMailboxStatus(item);
-  } catch (error) { message("error", error instanceof Error ? error.message : "加载邮箱失败"); }
-  finally { loading.value = false; }
+    for (const item of configs) void syncMailboxStatus(item, signal);
+  } catch (error) {
+    if (!isAbortError(error)) {
+      message("error", error instanceof Error ? error.message : "加载邮箱失败");
+    }
+  }
+  finally { if (!signal?.aborted) loading.value = false; }
 }
 
 function openCreate() {
@@ -143,14 +157,20 @@ async function createMailbox() {
   finally { saving.value = false; }
 }
 
-async function syncMailboxStatus(item: EmailConfigPublic) {
+async function syncMailboxStatus(item: EmailConfigPublic, signal?: AbortSignal) {
   const state = setup(item.id);
   state.authStatus = t("nativeMailSettings.checking");
   state.authState = "checking";
   try {
-    const result = await api.mailProviderSetupAction(item.provider, "status", { config_id: item.id });
+    const result = await api.mailProviderSetupAction(
+      item.provider,
+      "status",
+      { config_id: item.id },
+      signal,
+    );
     applyConnectionResult(state, result);
   } catch (error) {
+    if (isAbortError(error)) return;
     state.authState = "failed";
     state.authStatus = error instanceof Error ? error.message : "状态检查失败";
   }
@@ -334,10 +354,23 @@ async function copyUrl(item: EmailConfigPublic) {
   message("success", "授权链接已复制");
 }
 
-onMounted(loadSettings);
-onBeforeUnmount(() => {
+function stopBackgroundActivity() {
+  backgroundController?.abort();
+  backgroundController = null;
   for (const timer of authPollTimers.values()) window.clearTimeout(timer);
   authPollTimers.clear();
+  for (const state of Object.values(setupById)) state.polling = false;
+}
+
+onActivated(() => {
+  stopBackgroundActivity();
+  if (lastBackgroundLoadAt && Date.now() - lastBackgroundLoadAt < 60_000) return;
+  backgroundController = new AbortController();
+  void loadSettings(backgroundController.signal);
+});
+onDeactivated(stopBackgroundActivity);
+onBeforeUnmount(() => {
+  stopBackgroundActivity();
   const pending = creatingMailbox.value;
   if (pending) void api.deleteEmailConfig(pending.id);
 });

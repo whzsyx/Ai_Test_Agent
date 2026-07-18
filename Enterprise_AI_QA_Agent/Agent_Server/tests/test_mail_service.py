@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -476,6 +477,51 @@ def test_provider_setup_action_returns_provision_error_instead_of_500():
         "provider": "openmail",
         "error": "OpenMail API returned HTTP 422: inbox_limit_reached",
     }
+
+
+def test_provider_status_does_not_block_the_async_event_loop():
+    class SlowStatusAdapter(_CapturingAdapter):
+        provider_key = "openmail"
+
+        def status(self, record):
+            time.sleep(0.15)
+            return {"ok": True, "provider": self.provider_key}
+
+    record = _record(
+        id=9,
+        provider="openmail",
+        api_key="secret",
+        enabled=False,
+        is_default=False,
+    )
+    service = MailService(
+        _StubStore([record]),
+        MailProviderRegistry([SlowStatusAdapter()]),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(mail_service=service))
+    )
+
+    async def exercise():
+        started_at = time.perf_counter()
+        status_task = asyncio.create_task(
+            provider_setup_action(
+                "openmail",
+                ProviderSetupActionRequest(
+                    action="status",
+                    payload={"config_id": 9},
+                ),
+                request,
+            )
+        )
+        await asyncio.sleep(0.02)
+        event_loop_delay = time.perf_counter() - started_at
+        result = await status_task
+        return event_loop_delay, result
+
+    event_loop_delay, result = asyncio.run(exercise())
+    assert event_loop_delay < 0.08
+    assert result == {"ok": True, "provider": "openmail"}
 
 
 def test_dead_simple_email_uses_documented_snake_case_operations(monkeypatch):
