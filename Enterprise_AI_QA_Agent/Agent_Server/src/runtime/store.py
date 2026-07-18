@@ -32,6 +32,13 @@ class SessionStore(Protocol):
         limit: int = 24,
         offset: int = 0,
     ) -> list[TaskPoolSessionSummary]: ...
+    async def list_history_overviews(self, limit: int = 10) -> list[dict]: ...
+    async def list_recent_questions(
+        self,
+        session_limit: int = 10,
+        question_limit: int = 10,
+        include_assistant: bool = False,
+    ) -> list[dict]: ...
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None: ...
     async def list_events(self, session_id: str) -> list[ExecutionEvent]: ...
     def get_queue(self, session_id: str) -> asyncio.Queue[ExecutionEvent]: ...
@@ -140,6 +147,50 @@ class InMemorySessionStore:
                 )
             )
         return rows
+
+    async def list_history_overviews(self, limit: int = 10) -> list[dict]:
+        sessions = await self.list_sessions(limit=limit)
+        return [
+            {
+                "session_id": session.id,
+                "title": session.title,
+                "status": session.status.value,
+                "created_at": session.created_at.isoformat(),
+                "updated_at": session.updated_at.isoformat(),
+                "message_count": len(session.messages),
+                "event_count": session.event_count,
+                "snapshot_count": session.snapshot_count,
+                "selected_agent": session.selected_agent,
+                "preferred_model": session.preferred_model,
+            }
+            for session in sessions
+        ]
+
+    async def list_recent_questions(
+        self,
+        session_limit: int = 10,
+        question_limit: int = 10,
+        include_assistant: bool = False,
+    ) -> list[dict]:
+        sessions = await self.list_sessions(limit=session_limit)
+        items = []
+        for session in sessions:
+            for message in session.messages:
+                role = message.role.value
+                if role != "user" and not (include_assistant and role == "assistant"):
+                    continue
+                if not message.content.strip():
+                    continue
+                items.append(
+                    {
+                        "session_id": session.id,
+                        "role": role,
+                        "content": message.content.strip(),
+                        "created_at": message.created_at.isoformat(),
+                    }
+                )
+        items.sort(key=lambda item: item["created_at"], reverse=True)
+        return items[: max(int(question_limit), 1)]
 
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         session = self._sessions.get(session_id)

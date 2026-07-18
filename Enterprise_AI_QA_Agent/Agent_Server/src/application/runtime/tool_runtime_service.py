@@ -867,6 +867,61 @@ class ToolRuntimeService:
         limit = int(arguments.get("limit") or 10)
         limit = max(1, min(limit, 50))
 
+        if scope == "all_sessions":
+            if action == "count_sessions":
+                status_counts, recent = await asyncio.gather(
+                    store.count_sessions_by_status(),
+                    store.list_history_overviews(limit=limit),
+                )
+                total = sum(status_counts.values())
+                return {
+                    "summary": f"Counted {total} stored session(s) for scope 'all_sessions'.",
+                    "scope": "all_sessions",
+                    "session_count": total,
+                    "status_counts": status_counts,
+                    "sessions": recent,
+                    "metrics": {
+                        "session_count": total,
+                        "status_kind_count": len(status_counts),
+                    },
+                }
+            if action == "list_questions":
+                questions = await store.list_recent_questions(
+                    session_limit=limit,
+                    question_limit=limit,
+                    include_assistant=include_assistant,
+                )
+                return {
+                    "summary": (
+                        f"Collected {len(questions)} historical question item(s) "
+                        "from scope 'all_sessions'."
+                    ),
+                    "scope": "all_sessions",
+                    "questions": questions,
+                    "metrics": {
+                        "question_count": len(questions),
+                        "session_count": len(
+                            {item["session_id"] for item in questions}
+                        ),
+                    },
+                }
+            if action == "history_summary":
+                overviews = await store.list_history_overviews(limit=limit)
+                return {
+                    "summary": (
+                        "Built a history summary for scope 'all_sessions' "
+                        f"across {len(overviews)} session(s)."
+                    ),
+                    "scope": "all_sessions",
+                    "sessions": overviews,
+                    "questions": [],
+                    "metrics": {
+                        "session_count": len(overviews),
+                        "question_count": 0,
+                    },
+                }
+
+        scope = "current_session"
         current_session = await store.get_session(context.session_id)
         if current_session is None:
             return {
@@ -875,36 +930,8 @@ class ToolRuntimeService:
                 "summary": f"Session '{context.session_id}' was not found.",
                 "error": "session_not_found",
             }
-
         sessions = [current_session]
         full_sessions = [current_session]
-        if scope == "all_sessions":
-            if action == "count_sessions":
-                status_counts = await store.count_sessions_by_status()
-                total = sum(status_counts.values())
-                recent = await store.list_sessions(limit=limit)
-                return {
-                    "summary": f"Counted {total} stored session(s) for scope 'all_sessions'.",
-                    "scope": "all_sessions",
-                    "session_count": total,
-                    "status_counts": status_counts,
-                    "sessions": [self._session_overview(item) for item in recent],
-                    "metrics": {
-                        "session_count": total,
-                        "status_kind_count": len(status_counts),
-                    },
-                }
-            sessions = await store.list_sessions(limit=limit)
-            if action == "list_questions":
-                full_sessions = []
-                for item in sessions:
-                    loaded = await store.get_session(item.id)
-                    if loaded is not None:
-                        full_sessions.append(loaded)
-            else:
-                full_sessions = sessions
-        else:
-            scope = "current_session"
 
         if action == "count_sessions":
             status_counts: dict[str, int] = {}

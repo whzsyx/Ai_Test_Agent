@@ -17,6 +17,7 @@ ModelTransport = Literal[
 ]
 
 ModelAuthType = Literal["api_key", "oauth2"]
+ModelApplication = Literal["task_execution", "embedding_retrieval"]
 
 
 ContentPartType = Literal[
@@ -110,6 +111,9 @@ class ModelConfigRecord(BaseModel):
     auth_type: ModelAuthType = "api_key"
     oauth_provider: str | None = None
     oauth_refresh_token: str | None = None
+    applications: list[ModelApplication] = Field(
+        default_factory=lambda: ["task_execution"]
+    )
 
     @model_validator(mode="after")
     def _sync_capabilities(self):
@@ -143,6 +147,9 @@ class ModelConfigPublic(BaseModel):
     auth_type: ModelAuthType = "api_key"
     oauth_provider: str | None = None
     has_oauth_refresh_token: bool = False
+    applications: list[ModelApplication] = Field(
+        default_factory=lambda: ["task_execution"]
+    )
 
 
 class ModelInvocationRequest(BaseModel):

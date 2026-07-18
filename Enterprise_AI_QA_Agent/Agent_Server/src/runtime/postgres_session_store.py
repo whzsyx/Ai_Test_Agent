@@ -57,6 +57,22 @@ class PostgresSessionStore:
             offset,
         )
 
+    async def list_history_overviews(self, limit: int = 10) -> list[dict]:
+        return await asyncio.to_thread(self._list_history_overviews_sync, limit)
+
+    async def list_recent_questions(
+        self,
+        session_limit: int = 10,
+        question_limit: int = 10,
+        include_assistant: bool = False,
+    ) -> list[dict]:
+        return await asyncio.to_thread(
+            self._list_recent_questions_sync,
+            session_limit,
+            question_limit,
+            include_assistant,
+        )
+
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         await asyncio.to_thread(self._append_event_sync, session_id, event)
         await self._queues[session_id].put(event)
@@ -371,6 +387,74 @@ class PostgresSessionStore:
                 )
                 rows = cur.fetchall() or []
         return [_task_pool_session_from_row(item) for item in rows]
+
+    def _list_history_overviews_sync(self, limit: int = 10) -> list[dict]:
+        normalized_limit = max(1, min(int(limit), 50))
+        with postgres_connect(self._settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT s.id, s.title, s.status, s.created_at, s.updated_at,
+                           s.event_count, s.snapshot_count, s.selected_agent,
+                           s.preferred_model,
+                           (
+                               SELECT COUNT(*)
+                               FROM {self._settings.postgres_message_table} m
+                               WHERE m.session_id = s.id
+                           ) AS message_count
+                    FROM {self._settings.postgres_session_table} s
+                    ORDER BY s.updated_at DESC
+                    LIMIT %s
+                    """,
+                    (normalized_limit,),
+                )
+                rows = list(cur.fetchall() or [])
+        return [_history_overview_from_row(row) for row in rows]
+
+    def _list_recent_questions_sync(
+        self,
+        session_limit: int = 10,
+        question_limit: int = 10,
+        include_assistant: bool = False,
+    ) -> list[dict]:
+        roles = ["user", "assistant"] if include_assistant else ["user"]
+        with postgres_connect(self._settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    WITH recent_sessions AS (
+                        SELECT id
+                        FROM {self._settings.postgres_session_table}
+                        ORDER BY updated_at DESC
+                        LIMIT %s
+                    )
+                    SELECT m.session_id, m.role, m.content, m.created_at
+                    FROM recent_sessions rs
+                    JOIN {self._settings.postgres_message_table} m
+                      ON m.session_id = rs.id
+                    WHERE m.role = ANY(%s)
+                      AND BTRIM(m.content) <> ''
+                    ORDER BY m.created_at DESC
+                    LIMIT %s
+                    """,
+                    (
+                        max(1, min(int(session_limit), 50)),
+                        roles,
+                        max(1, min(int(question_limit), 50)),
+                    ),
+                )
+                rows = list(cur.fetchall() or [])
+        return [
+            {
+                "session_id": row["session_id"],
+                "role": row["role"],
+                "content": str(row.get("content") or "").strip(),
+                "created_at": (
+                    ensure_utc_datetime(row.get("created_at")) or datetime.utcnow()
+                ).isoformat(),
+            }
+            for row in rows
+        ]
 
     def _append_event_sync(self, session_id: str, event: ExecutionEvent) -> None:
         with postgres_connect(self._settings) as conn:
@@ -798,6 +882,25 @@ def _session_from_row(row: dict, messages: list[ChatMessage]) -> SessionRecord:
         event_count=int(row.get("event_count") or 0),
         snapshot_count=int(row.get("snapshot_count") or 0),
     )
+
+
+def _history_overview_from_row(row: dict) -> dict:
+    return {
+        "session_id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "created_at": (
+            ensure_utc_datetime(row.get("created_at")) or datetime.utcnow()
+        ).isoformat(),
+        "updated_at": (
+            ensure_utc_datetime(row.get("updated_at")) or datetime.utcnow()
+        ).isoformat(),
+        "message_count": int(row.get("message_count") or 0),
+        "event_count": int(row.get("event_count") or 0),
+        "snapshot_count": int(row.get("snapshot_count") or 0),
+        "selected_agent": row.get("selected_agent"),
+        "preferred_model": row.get("preferred_model"),
+    }
 
 
 def _task_pool_session_from_row(row: dict) -> TaskPoolSessionSummary:

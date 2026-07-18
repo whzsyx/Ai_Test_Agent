@@ -270,7 +270,10 @@ export interface ModelConfigPublic {
   auth_type: "api_key" | "oauth2";
   oauth_provider?: OAuthProviderKey | string | null;
   has_oauth_refresh_token: boolean;
+  applications: ModelApplication[];
 }
+
+export type ModelApplication = "task_execution" | "embedding_retrieval";
 
 export interface ModelCapabilities {
   text_input: boolean;
@@ -316,6 +319,7 @@ export interface ModelConfigUpdateRequest {
   auth_type: "api_key" | "oauth2";
   oauth_provider?: OAuthProviderKey | string | null;
   oauth_refresh_token?: string | null;
+  applications: ModelApplication[];
 }
 
 export interface ModelConfigActionResponse {

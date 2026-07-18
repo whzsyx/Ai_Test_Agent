@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.schemas.email_config import EmailConfigPublic
-from src.schemas.model_config import ModelAuthType, ModelCapabilitiesOverride, ModelConfigPublic, ModelTransport
+from src.schemas.model_config import (
+    ModelApplication,
+    ModelAuthType,
+    ModelCapabilitiesOverride,
+    ModelConfigPublic,
+    ModelTransport,
+)
 
 
 class ModelConfigUpdateRequest(BaseModel):
@@ -18,6 +24,17 @@ class ModelConfigUpdateRequest(BaseModel):
     auth_type: ModelAuthType = "api_key"
     oauth_provider: str | None = None
     oauth_refresh_token: str | None = None
+    applications: list[ModelApplication] = Field(
+        default_factory=lambda: ["task_execution"]
+    )
+
+    @field_validator("applications")
+    @classmethod
+    def normalize_applications(cls, value: list[ModelApplication]):
+        normalized = list(dict.fromkeys(value))
+        if len(normalized) != 1:
+            raise ValueError("Exactly one model application must be selected.")
+        return normalized
 
 
 class ModelConfigEditRequest(BaseModel):
@@ -32,6 +49,17 @@ class ModelConfigEditRequest(BaseModel):
     auth_type: ModelAuthType = "api_key"
     oauth_provider: str | None = None
     oauth_refresh_token: str | None = None
+    applications: list[ModelApplication] = Field(
+        default_factory=lambda: ["task_execution"]
+    )
+
+    @field_validator("applications")
+    @classmethod
+    def normalize_applications(cls, value: list[ModelApplication]):
+        normalized = list(dict.fromkeys(value))
+        if len(normalized) != 1:
+            raise ValueError("Exactly one model application must be selected.")
+        return normalized
 
 
 class ModelConfigActionResponse(BaseModel):

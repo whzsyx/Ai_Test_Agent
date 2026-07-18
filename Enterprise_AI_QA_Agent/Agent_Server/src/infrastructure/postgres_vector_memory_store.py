@@ -43,6 +43,18 @@ class PostgresVectorMemoryStore:
     async def count_documents(self, request: MemorySearchRequest) -> int:
         return await asyncio.to_thread(self._count_documents_sync, request)
 
+    async def count_missing_embeddings(self) -> int:
+        return await asyncio.to_thread(self._count_missing_embeddings_sync)
+
+    async def list_missing_embeddings(self, limit: int) -> list[MemoryPoint]:
+        return await asyncio.to_thread(self._list_missing_embeddings_sync, limit)
+
+    async def update_embeddings(
+        self,
+        items: list[tuple[str, list[float], dict]],
+    ) -> int:
+        return await asyncio.to_thread(self._update_embeddings_sync, items)
+
     def _initialize_sync(self) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -110,7 +122,12 @@ class PostgresVectorMemoryStore:
 
     def _write_sync(self, request: MemoryWriteRequest) -> MemoryPoint | None:
         now = datetime.utcnow()
-        point_id = str(request.metadata.get("memory_id") or request.metadata.get("id") or uuid4())
+        point_id = str(
+            request.metadata.get("memory_id") or request.metadata.get("id") or uuid4()
+        )
+        stored_metadata = dict(request.metadata or {})
+        embedding = self._extract_embedding(stored_metadata)
+        stored_metadata.pop("embedding", None)
         point = MemoryPoint(
             id=point_id,
             scope=request.scope,
@@ -125,11 +142,10 @@ class PostgresVectorMemoryStore:
             stale=request.stale,
             created_at=now,
             updated_at=now,
-            metadata=request.metadata,
+            metadata=stored_metadata,
         )
-        mode_key = str(request.metadata.get("mode_key") or "default")
-        embedding = self._extract_embedding(request.metadata)
-        metadata_json = json.dumps(request.metadata or {}, ensure_ascii=False)
+        mode_key = str(stored_metadata.get("mode_key") or "default")
+        metadata_json = json.dumps(stored_metadata, ensure_ascii=False)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -188,9 +204,8 @@ class PostgresVectorMemoryStore:
             if not _match_metadata_filters(metadata, request.metadata_filters):
                 continue
             score = _score_document(row, request.query, tokens)
-            if query_embedding and row.get("embedding") is not None:
-                vector_bonus = _score_vector_similarity(row.get("embedding"), query_embedding)
-                score += vector_bonus
+            if query_embedding and row.get("vector_similarity") is not None:
+                score += max(float(row["vector_similarity"]), 0.0) * 8.0
             if score <= 0:
                 continue
             hits.append(
@@ -207,8 +222,10 @@ class PostgresVectorMemoryStore:
                     trace_id=row.get("trace_id"),
                     source=row.get("source"),
                     stale=bool(row.get("stale")),
-                    created_at=ensure_utc_datetime(row.get("created_at")) or datetime.utcnow(),
-                    updated_at=ensure_utc_datetime(row.get("updated_at")) or datetime.utcnow(),
+                    created_at=ensure_utc_datetime(row.get("created_at"))
+                    or datetime.utcnow(),
+                    updated_at=ensure_utc_datetime(row.get("updated_at"))
+                    or datetime.utcnow(),
                     metadata=metadata,
                 )
             )
@@ -236,8 +253,10 @@ class PostgresVectorMemoryStore:
                     trace_id=row.get("trace_id"),
                     source=row.get("source"),
                     stale=bool(row.get("stale")),
-                    created_at=ensure_utc_datetime(row.get("created_at")) or datetime.utcnow(),
-                    updated_at=ensure_utc_datetime(row.get("updated_at")) or datetime.utcnow(),
+                    created_at=ensure_utc_datetime(row.get("created_at"))
+                    or datetime.utcnow(),
+                    updated_at=ensure_utc_datetime(row.get("updated_at"))
+                    or datetime.utcnow(),
                     metadata=metadata,
                 )
             )
@@ -254,14 +273,128 @@ class PostgresVectorMemoryStore:
                 row = cur.fetchone()
         return int((row or {}).get("total") or 0)
 
-    def _select_rows(self, request: MemorySearchRequest, limit: int) -> list[dict]:
-        where_clause, params = self._build_where_clause(request)
+    def _count_missing_embeddings_sync(self) -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT COUNT(*) AS total FROM {self._settings.postgres_memory_table} "
+                    "WHERE embedding IS NULL"
+                )
+                row = cur.fetchone()
+        return int((row or {}).get("total") or 0)
+
+    def _list_missing_embeddings_sync(self, limit: int) -> list[MemoryPoint]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
+                    SELECT id, scope, kind, content, summary, tags, session_id, turn_id,
+                           trace_id, source, stale, metadata, created_at, updated_at
+                    FROM {self._settings.postgres_memory_table}
+                    WHERE embedding IS NULL
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT %s
+                    """,
+                    (max(int(limit), 1),),
+                )
+                rows = list(cur.fetchall() or [])
+        return [
+            MemoryPoint(
+                id=row["id"],
+                scope=row.get("scope", "session"),
+                kind=row.get("kind", "episodic"),
+                content=row.get("content") or "",
+                summary=row.get("summary") or "",
+                tags=list(row.get("tags") or []),
+                session_id=row.get("session_id"),
+                turn_id=row.get("turn_id"),
+                trace_id=row.get("trace_id"),
+                source=row.get("source"),
+                stale=bool(row.get("stale")),
+                created_at=ensure_utc_datetime(row.get("created_at"))
+                or datetime.utcnow(),
+                updated_at=ensure_utc_datetime(row.get("updated_at"))
+                or datetime.utcnow(),
+                metadata=row.get("metadata") or {},
+            )
+            for row in rows
+        ]
+
+    def _update_embeddings_sync(
+        self,
+        items: list[tuple[str, list[float], dict]],
+    ) -> int:
+        if not items:
+            return 0
+        values = [
+            (
+                self._serialize_embedding(embedding),
+                json.dumps(metadata, ensure_ascii=False),
+                point_id,
+            )
+            for point_id, embedding, metadata in items
+        ]
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    f"""
+                    UPDATE {self._settings.postgres_memory_table}
+                    SET embedding=%s::vector,
+                        metadata=metadata || %s::jsonb
+                    WHERE id=%s AND embedding IS NULL
+                    """,
+                    values,
+                )
+                updated = int(cur.rowcount or 0)
+        return updated
+
+    def _select_rows(self, request: MemorySearchRequest, limit: int) -> list[dict]:
+        where_clause, params = self._build_where_clause(request)
+        query_embedding = self._extract_query_embedding(request)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                if query_embedding:
+                    serialized_embedding = self._serialize_embedding(query_embedding)
+                    vector_where = self._append_where_condition(
+                        where_clause,
+                        "embedding IS NOT NULL",
+                    )
+                    cur.execute(
+                        f"""
+                        SELECT id, scope, kind, content, summary, tags, session_id, turn_id, trace_id,
+                               source, stale, metadata, created_at, updated_at,
+                               1 - (embedding <=> %s::vector) AS vector_similarity
+                        FROM {self._settings.postgres_memory_table}
+                        {vector_where}
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                        """,
+                        [serialized_embedding, *params, serialized_embedding, limit],
+                    )
+                    vector_rows = list(cur.fetchall() or [])
+                    fallback_where = self._append_where_condition(
+                        where_clause,
+                        "embedding IS NULL",
+                    )
+                    cur.execute(
+                        f"""
+                        SELECT id, scope, kind, content, summary, tags, session_id, turn_id, trace_id,
+                               source, stale, metadata, created_at, updated_at,
+                               NULL::double precision AS vector_similarity
+                        FROM {self._settings.postgres_memory_table}
+                        {fallback_where}
+                        ORDER BY updated_at DESC
+                        LIMIT %s
+                        """,
+                        [*params, limit],
+                    )
+                    fallback_rows = list(cur.fetchall() or [])
+                    return vector_rows + fallback_rows
+                cur.execute(
+                    f"""
                     SELECT id, scope, kind, content, summary, tags, session_id, turn_id, trace_id,
-                           source, stale, metadata, created_at, updated_at, embedding
+                           source, stale, metadata, created_at, updated_at,
+                           NULL::double precision AS vector_similarity
                     FROM {self._settings.postgres_memory_table}
                     {where_clause}
                     ORDER BY updated_at DESC
@@ -272,17 +405,29 @@ class PostgresVectorMemoryStore:
                 rows = cur.fetchall()
         return list(rows or [])
 
+    @staticmethod
+    def _append_where_condition(where_clause: str, condition: str) -> str:
+        if where_clause:
+            return f"{where_clause} AND {condition}"
+        return f"WHERE {condition}"
+
     def _build_where_clause(self, request: MemorySearchRequest) -> tuple[str, list]:
         conditions: list[str] = []
         params: list = []
-        day_buckets = recent_day_buckets(request.day_window) if request.day_window > 0 else []
+        day_buckets = (
+            recent_day_buckets(request.day_window) if request.day_window > 0 else []
+        )
         if day_buckets:
-            conditions.append("to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') = ANY(%s)")
+            conditions.append(
+                "to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') = ANY(%s)"
+            )
             params.append(day_buckets)
         if request.session_id is not None:
             conditions.append("session_id = %s")
             params.append(request.session_id)
-        scopes = request.scopes or ([request.scope] if request.scope is not None else [])
+        scopes = request.scopes or (
+            [request.scope] if request.scope is not None else []
+        )
         if scopes:
             conditions.append("scope = ANY(%s)")
             params.append(scopes)
@@ -314,7 +459,13 @@ class PostgresVectorMemoryStore:
                 return None
         return "[" + ",".join(values) + "]"
 
-    def _extract_query_embedding(self, request: MemorySearchRequest) -> list[float] | None:
+    @staticmethod
+    def _serialize_embedding(embedding: list[float]) -> str:
+        return "[" + ",".join(str(float(item)) for item in embedding) + "]"
+
+    def _extract_query_embedding(
+        self, request: MemorySearchRequest
+    ) -> list[float] | None:
         raw = request.metadata_filters.get("__query_embedding")
         if not isinstance(raw, list) or not raw:
             return None
@@ -363,30 +514,3 @@ def _score_document(document: dict, raw_query: str, tokens: list[str]) -> float:
             else:
                 score += occurrences * 1.0
     return score
-
-
-def _score_vector_similarity(stored_embedding: object, query_embedding: list[float]) -> float:
-    if stored_embedding is None:
-        return 0.0
-    values = stored_embedding
-    if isinstance(stored_embedding, str):
-        try:
-            values = json.loads(stored_embedding)
-        except json.JSONDecodeError:
-            normalized = stored_embedding.strip("[]")
-            try:
-                values = [float(item) for item in normalized.split(",") if item.strip()]
-            except ValueError:
-                return 0.0
-    if not isinstance(values, list) or len(values) != len(query_embedding):
-        return 0.0
-    try:
-        numerator = sum(float(a) * float(b) for a, b in zip(values, query_embedding))
-        left_norm = sum(float(a) * float(a) for a in values) ** 0.5
-        right_norm = sum(float(b) * float(b) for b in query_embedding) ** 0.5
-    except (TypeError, ValueError):
-        return 0.0
-    if left_norm <= 0 or right_norm <= 0:
-        return 0.0
-    cosine = numerator / (left_norm * right_norm)
-    return max(0.0, cosine) * 8.0

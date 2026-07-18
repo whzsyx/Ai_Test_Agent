@@ -8,6 +8,7 @@ from time import perf_counter
 
 import httpx
 
+from src.application.context.embedding_runtime_service import EmbeddingRuntimeService
 from src.application.model_adapters import AdapterRegistry, build_default_adapter_registry
 from src.application.models.model_compatibility import ModelCompatibilityLayer
 from src.application.models.oauth_token_service import OAuthTokenService
@@ -56,6 +57,7 @@ class SettingsService:
         channel_config_store: MySQLChannelConfigStore,
         adapter_registry: AdapterRegistry | None = None,
         oauth_token_service: OAuthTokenService | None = None,
+        embedding_runtime_service: EmbeddingRuntimeService | None = None,
     ) -> None:
         self._settings = settings
         self._model_config_store = model_config_store
@@ -66,6 +68,14 @@ class SettingsService:
         self._oauth_token_service = oauth_token_service or OAuthTokenService(
             settings=settings,
             request_timeout=settings.llm_request_timeout_seconds,
+        )
+        self._embedding_runtime_service = (
+            embedding_runtime_service
+            or EmbeddingRuntimeService(
+                model_config_store=model_config_store,
+                settings=settings,
+                oauth_token_service=self._oauth_token_service,
+            )
         )
         self._channel_pairing_sessions = ChannelPairingSessionStore(settings.redis_url)
         self._channel_gateway_policy = ChannelGatewayPolicyService(
@@ -105,17 +115,71 @@ class SettingsService:
     async def test_model_config_connection(self, model_name: str):
         record = self._model_config_store.get_by_name(model_name)
         public_item = self._model_config_store.to_public(record)
+        tests_embedding = "embedding_retrieval" in record.applications
+        tests_task = "task_execution" in record.applications
+        embedding_result = None
+        if tests_embedding:
+            embedding_result = await self._test_embedding_connection(record, public_item)
+            if not embedding_result.ok or not tests_task:
+                return embedding_result
         if record.auth_type == "oauth2":
-            return await self._test_oauth_connection(record, public_item)
-        if not record.api_key:
-            return ModelConfigConnectionTestResponse(
+            task_result = await self._test_oauth_connection(record, public_item)
+        elif not record.api_key:
+            task_result = ModelConfigConnectionTestResponse(
                 ok=False,
                 message=f"Model '{record.name}' has no API key configured.",
                 item=public_item,
                 provider=record.provider,
                 api_base_url=record.api_base_url,
             )
-        return self._test_api_key_connection(record, public_item, record.api_key)
+        else:
+            task_result = self._test_api_key_connection(
+                record,
+                public_item,
+                record.api_key,
+            )
+        if embedding_result is not None and task_result.ok:
+            task_result.message = (
+                f"Task execution and embedding connection tests succeeded for "
+                f"'{record.name}'."
+            )
+            task_result.preview = (
+                f"{task_result.preview or 'pong'}; {embedding_result.preview}"
+            )
+            task_result.latency_ms = (task_result.latency_ms or 0) + (
+                embedding_result.latency_ms or 0
+            )
+        return task_result
+
+    async def _test_embedding_connection(self, record, public_item):
+        started_at = perf_counter()
+        try:
+            result = await self._embedding_runtime_service.embed_texts(
+                ["embedding connection health check"],
+                config=record,
+                use_cache=False,
+            )
+        except Exception as exc:
+            return ModelConfigConnectionTestResponse(
+                ok=False,
+                message=f"Embedding connection test failed: {exc}",
+                item=public_item,
+                provider=record.provider,
+                api_base_url=record.api_base_url,
+                latency_ms=int((perf_counter() - started_at) * 1000),
+            )
+        return ModelConfigConnectionTestResponse(
+            ok=True,
+            message=f"Embedding connection test succeeded for '{record.name}'.",
+            item=public_item,
+            provider=record.provider,
+            api_base_url=record.api_base_url,
+            latency_ms=result.latency_ms,
+            preview=(
+                f"{result.adapter}, dimension "
+                f"{result.original_dimension}→{result.stored_dimension}"
+            ),
+        )
 
     def _test_api_key_connection(self, record, public_item, api_key: str):
         request = ModelInvocationRequest(

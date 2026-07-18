@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Iterable
 from typing import Any
 
 from src.contracts.memory_store import MemoryStoreProtocol
+from src.application.context.embedding_runtime_service import EmbeddingRuntimeService
 from src.runtime.execution_logging import truncate_text
 from src.schemas.observation import ObservationRecord
 from src.schemas.memory import MemorySearchRequest, MemorySearchResult, MemoryWriteRequest
@@ -15,9 +17,11 @@ class MemoryRuntimeService:
         self,
         memory_store: MemoryStoreProtocol,
         top_k: int = 6,
+        embedding_runtime_service: EmbeddingRuntimeService | None = None,
     ) -> None:
         self._memory_store = memory_store
         self._top_k = top_k
+        self._embedding_runtime_service = embedding_runtime_service
 
     async def initialize(self) -> None:
         await self._memory_store.initialize()
@@ -28,6 +32,53 @@ class MemoryRuntimeService:
 
     async def refresh_backend_status(self) -> str:
         return await self._memory_store.refresh_connection_status()
+
+    async def backfill_missing_embeddings(
+        self,
+        *,
+        limit: int = 1000,
+        batch_size: int = 32,
+        execute: bool = False,
+    ) -> dict[str, Any]:
+        missing_total = await self._memory_store.count_missing_embeddings()
+        requested = min(max(int(limit), 1), missing_total)
+        if not execute or requested == 0:
+            return {
+                "execute": False,
+                "missing_total": missing_total,
+                "requested": requested,
+                "updated": 0,
+            }
+        if self._embedding_runtime_service is None:
+            raise RuntimeError("Embedding runtime service is not configured.")
+        points = await self._memory_store.list_missing_embeddings(requested)
+        updated = 0
+        size = max(1, min(int(batch_size), 100))
+        for offset in range(0, len(points), size):
+            batch = points[offset : offset + size]
+            texts = [
+                "\n".join(part for part in (point.summary, point.content) if part)
+                for point in batch
+            ]
+            result = await self._embedding_runtime_service.embed_texts(texts)
+            metadata = {
+                "embedding_model": result.model_name,
+                "embedding_provider": result.provider,
+                "embedding_adapter": result.adapter,
+                "embedding_source_dimension": result.original_dimension,
+            }
+            updated += await self._memory_store.update_embeddings(
+                [
+                    (point.id, vector, metadata)
+                    for point, vector in zip(batch, result.vectors)
+                ]
+            )
+        return {
+            "execute": True,
+            "missing_total": missing_total,
+            "requested": len(points),
+            "updated": updated,
+        }
 
     async def retrieve_for_turn(
         self,
@@ -40,6 +91,7 @@ class MemoryRuntimeService:
             return MemorySearchResult(query=query, backend=self.backend)
 
         context = context or {}
+        memory_filters = await self._build_search_filters(query, context)
         if self._is_security_session_isolated(context):
             request = MemorySearchRequest(
                 query=query,
@@ -49,10 +101,12 @@ class MemoryRuntimeService:
                 top_k=max(self._top_k, 6),
                 tags=self._derive_read_tags(context),
                 day_window=0,
-                metadata_filters=self._derive_memory_filters(context),
+                metadata_filters=memory_filters,
             )
-            hits = await self._memory_store.search(request)
-            total_docs = await self._memory_store.count_documents(request)
+            hits, total_docs = await asyncio.gather(
+                self._memory_store.search(request),
+                self._memory_store.count_documents(request),
+            )
             prompt_blocks = [
                 (
                     "Memory inventory summary: "
@@ -88,7 +142,7 @@ class MemoryRuntimeService:
             top_k=max(self._top_k, 6),
             tags=self._derive_read_tags(context),
             day_window=0,
-            metadata_filters=self._derive_memory_filters(context),
+            metadata_filters=memory_filters,
         )
         historical_request = MemorySearchRequest(
             query=query,
@@ -98,7 +152,7 @@ class MemoryRuntimeService:
             top_k=max(self._top_k, 8),
             tags=self._derive_read_tags(context),
             day_window=0,
-            metadata_filters=self._derive_memory_filters(context),
+            metadata_filters=memory_filters,
         )
         global_request = MemorySearchRequest(
             query=query,
@@ -108,14 +162,23 @@ class MemoryRuntimeService:
             top_k=max(self._top_k, 6),
             tags=self._derive_read_tags(context),
             day_window=0,
-            metadata_filters=self._derive_memory_filters(context),
+            metadata_filters=memory_filters,
         )
-        current_session_hits = await self._memory_store.search(current_session_request)
-        historical_hits = await self._memory_store.search(historical_request)
-        global_hits = await self._memory_store.search(global_request)
-        total_current_session_docs = await self._memory_store.count_documents(current_session_request)
-        total_historical_docs = await self._memory_store.count_documents(historical_request)
-        total_global_docs = await self._memory_store.count_documents(global_request)
+        (
+            current_session_hits,
+            historical_hits,
+            global_hits,
+            total_current_session_docs,
+            total_historical_docs,
+            total_global_docs,
+        ) = await asyncio.gather(
+            self._memory_store.search(current_session_request),
+            self._memory_store.search(historical_request),
+            self._memory_store.search(global_request),
+            self._memory_store.count_documents(current_session_request),
+            self._memory_store.count_documents(historical_request),
+            self._memory_store.count_documents(global_request),
+        )
         hits = self._merge_ranked_hits(
             current_session_hits,
             historical_hits,
@@ -163,6 +226,7 @@ class MemoryRuntimeService:
             return MemorySearchResult(query=query, backend=self.backend)
 
         context = context or {}
+        memory_filters = await self._build_search_filters(query, context)
         if self._is_security_session_isolated(context):
             request = MemorySearchRequest(
                 query=query,
@@ -173,10 +237,12 @@ class MemoryRuntimeService:
                 top_k=max(top_k, 4),
                 tags=self._derive_read_tags(context),
                 day_window=0,
-                metadata_filters=self._derive_memory_filters(context),
+                metadata_filters=memory_filters,
             )
-            hits = await self._memory_store.search(request)
-            total_docs = await self._memory_store.count_documents(request)
+            hits, total_docs = await asyncio.gather(
+                self._memory_store.search(request),
+                self._memory_store.count_documents(request),
+            )
             prompt_blocks: list[str] = []
             if hits:
                 prompt_blocks = [
@@ -211,7 +277,7 @@ class MemoryRuntimeService:
             top_k=max(top_k, 4),
             tags=self._derive_read_tags(context),
             day_window=0,
-            metadata_filters=self._derive_memory_filters(context),
+            metadata_filters=memory_filters,
         )
         historical_request = MemorySearchRequest(
             query=query,
@@ -222,12 +288,16 @@ class MemoryRuntimeService:
             top_k=max(top_k, 6),
             tags=self._derive_read_tags(context),
             day_window=0,
-            metadata_filters=self._derive_memory_filters(context),
+            metadata_filters=memory_filters,
         )
-        current_hits = await self._memory_store.search(current_session_request)
-        historical_hits = await self._memory_store.search(historical_request)
-        total_current_docs = await self._memory_store.count_documents(current_session_request)
-        total_historical_docs = await self._memory_store.count_documents(historical_request)
+        current_hits, historical_hits, total_current_docs, total_historical_docs = (
+            await asyncio.gather(
+                self._memory_store.search(current_session_request),
+                self._memory_store.search(historical_request),
+                self._memory_store.count_documents(current_session_request),
+                self._memory_store.count_documents(historical_request),
+            )
+        )
         hits = self._merge_ranked_hits(
             current_hits,
             historical_hits,
@@ -281,6 +351,7 @@ class MemoryRuntimeService:
             tool_results=tool_results,
             context_bundle=context_bundle,
         )
+        requests = await self._attach_embeddings(requests)
         for request in requests:
             point = await self._memory_store.write(request)
             if point is not None:
@@ -328,13 +399,15 @@ class MemoryRuntimeService:
                 "artifact_count": len(artifacts or []),
             },
         )
+        request = (await self._attach_embeddings([request]))[0]
         point = await self._memory_store.write(request)
         return point.id if point is not None else None
 
     async def write_observations(self, observations: Iterable[ObservationRecord]) -> list[str]:
         write_ids: list[str] = []
+        requests: list[MemoryWriteRequest] = []
         for observation in observations:
-            point = await self._memory_store.write(
+            requests.append(
                 MemoryWriteRequest(
                     scope=observation.scope,
                     kind="observation",
@@ -356,9 +429,60 @@ class MemoryRuntimeService:
                     },
                 )
             )
+        for request in await self._attach_embeddings(requests):
+            point = await self._memory_store.write(request)
             if point is not None:
                 write_ids.append(point.id)
         return write_ids
+
+    async def _build_search_filters(
+        self,
+        query: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        filters = self._derive_memory_filters(context)
+        if self._embedding_runtime_service is None:
+            return filters
+        try:
+            result = await self._embedding_runtime_service.embed_texts([query])
+        except Exception:
+            return filters
+        return {
+            **filters,
+            "__query_embedding": result.vectors[0],
+            "__embedding_model": result.model_name,
+            "__embedding_provider": result.provider,
+        }
+
+    async def _attach_embeddings(
+        self,
+        requests: list[MemoryWriteRequest],
+    ) -> list[MemoryWriteRequest]:
+        if not requests or self._embedding_runtime_service is None:
+            return requests
+        texts = [
+            "\n".join(part for part in (request.summary, request.content) if part)
+            for request in requests
+        ]
+        try:
+            result = await self._embedding_runtime_service.embed_texts(texts)
+        except Exception:
+            return requests
+        return [
+            request.model_copy(
+                update={
+                    "metadata": {
+                        **request.metadata,
+                        "embedding": vector,
+                        "embedding_model": result.model_name,
+                        "embedding_provider": result.provider,
+                        "embedding_adapter": result.adapter,
+                        "embedding_source_dimension": result.original_dimension,
+                    }
+                }
+            )
+            for request, vector in zip(requests, result.vectors)
+        ]
 
     async def list_session_observations(
         self,

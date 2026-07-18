@@ -72,6 +72,32 @@ class MySQLModelConfigStore:
                         """
                     )
                 cur.execute(
+                    f"SHOW COLUMNS FROM `{self._settings.llm_model_table}` LIKE 'applications'"
+                )
+                if not cur.fetchone():
+                    cur.execute(
+                        f"""
+                        ALTER TABLE `{self._settings.llm_model_table}`
+                        ADD COLUMN `applications` JSON NULL AFTER `transport`
+                        """
+                    )
+                cur.execute(
+                    f"""
+                    UPDATE `{self._settings.llm_model_table}`
+                    SET `applications` = JSON_ARRAY('task_execution')
+                    WHERE `applications` IS NULL OR JSON_LENGTH(`applications`) = 0
+                    """
+                )
+                cur.execute(
+                    f"""
+                    UPDATE `{self._settings.llm_model_table}`
+                    SET `applications` = JSON_ARRAY(
+                        JSON_UNQUOTE(JSON_EXTRACT(`applications`, '$[0]'))
+                    )
+                    WHERE JSON_LENGTH(`applications`) > 1
+                    """
+                )
+                cur.execute(
                     f"""
                     UPDATE `{self._settings.llm_model_table}`
                     SET `transport` =
@@ -161,8 +187,8 @@ class MySQLModelConfigStore:
                     cur.executemany(
                         f"""
                         INSERT INTO `{self._settings.llm_model_table}`
-                        (model_name, api_key, base_url, provider, transport, is_active)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        (model_name, api_key, base_url, provider, transport, applications, is_active)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         [
                             (
@@ -171,6 +197,7 @@ class MySQLModelConfigStore:
                                 "https://api.anthropic.com",
                                 "anthropic",
                                 "anthropic_messages",
+                                json.dumps(["task_execution"]),
                                 0,
                             ),
                             (
@@ -179,6 +206,7 @@ class MySQLModelConfigStore:
                                 "https://api.openai.com/v1",
                                 "openai",
                                 "openai_chat_completions",
+                                json.dumps(["task_execution"]),
                                 0,
                             ),
                             (
@@ -187,6 +215,7 @@ class MySQLModelConfigStore:
                                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                                 "qwen",
                                 "openai_chat_completions",
+                                json.dumps(["task_execution"]),
                                 0,
                             ),
                             (
@@ -195,6 +224,7 @@ class MySQLModelConfigStore:
                                 "https://api.deepseek.com/v1",
                                 "deepseek",
                                 "openai_chat_completions",
+                                json.dumps(["task_execution"]),
                                 0,
                             ),
                         ],
@@ -203,7 +233,7 @@ class MySQLModelConfigStore:
 
     _SELECT_COLS = (
         "id, model_name, api_key, base_url, provider, is_active, created_at, updated_at"
-        ", capability_overrides, transport"
+        ", capability_overrides, transport, applications"
         ", auth_type, oauth_provider, oauth_refresh_token"
     )
 
@@ -223,6 +253,17 @@ class MySQLModelConfigStore:
     def list_active(self) -> list[ModelConfigRecord]:
         return [item for item in self.list_all() if item.is_active]
 
+    def get_for_application(self, application: str) -> ModelConfigRecord:
+        candidates = [
+            item
+            for item in self.list_all()
+            if application in item.applications
+        ]
+        if not candidates:
+            raise KeyError(application)
+        active = [item for item in candidates if item.is_active]
+        return (active or candidates)[0]
+
     def get_by_name(self, model_name: str) -> ModelConfigRecord:
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -240,6 +281,8 @@ class MySQLModelConfigStore:
         return self._row_to_record(row)
 
     def upsert(self, payload: ModelConfigUpdateRequest) -> ModelConfigPublic:
+        is_task_model = "task_execution" in payload.applications
+        should_activate = bool(payload.is_active and is_task_model)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -251,21 +294,22 @@ class MySQLModelConfigStore:
                     (payload.model_name,),
                 )
                 existing_row = cur.fetchone()
-                if payload.is_active:
+                if should_activate:
                     cur.execute(
                         f"UPDATE `{self._settings.llm_model_table}` SET `is_active`=0"
                     )
                 cur.execute(
                     f"""
                     INSERT INTO `{self._settings.llm_model_table}`
-                    (`model_name`, `api_key`, `base_url`, `provider`, `transport`, `capability_overrides`, `is_active`,
+                    (`model_name`, `api_key`, `base_url`, `provider`, `transport`, `applications`, `capability_overrides`, `is_active`,
                      `auth_type`, `oauth_provider`, `oauth_refresh_token`)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         `api_key`=VALUES(`api_key`),
                         `base_url`=VALUES(`base_url`),
                         `provider`=VALUES(`provider`),
                         `transport`=VALUES(`transport`),
+                        `applications`=VALUES(`applications`),
                         `capability_overrides`=VALUES(`capability_overrides`),
                         `is_active`=VALUES(`is_active`),
                         `auth_type`=VALUES(`auth_type`),
@@ -278,16 +322,18 @@ class MySQLModelConfigStore:
                         payload.base_url.rstrip("/"),
                         normalize_provider(payload.provider),
                         normalize_transport(payload.transport, provider=payload.provider),
+                        json.dumps(payload.applications or ["task_execution"]),
                         self._serialize_capability_overrides(
                             payload,
                             existing_row=existing_row,
                         ),
-                        int(payload.is_active),
+                        int(should_activate),
                         payload.auth_type or "api_key",
                         payload.oauth_provider or None,
                         payload.oauth_refresh_token if payload.oauth_refresh_token else ((existing_row or {}).get("oauth_refresh_token") or None),
                     ),
                 )
+                self._ensure_task_execution_active(cur)
                 cur.execute(
                     f"""
                     SELECT {self._SELECT_COLS}
@@ -301,6 +347,8 @@ class MySQLModelConfigStore:
         return self.to_public(self._row_to_record(row))
 
     def update_existing(self, original_model_name: str, payload: ModelConfigUpdateRequest) -> ModelConfigPublic:
+        is_task_model = "task_execution" in payload.applications
+        should_activate = bool(payload.is_active and is_task_model)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -325,7 +373,7 @@ class MySQLModelConfigStore:
                     if duplicate_total:
                         raise ValueError(f"Model '{target_model_name}' already exists.")
 
-                if payload.is_active:
+                if should_activate:
                     cur.execute(f"UPDATE `{self._settings.llm_model_table}` SET `is_active`=0")
 
                 cur.execute(
@@ -336,6 +384,7 @@ class MySQLModelConfigStore:
                         `base_url`=%s,
                         `provider`=%s,
                         `transport`=%s,
+                        `applications`=%s,
                         `capability_overrides`=%s,
                         `is_active`=%s,
                         `auth_type`=%s,
@@ -349,17 +398,19 @@ class MySQLModelConfigStore:
                         payload.base_url.rstrip("/"),
                         normalize_provider(payload.provider),
                         normalize_transport(payload.transport, provider=payload.provider),
+                        json.dumps(payload.applications or ["task_execution"]),
                         self._serialize_capability_overrides(
                             payload,
                             existing_row=existing_row,
                         ),
-                        int(payload.is_active),
+                        int(should_activate),
                         payload.auth_type or "api_key",
                         payload.oauth_provider or None,
                         payload.oauth_refresh_token if payload.oauth_refresh_token else (existing_row.get("oauth_refresh_token") or None),
                         original_model_name,
                     ),
                 )
+                self._ensure_task_execution_active(cur)
                 cur.execute(
                     f"""
                     SELECT {self._SELECT_COLS}
@@ -376,11 +427,18 @@ class MySQLModelConfigStore:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT COUNT(*) AS total FROM `{self._settings.llm_model_table}` WHERE model_name=%s",
+                    f"SELECT {self._SELECT_COLS} FROM `{self._settings.llm_model_table}` WHERE model_name=%s",
                     (model_name,),
                 )
-                if not cur.fetchone()["total"]:
+                existing_row = cur.fetchone()
+                if not existing_row:
                     raise KeyError(model_name)
+                if "task_execution" not in self._parse_applications(
+                    existing_row.get("applications")
+                ):
+                    raise ValueError(
+                        "Only a model applied to task execution can be activated as the main model."
+                    )
                 cur.execute(f"UPDATE `{self._settings.llm_model_table}` SET `is_active`=0")
                 cur.execute(
                     f"UPDATE `{self._settings.llm_model_table}` SET `is_active`=1 WHERE model_name=%s",
@@ -425,6 +483,7 @@ class MySQLModelConfigStore:
                         f"""
                         SELECT {self._SELECT_COLS}
                         FROM `{self._settings.llm_model_table}`
+                        WHERE JSON_CONTAINS(`applications`, JSON_QUOTE('task_execution'))
                         ORDER BY id ASC
                         LIMIT 1
                         """
@@ -447,6 +506,33 @@ class MySQLModelConfigStore:
                         replacement_row = cur.fetchone()
             conn.commit()
         return deleted_record, (self._row_to_record(replacement_row) if replacement_row else None)
+
+    def _ensure_task_execution_active(self, cur) -> None:
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM `{self._settings.llm_model_table}`
+            WHERE `is_active`=1
+              AND JSON_CONTAINS(`applications`, JSON_QUOTE('task_execution'))
+            """
+        )
+        if int(cur.fetchone()["total"] or 0) > 0:
+            return
+        cur.execute(
+            f"""
+            SELECT `model_name`
+            FROM `{self._settings.llm_model_table}`
+            WHERE JSON_CONTAINS(`applications`, JSON_QUOTE('task_execution'))
+            ORDER BY `id` ASC
+            LIMIT 1
+            """
+        )
+        replacement = cur.fetchone()
+        if replacement:
+            cur.execute(
+                f"UPDATE `{self._settings.llm_model_table}` SET `is_active`=1 WHERE `model_name`=%s",
+                (replacement["model_name"],),
+            )
 
     def get_active(self, key: str) -> ModelConfigRecord:
         for item in self.list_active():
@@ -485,6 +571,7 @@ class MySQLModelConfigStore:
             auth_type=record.auth_type,
             oauth_provider=record.oauth_provider,
             has_oauth_refresh_token=bool(record.oauth_refresh_token),
+            applications=record.applications,
         )
 
     def _connect(self):
@@ -537,6 +624,7 @@ class MySQLModelConfigStore:
             auth_type=auth_type,
             oauth_provider=row.get("oauth_provider") or None,
             oauth_refresh_token=row.get("oauth_refresh_token") or None,
+            applications=self._parse_applications(row.get("applications")),
         )
 
     def _normalize_datetime(self, value) -> datetime | None:
@@ -576,6 +664,24 @@ class MySQLModelConfigStore:
         if isinstance(raw_value, dict):
             return ModelCapabilitiesOverride.model_validate(raw_value)
         return ModelCapabilitiesOverride()
+
+    def _parse_applications(self, raw_value) -> list[str]:
+        if raw_value in (None, "", b""):
+            return ["task_execution"]
+        if isinstance(raw_value, (bytes, bytearray)):
+            raw_value = raw_value.decode("utf-8")
+        if isinstance(raw_value, str):
+            try:
+                raw_value = json.loads(raw_value)
+            except json.JSONDecodeError:
+                return ["task_execution"]
+        allowed = {"task_execution", "embedding_retrieval"}
+        applications = [
+            str(item)
+            for item in raw_value
+            if str(item) in allowed
+        ] if isinstance(raw_value, list) else []
+        return (list(dict.fromkeys(applications)) or ["task_execution"])[:1]
 
     def _serialize_capability_overrides(
         self,

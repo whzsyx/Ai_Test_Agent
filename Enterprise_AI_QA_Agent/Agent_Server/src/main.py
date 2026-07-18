@@ -45,6 +45,7 @@ from src.application.mcp.server_store import PostgresMCPServerStore
 from src.application.orchestration.coordinator_runtime_service import CoordinatorRuntimeService
 from src.application.orchestration.input_orchestrator_service import InputOrchestratorService
 from src.application.context.memory_runtime_service import MemoryRuntimeService
+from src.application.context.embedding_runtime_service import EmbeddingRuntimeService
 from src.application.context.mcp_runtime_service import MCPRuntimeService
 from src.application.models.model_runtime_service import ModelRuntimeService
 from src.application.context.observation_runtime_service import ObservationRuntimeService
@@ -93,6 +94,15 @@ async def lifespan(app: FastAPI):
     tool_registry = ToolRegistry()
     model_config_store = MySQLModelConfigStore(settings)
     model_config_store.initialize()
+    oauth_token_service = OAuthTokenService(
+        settings=settings,
+        request_timeout=settings.llm_request_timeout_seconds,
+    )
+    embedding_runtime_service = EmbeddingRuntimeService(
+        model_config_store=model_config_store,
+        settings=settings,
+        oauth_token_service=oauth_token_service,
+    )
     email_config_store = MySQLEmailConfigStore(settings)
     email_config_store.initialize()
     channel_config_store = MySQLChannelConfigStore(settings)
@@ -155,6 +165,7 @@ async def lifespan(app: FastAPI):
     memory_runtime_service = MemoryRuntimeService(
         memory_store=memory_store,
         top_k=settings.memory_top_k,
+        embedding_runtime_service=embedding_runtime_service,
     )
     await memory_runtime_service.initialize()
     tool_job_store = PostgresToolJobStore(settings=settings)
@@ -177,10 +188,6 @@ async def lifespan(app: FastAPI):
     transcript_hygiene_service = TranscriptHygieneService()
     runtime_control = RuntimeControlRegistry()
     adapter_registry = build_default_adapter_registry()
-    oauth_token_service = OAuthTokenService(
-        settings=settings,
-        request_timeout=settings.llm_request_timeout_seconds,
-    )
     model_runtime_service = ModelRuntimeService(
         model_registry=model_registry,
         settings=settings,
@@ -315,6 +322,7 @@ async def lifespan(app: FastAPI):
         mcp_manager_service=mcp_manager_service,
     )
     app.state.oauth_token_service = oauth_token_service
+    app.state.embedding_runtime_service = embedding_runtime_service
     app.state.settings_service = SettingsService(
         settings=settings,
         model_config_store=model_config_store,
@@ -322,6 +330,7 @@ async def lifespan(app: FastAPI):
         channel_config_store=channel_config_store,
         adapter_registry=adapter_registry,
         oauth_token_service=oauth_token_service,
+        embedding_runtime_service=embedding_runtime_service,
     )
     await tencent_auth_monitor.startup()
     try:

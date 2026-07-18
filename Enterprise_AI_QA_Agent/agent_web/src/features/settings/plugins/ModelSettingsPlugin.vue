@@ -7,6 +7,7 @@ import { t } from "../../../services/i18n";
 import type {
   ModelCapabilities,
   ModelCapabilitiesOverride,
+  ModelApplication,
   ModelConfigPublic,
   ModelConfigUpdateRequest,
   OAuthModelItem,
@@ -69,6 +70,19 @@ const capabilityOptions: CapabilityOption[] = [
   { key: "image_base64_input", label: t("modelSettings.cap_image_base64"), hint: t("modelSettings.cap_image_base64_hint") },
 ];
 
+const applicationOptions: Array<{ value: ModelApplication; label: string; hint: string }> = [
+  {
+    value: "task_execution",
+    label: t("modelSettings.application_task_execution"),
+    hint: t("modelSettings.application_task_execution_hint"),
+  },
+  {
+    value: "embedding_retrieval",
+    label: t("modelSettings.application_embedding_retrieval"),
+    hint: t("modelSettings.application_embedding_retrieval_hint"),
+  },
+];
+
 const baseCapabilities: ModelCapabilities = {
   text_input: true,
   text_output: true,
@@ -97,12 +111,22 @@ const modelDraft = reactive<ModelConfigUpdateRequest>({
   auth_type: "api_key",
   oauth_provider: null,
   oauth_refresh_token: null,
+  applications: ["task_execution"],
 });
 
 const capabilityDraft = reactive<ModelCapabilities>({ ...baseCapabilities });
 
 const isEditing = computed(() => Boolean(editingModelName.value));
 const isOAuth = computed(() => modelDraft.auth_type === "oauth2");
+const appliesToTaskExecution = computed(() =>
+  modelDraft.applications.includes("task_execution"),
+);
+const selectedApplication = computed<ModelApplication>({
+  get: () => modelDraft.applications[0] ?? "task_execution",
+  set: (value) => {
+    modelDraft.applications = [value];
+  },
+});
 
 const selectedOAuthProfile = computed<OAuthProviderProfile | null>(() => {
   if (!modelDraft.oauth_provider) return null;
@@ -176,6 +200,10 @@ watch(
   },
 );
 
+watch(appliesToTaskExecution, (enabled) => {
+  if (!enabled) modelDraft.is_active = false;
+});
+
 async function loadSettings() {
   loading.value = true;
   try {
@@ -221,6 +249,7 @@ function resetModelDraft() {
   modelDraft.auth_type = "api_key";
   modelDraft.oauth_provider = null;
   modelDraft.oauth_refresh_token = null;
+  modelDraft.applications = ["task_execution"];
   resetOAuthFlow();
   applyCapabilityDraft(inferCapabilities("", modelDraft.transport));
 }
@@ -245,6 +274,7 @@ function openEditModal(item: ModelConfigPublic) {
   modelDraft.auth_type = item.auth_type ?? "api_key";
   modelDraft.oauth_provider = item.oauth_provider ?? null;
   modelDraft.oauth_refresh_token = null;
+  modelDraft.applications = [...(item.applications || ["task_execution"])];
   oauthCustomBaseUrl.value = item.api_base_url;
   resetOAuthFlow();
   if (item.auth_type === "oauth2" && item.oauth_provider && item.name) {
@@ -334,6 +364,11 @@ async function saveModel() {
     return;
   }
 
+  if (modelDraft.applications.length !== 1) {
+    showMessage("error", t("modelSettings.application_required"));
+    return;
+  }
+
   if (isOAuth.value) {
     if (!modelDraft.oauth_provider) {
       showMessage("error", t("modelSettings.oauth_provider_required"));
@@ -378,6 +413,7 @@ async function saveModel() {
     auth_type: modelDraft.auth_type,
     oauth_provider: isOAuth.value ? (modelDraft.oauth_provider || null) : null,
     oauth_refresh_token: isOAuth.value ? (modelDraft.oauth_refresh_token?.trim() || null) : null,
+    applications: [...modelDraft.applications],
   };
 
   try {
@@ -626,6 +662,14 @@ async function deleteModel(item: ModelConfigPublic) {
             <span>{{ item.transport }}</span>
           </div>
 
+          <div class="settings-model-card__provider-row">
+            <i class="fa-solid fa-bullseye"></i>
+            <span>
+              {{ t("modelSettings.applications") }}:
+              {{ item.applications.map((value) => value === "embedding_retrieval" ? t("modelSettings.application_embedding_retrieval") : t("modelSettings.application_task_execution")).join(" · ") }}
+            </span>
+          </div>
+
           <div class="settings-model-card__stats settings-model-card__stats-plain">
             <div class="settings-model-card__stat">
               <span v-if="item.auth_type === 'oauth2'">
@@ -650,6 +694,7 @@ async function deleteModel(item: ModelConfigPublic) {
 
           <div class="settings-model-card__actions">
             <button
+              v-if="item.applications.includes('task_execution')"
               type="button"
               class="settings-model-card__action settings-model-card__action-test"
               :disabled="busyActionKey === actionKey(item.name, 'test')"
@@ -919,7 +964,29 @@ async function deleteModel(item: ModelConfigPublic) {
             </label>
           </template>
 
-          <label class="checkbox-row full">
+          <div class="full settings-application-section">
+            <span class="settings-application-section__title">{{ t("modelSettings.applications") }}</span>
+            <div class="settings-application-options">
+              <label
+                v-for="option in applicationOptions"
+                :key="option.value"
+                class="checkbox-row settings-application-option"
+              >
+                <input
+                  v-model="selectedApplication"
+                  type="radio"
+                  name="model-application"
+                  :value="option.value"
+                />
+                <span>
+                  <strong>{{ option.label }}</strong>
+                  <small>{{ option.hint }}</small>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <label v-if="appliesToTaskExecution" class="checkbox-row full">
             <input v-model="modelDraft.is_active" type="checkbox" />
             <span>{{ t("modelSettings.set_as_default") }}</span>
           </label>
@@ -1192,6 +1259,47 @@ async function deleteModel(item: ModelConfigPublic) {
   border-radius: 4px;
   font-family: monospace;
   color: var(--text);
+}
+
+.settings-application-section {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-application-section__title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-application-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-application-option {
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+
+.settings-application-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-application-option small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 680px) {
+  .settings-application-options {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
 
