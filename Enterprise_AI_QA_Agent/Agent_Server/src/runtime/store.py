@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Protocol
 
 from src.domain.models import SessionRecord
-from src.schemas.session import ExecutionEvent, SessionSnapshot, ToolApprovalRequest, ToolApprovalStatus
+from src.schemas.session import (
+    ExecutionEvent,
+    SessionMode,
+    SessionSnapshot,
+    ToolApprovalRequest,
+    ToolApprovalStatus,
+)
+from src.schemas.task_pool import TaskPoolSessionSummary
 
 
 class SessionStore(Protocol):
@@ -20,6 +27,11 @@ class SessionStore(Protocol):
         mode_key: str | None = None,
         cursor_before: datetime | None = None,
     ) -> list[SessionRecord]: ...
+    async def list_task_pool_sessions(
+        self,
+        limit: int = 24,
+        offset: int = 0,
+    ) -> list[TaskPoolSessionSummary]: ...
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None: ...
     async def list_events(self, session_id: str) -> list[ExecutionEvent]: ...
     def get_queue(self, session_id: str) -> asyncio.Queue[ExecutionEvent]: ...
@@ -83,6 +95,51 @@ class InMemorySessionStore:
         if size <= 0:
             return []
         return sessions[start : start + size]
+
+    async def list_task_pool_sessions(
+        self,
+        limit: int = 24,
+        offset: int = 0,
+    ) -> list[TaskPoolSessionSummary]:
+        sessions = sorted(
+            (
+                item
+                for item in self._sessions.values()
+                if item.mode_key == "code_review"
+                or item.session_mode == SessionMode.background_task
+            ),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )
+        start = max(int(offset or 0), 0)
+        size = max(int(limit or 0), 0)
+        visible = sessions[start : start + size]
+        rows = []
+        for session in visible:
+            metadata = session.metadata if isinstance(session.metadata, dict) else {}
+            workers = [
+                dict(item)
+                for item in metadata.get("worker_dispatches", [])
+                if isinstance(item, dict)
+            ]
+            rows.append(
+                TaskPoolSessionSummary(
+                    id=session.id,
+                    title=session.title,
+                    status=session.status,
+                    session_mode=session.session_mode,
+                    runtime_mode=session.runtime_mode,
+                    mode_key=session.mode_key,
+                    created_at=session.created_at,
+                    updated_at=session.updated_at,
+                    selected_agent=session.selected_agent,
+                    worker_dispatches=workers,
+                    parent_session_id=str(
+                        metadata.get("parent_session_id") or ""
+                    ).strip(),
+                )
+            )
+        return rows
 
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         session = self._sessions.get(session_id)

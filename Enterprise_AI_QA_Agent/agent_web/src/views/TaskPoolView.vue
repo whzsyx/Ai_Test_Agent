@@ -4,13 +4,13 @@ import { useRouter } from "vue-router";
 
 import { api } from "../services/api";
 import { t } from "../services/i18n";
-import type { SessionDetail, SessionSummary, WorkerDispatchRecord } from "../types";
-import { formatServerDateTime, serverDateTimestamp } from "../utils/datetime";
+import type { TaskPoolSessionSummary, WorkerDispatchRecord } from "../types";
+import { formatServerDateTime } from "../utils/datetime";
 
 type TaskTab = "all" | "running" | "completed" | "failed";
 
 interface TaskRow {
-  session: SessionDetail;
+  session: TaskPoolSessionSummary;
   workerDispatches: WorkerDispatchRecord[];
   isBackgroundChild: boolean;
   parentSessionId: string;
@@ -67,21 +67,6 @@ const tabs = computed(() => {
   ];
 });
 
-function workerDispatchesFromSession(session: SessionDetail): WorkerDispatchRecord[] {
-  const rawValue = session.metadata?.worker_dispatches;
-  if (!Array.isArray(rawValue)) {
-    return [];
-  }
-  return rawValue.filter(
-    (item): item is WorkerDispatchRecord =>
-      typeof item === "object" && item !== null,
-  );
-}
-
-function parentSessionIdFromSession(session: SessionDetail): string {
-  return String(session.metadata?.parent_session_id || "").trim();
-}
-
 function statusLabel(status: string): string {
   if (status === "waiting_approval") return t("taskpool.status_waiting_approval");
   if (status === "completed") return t("taskpool.status_completed");
@@ -129,28 +114,13 @@ async function loadTasks() {
   loading.value = true;
   error.value = "";
   try {
-    const summaries = await api.listSessions();
-    const candidateSummaries = summaries
-      .filter(
-        (item: SessionSummary) =>
-          item.mode_key === "code_review" || item.session_mode === "background_task",
-      )
-      .sort((a, b) => serverDateTimestamp(b.updated_at) - serverDateTimestamp(a.updated_at))
-      .slice(0, 24);
-
-    const details = await Promise.all(
-      candidateSummaries.map((item) => api.getSession(item.id)),
-    );
-
-    rows.value = details.map((session) => {
-      const parentSessionId = parentSessionIdFromSession(session);
-      return {
-        session,
-        workerDispatches: workerDispatchesFromSession(session),
-        isBackgroundChild: session.session_mode === "background_task",
-        parentSessionId,
-      };
-    });
+    const page = await api.listTaskPoolPage(24, 0);
+    rows.value = page.items.map((session) => ({
+      session,
+      workerDispatches: session.worker_dispatches,
+      isBackgroundChild: session.session_mode === "background_task",
+      parentSessionId: session.parent_session_id,
+    }));
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : t("taskpool.load_failed");
   } finally {

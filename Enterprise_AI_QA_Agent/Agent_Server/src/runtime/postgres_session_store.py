@@ -20,6 +20,7 @@ from src.schemas.session import (
     ToolApprovalRequest,
     ToolApprovalStatus,
 )
+from src.schemas.task_pool import TaskPoolSessionSummary
 
 
 class PostgresSessionStore:
@@ -44,6 +45,17 @@ class PostgresSessionStore:
         cursor_before: datetime | None = None,
     ) -> list[SessionRecord]:
         return await asyncio.to_thread(self._list_sessions_sync, limit, offset, mode_key, cursor_before)
+
+    async def list_task_pool_sessions(
+        self,
+        limit: int = 24,
+        offset: int = 0,
+    ) -> list[TaskPoolSessionSummary]:
+        return await asyncio.to_thread(
+            self._list_task_pool_sessions_sync,
+            limit,
+            offset,
+        )
 
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None:
         await asyncio.to_thread(self._append_event_sync, session_id, event)
@@ -321,6 +333,44 @@ class PostgresSessionStore:
                     cur.execute(query)
                 rows = cur.fetchall() or []
         return [_session_from_row(item, []) for item in rows]
+
+    def _list_task_pool_sessions_sync(
+        self,
+        limit: int = 24,
+        offset: int = 0,
+    ) -> list[TaskPoolSessionSummary]:
+        normalized_limit = max(int(limit or 0), 0)
+        normalized_offset = max(int(offset or 0), 0)
+        if normalized_limit <= 0:
+            return []
+        with postgres_connect(self._settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        id,
+                        title,
+                        status,
+                        session_mode,
+                        runtime_mode,
+                        mode_key,
+                        created_at,
+                        updated_at,
+                        selected_agent,
+                        COALESCE(metadata->'worker_dispatches', '[]'::jsonb)
+                            AS worker_dispatches,
+                        COALESCE(metadata->>'parent_session_id', '')
+                            AS parent_session_id
+                    FROM {self._settings.postgres_session_table}
+                    WHERE mode_key = 'code_review'
+                       OR session_mode = 'background_task'
+                    ORDER BY updated_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (normalized_limit, normalized_offset),
+                )
+                rows = cur.fetchall() or []
+        return [_task_pool_session_from_row(item) for item in rows]
 
     def _append_event_sync(self, session_id: str, event: ExecutionEvent) -> None:
         with postgres_connect(self._settings) as conn:
@@ -747,6 +797,26 @@ def _session_from_row(row: dict, messages: list[ChatMessage]) -> SessionRecord:
         messages=messages,
         event_count=int(row.get("event_count") or 0),
         snapshot_count=int(row.get("snapshot_count") or 0),
+    )
+
+
+def _task_pool_session_from_row(row: dict) -> TaskPoolSessionSummary:
+    raw_workers = row.get("worker_dispatches")
+    workers = []
+    if isinstance(raw_workers, list):
+        workers = [dict(item) for item in raw_workers if isinstance(item, dict)]
+    return TaskPoolSessionSummary(
+        id=row["id"],
+        title=row["title"],
+        status=SessionStatus(row["status"]),
+        session_mode=SessionMode(row["session_mode"]),
+        runtime_mode=RuntimeMode(row["runtime_mode"]),
+        mode_key=str(row.get("mode_key") or "default"),
+        created_at=ensure_utc_datetime(row["created_at"]) or datetime.utcnow(),
+        updated_at=ensure_utc_datetime(row["updated_at"]) or datetime.utcnow(),
+        selected_agent=row.get("selected_agent"),
+        worker_dispatches=workers,
+        parent_session_id=str(row.get("parent_session_id") or "").strip(),
     )
 
 

@@ -26,6 +26,7 @@ from src.api.routes.reports import router as reports_router
 from src.api.routes.registry import router as registry_router
 from src.api.routes.sessions import router as sessions_router
 from src.api.routes.settings import router as settings_router
+from src.api.routes.task_pool import router as task_pool_router
 from src.api.routes.mail import router as mail_router
 from src.application.model_adapters import build_default_adapter_registry
 from src.application.mail.auth_monitor import TencentAuthMonitor
@@ -60,6 +61,7 @@ from src.application.skills.skill_management_service import SkillManagementServi
 from src.application.skills.skill_marketplace_service import SkillMarketplaceService
 from src.application.skills.skill_runtime_service import SkillRuntimeService
 from src.application.settings.settings_service import SettingsService
+from src.application.task_pool_service import TaskPoolService
 from src.application.runtime.tool_job_service import ToolJobService
 from src.application.runtime.tool_runtime_service import ToolRuntimeService
 from src.application.context.transcript_hygiene_service import TranscriptHygieneService
@@ -86,6 +88,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     store = PostgresSessionStore(settings)
     await store.initialize()
+    task_pool_service = TaskPoolService(store=store)
     agent_registry = AgentRegistry()
     tool_registry = ToolRegistry()
     model_config_store = MySQLModelConfigStore(settings)
@@ -252,6 +255,7 @@ async def lifespan(app: FastAPI):
     app.state.session_resource_service = session_resource_service
     app.state.memory_runtime_service = memory_runtime_service
     app.state.session_backend = settings.session_backend
+    app.state.task_pool_service = task_pool_service
     app.state.tool_job_store = tool_job_store
     app.state.tool_job_service = tool_job_service
     app.state.report_service = report_service
@@ -350,6 +354,7 @@ app.include_router(api_docs_router, prefix=settings.api_v1_prefix)
 app.include_router(compatibility_router, prefix=settings.api_v1_prefix)
 app.include_router(integrations_router, prefix=settings.api_v1_prefix)
 app.include_router(reports_router, prefix=settings.api_v1_prefix)
+app.include_router(task_pool_router, prefix=settings.api_v1_prefix)
 app.include_router(sessions_router, prefix=settings.api_v1_prefix)
 app.include_router(settings_router, prefix=settings.api_v1_prefix)
 app.include_router(oauth_router, prefix=settings.api_v1_prefix)

@@ -69,6 +69,7 @@ import type {
   SessionSummary,
   SessionSummaryPage,
   SessionReplayResponse,
+  TaskPoolPage,
   ToolArtifactRecord,
   ToolApprovalRequest,
   ToolDescriptor,
@@ -409,6 +410,13 @@ export const api = {
       offset: String(offset),
     });
     return request(`/api/v1/reports?${params.toString()}`);
+  },
+  listTaskPoolPage(limit = 24, offset = 0): Promise<TaskPoolPage> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return request(`/api/v1/task-pool?${params.toString()}`);
   },
   getSession(sessionId: string): Promise<SessionDetail> {
     return request(`/api/v1/sessions/${sessionId}`);

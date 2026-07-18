@@ -748,6 +748,19 @@ export interface ReportListPage {
   has_more: boolean;
 }
 
+export interface TaskPoolSessionSummary extends SessionSummary {
+  selected_agent?: string | null;
+  worker_dispatches: WorkerDispatchRecord[];
+  parent_session_id: string;
+}
+
+export interface TaskPoolPage {
+  items: TaskPoolSessionSummary[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 export interface SessionDetail {
   id: string;
   title: string;
