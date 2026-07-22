@@ -1073,8 +1073,8 @@ class ToolRuntimeService:
                     }
                 )
         if include_events:
-            events = await store.list_events(session.id)
-            for event in events[-limit:]:
+            events = await store.list_events(session.id, limit=limit)
+            for event in events:
                 timeline.append(
                     {
                         "kind": "event",
@@ -4423,8 +4423,12 @@ class ToolRuntimeService:
         include_assistant: bool,
         limit: int,
     ) -> dict[str, Any]:
-        events = await store.list_events(session.id)
-        snapshots = await store.list_snapshots(session.id)
+        events = await store.list_events(session.id, limit=limit)
+        snapshots = await store.list_snapshots(
+            session.id,
+            limit=limit,
+            include_graph_state=False,
+        )
         approvals = await store.list_approvals(session.id)
         transcript_summary = self._transcript_hygiene_service.summarize_messages(session.messages)
         user_messages = [item for item in session.messages if getattr(item.role, "value", str(item.role)) == "user"]
@@ -4438,8 +4442,8 @@ class ToolRuntimeService:
             include_errors=False,
         )
 
-        recent_event_types = [event.type for event in events[-limit:]]
-        snapshot_stages = [snapshot.stage for snapshot in snapshots[-limit:]]
+        recent_event_types = [event.type for event in events]
+        snapshot_stages = [snapshot.stage for snapshot in snapshots]
         return {
             "session_id": session.id,
             "title": session.title,
@@ -4447,8 +4451,8 @@ class ToolRuntimeService:
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
             "message_count": len(session.messages),
-            "event_count": len(events),
-            "snapshot_count": len(snapshots),
+            "event_count": session.event_count,
+            "snapshot_count": session.snapshot_count,
             "approval_count": len(approvals),
             "user_message_count": len(user_messages),
             "assistant_message_count": len(assistant_messages),

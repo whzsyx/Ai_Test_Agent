@@ -585,7 +585,11 @@ export const useSessionStore = defineStore("session", {
   actions: {
     async bootstrap() {
       if (this.isBootstrapping) {
-        return;
+        return {
+          agents: this.agents,
+          tools: this.tools,
+          modes: this.modes,
+        };
       }
 
       this.isBootstrapping = true;
@@ -611,8 +615,18 @@ export const useSessionStore = defineStore("session", {
           await this.refreshToolingData();
           this.connectEvents();
         }
+        return {
+          agents,
+          tools,
+          modes,
+        };
       } catch (error) {
         this.error = error instanceof Error ? error.message : "初始化失败。";
+        return {
+          agents: this.agents,
+          tools: this.tools,
+          modes: this.modes,
+        };
       } finally {
         this.isBootstrapping = false;
       }

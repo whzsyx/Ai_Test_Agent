@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.schemas.mcp_management import MCPServerCreateRequest, MCPServerImportRequest, MCPServerUpdateRequest
@@ -52,6 +52,33 @@ async def list_agents(request: Request):
 @router.get("/tools")
 async def list_tools(request: Request):
     return request.app.state.registry_service.list_tools()
+
+
+@router.get("/tools/summary")
+async def list_tool_summaries(request: Request):
+    return request.app.state.registry_service.list_tool_summaries()
+
+
+@router.get("/tools/search")
+async def search_tools(
+    request: Request,
+    q: str = "",
+    limit: int = Query(10, ge=1, le=50),
+    include_schema: bool = False,
+):
+    return request.app.state.registry_service.search_tools(
+        query=q,
+        limit=limit,
+        include_schema=include_schema,
+    )
+
+
+@router.get("/tools/{tool_key}")
+async def get_tool(tool_key: str, request: Request):
+    try:
+        return request.app.state.registry_service.get_tool(tool_key)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Tool not found") from exc
 
 
 @router.get("/modes")

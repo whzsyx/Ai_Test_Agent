@@ -73,6 +73,7 @@ import type {
   ToolArtifactRecord,
   ToolApprovalRequest,
   ToolDescriptor,
+  ToolSearchResponse,
   ToolJobDetail,
   ToolJobRecord,
   KnowledgeGraphResponse,
@@ -164,7 +165,18 @@ export const api = {
     return request("/api/v1/registry/agents");
   },
   listTools(): Promise<ToolDescriptor[]> {
-    return request("/api/v1/registry/tools");
+    return request("/api/v1/registry/tools/summary");
+  },
+  getTool(toolKey: string): Promise<ToolDescriptor> {
+    return request(`/api/v1/registry/tools/${encodeURIComponent(toolKey)}`);
+  },
+  searchTools(q: string, limit = 10, includeSchema = false): Promise<ToolSearchResponse> {
+    const params = new URLSearchParams({
+      q,
+      limit: String(limit),
+      include_schema: includeSchema ? "true" : "false",
+    });
+    return request(`/api/v1/registry/tools/search?${params.toString()}`);
   },
   listModes(): Promise<ModeDescriptor[]> {
     return request("/api/v1/registry/modes");

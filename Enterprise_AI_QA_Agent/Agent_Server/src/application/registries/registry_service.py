@@ -39,6 +39,24 @@ class RegistryService:
     def list_tools(self):
         return self._tool_registry.list()
 
+    def list_tool_summaries(self):
+        return self._tool_registry.list_summaries()
+
+    def get_tool(self, key: str):
+        return self._tool_registry.get(key)
+
+    def search_tools(
+        self,
+        query: str,
+        limit: int = 10,
+        include_schema: bool = False,
+    ):
+        return self._tool_registry.search(
+            query=query,
+            limit=limit,
+            include_schema=include_schema,
+        )
+
     def list_models(self):
         return self._model_registry.list()
 

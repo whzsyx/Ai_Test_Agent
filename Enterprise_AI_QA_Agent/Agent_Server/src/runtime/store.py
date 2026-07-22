@@ -40,10 +40,20 @@ class SessionStore(Protocol):
         include_assistant: bool = False,
     ) -> list[dict]: ...
     async def append_event(self, session_id: str, event: ExecutionEvent) -> None: ...
-    async def list_events(self, session_id: str) -> list[ExecutionEvent]: ...
+    async def list_events(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        after_event_id: str | None = None,
+    ) -> list[ExecutionEvent]: ...
     def get_queue(self, session_id: str) -> asyncio.Queue[ExecutionEvent]: ...
     async def save_snapshot(self, session_id: str, snapshot: SessionSnapshot) -> None: ...
-    async def list_snapshots(self, session_id: str) -> list[SessionSnapshot]: ...
+    async def list_snapshots(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        include_graph_state: bool = True,
+    ) -> list[SessionSnapshot]: ...
     async def get_latest_snapshot(self, session_id: str) -> SessionSnapshot | None: ...
     async def save_approval(self, session_id: str, approval: ToolApprovalRequest) -> None: ...
     async def list_approvals(self, session_id: str) -> list[ToolApprovalRequest]: ...
@@ -200,8 +210,26 @@ class InMemorySessionStore:
         self._events[session_id].append(event)
         await self._queues[session_id].put(event)
 
-    async def list_events(self, session_id: str) -> list[ExecutionEvent]:
-        return list(self._events.get(session_id, []))
+    async def list_events(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        after_event_id: str | None = None,
+    ) -> list[ExecutionEvent]:
+        events = list(self._events.get(session_id, []))
+        has_cursor = bool(after_event_id)
+        if after_event_id:
+            cursor_index = next(
+                (index for index, event in enumerate(events) if str(event.id) == after_event_id),
+                -1,
+            )
+            events = events[cursor_index + 1 :] if cursor_index >= 0 else []
+        if limit is not None:
+            size = max(int(limit), 0)
+            if size <= 0:
+                return []
+            events = events[:size] if has_cursor else events[-size:]
+        return events
 
     def get_queue(self, session_id: str) -> asyncio.Queue[ExecutionEvent]:
         return self._queues[session_id]
@@ -213,8 +241,21 @@ class InMemorySessionStore:
             session.updated_at = datetime.utcnow()
         self._snapshots[session_id].append(snapshot)
 
-    async def list_snapshots(self, session_id: str) -> list[SessionSnapshot]:
-        return list(self._snapshots.get(session_id, []))
+    async def list_snapshots(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        include_graph_state: bool = True,
+    ) -> list[SessionSnapshot]:
+        snapshots = list(self._snapshots.get(session_id, []))
+        if limit is not None:
+            size = max(int(limit), 0)
+            if size <= 0:
+                return []
+            snapshots = snapshots[-size:]
+        if not include_graph_state:
+            snapshots = [snapshot.model_copy(update={"graph_state": {}}) for snapshot in snapshots]
+        return snapshots
 
     async def get_latest_snapshot(self, session_id: str) -> SessionSnapshot | None:
         snapshots = self._snapshots.get(session_id, [])

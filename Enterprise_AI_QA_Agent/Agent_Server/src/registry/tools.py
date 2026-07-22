@@ -2042,6 +2042,45 @@ class ToolRegistry:
             *[module.descriptor for module in self._dynamic_tools.values()],
         ]
 
+    def list_summaries(self) -> list[dict[str, object]]:
+        return [self._summarize(tool) for tool in self.list()]
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        include_schema: bool = False,
+    ) -> dict[str, object]:
+        tools = self.list()
+        query_text = str(query or "").strip()
+        max_results = max(int(limit or 0), 1)
+        if not query_text:
+            matches = tools[:max_results]
+        else:
+            selected = self._parse_select_query(query_text)
+            if selected:
+                matches = self.get_many(selected)[:max_results]
+            else:
+                matches = [
+                    item["tool"]
+                    for item in sorted(
+                        (
+                            {"tool": tool, "score": self._score_tool(tool, query_text)}
+                            for tool in tools
+                        ),
+                        key=lambda item: (-int(item["score"]), item["tool"].name),
+                    )
+                    if int(item["score"]) > 0
+                ][:max_results]
+        return {
+            "query": query_text,
+            "total_tools": len(tools),
+            "matches": [
+                tool.model_dump(mode="python") if include_schema else self._summarize(tool)
+                for tool in matches
+            ],
+        }
+
     def get(self, key: str) -> ToolDescriptor:
         module = self._dynamic_tools.get(key) or self._tools.get(key)
         if module is None:
@@ -2082,3 +2121,51 @@ class ToolRegistry:
             }
             for tool in tools
         ]
+
+    def _summarize(self, tool: ToolDescriptor) -> dict[str, object]:
+        return {
+            "key": tool.key,
+            "name": tool.name,
+            "description": tool.description,
+            "category": tool.category,
+            "permission_level": tool.permission_level,
+            "supports_streaming": tool.supports_streaming,
+            "enabled_by_default": tool.enabled_by_default,
+            "tags": list(tool.tags),
+        }
+
+    def _parse_select_query(self, query: str) -> list[str]:
+        prefix = "select:"
+        if not query.lower().startswith(prefix):
+            return []
+        return [
+            item.strip()
+            for item in query[len(prefix) :].split(",")
+            if item.strip()
+        ]
+
+    def _score_tool(self, tool: ToolDescriptor, query: str) -> int:
+        terms = [
+            term.strip().lower()
+            for term in query.replace("_", " ").replace("-", " ").split()
+            if term.strip()
+        ]
+        if not terms:
+            return 0
+        name_text = f"{tool.key} {tool.name}".lower()
+        tag_text = " ".join(tool.tags).lower()
+        description_text = tool.description.lower()
+        category_text = tool.category.lower()
+        score = 0
+        for term in terms:
+            if term in tool.key.lower():
+                score += 12
+            if term in name_text:
+                score += 8
+            if term in tag_text:
+                score += 5
+            if term in category_text:
+                score += 4
+            if term in description_text:
+                score += 2
+        return score

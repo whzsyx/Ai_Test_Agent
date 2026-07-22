@@ -34,6 +34,7 @@ from src.schemas.session import (
     SendMessageRequest,
     SessionDetail,
     SessionReplayResponse,
+    SessionSnapshot,
     SessionStatus,
     SessionSummary,
     SessionSummaryPage,
@@ -42,6 +43,24 @@ from src.schemas.session import (
     ToolApprovalStatus,
     UpdateSessionRequest,
 )
+
+
+DEFAULT_EVENT_HISTORY_LIMIT = 500
+DEFAULT_REPLAY_EVENT_LIMIT = 500
+DEFAULT_SNAPSHOT_HISTORY_LIMIT = 10
+RECENT_CONVERSATION_EVENT_LIMIT = 10
+SNAPSHOT_DETAIL_GRAPH_KEYS = {
+    "turn_id",
+    "trace_id",
+    "control_state",
+    "loop_iteration",
+    "max_iterations",
+    "termination_reason",
+    "pending_approvals",
+    "tool_results",
+    "worker_dispatches",
+    "code_review_debate_progress",
+}
 
 
 class SessionService:
@@ -178,13 +197,34 @@ class SessionService:
         refreshed = await self._require_session(session_id)
         return await self._to_detail(refreshed)
 
-    async def list_events(self, session_id: str) -> list[ExecutionEvent]:
+    async def list_events(
+        self,
+        session_id: str,
+        limit: int | None = DEFAULT_EVENT_HISTORY_LIMIT,
+        after_event_id: str | None = None,
+    ) -> list[ExecutionEvent]:
         await self._require_session(session_id)
-        return await self._store.list_events(session_id)
+        return await self._store.list_events(
+            session_id,
+            limit=limit,
+            after_event_id=after_event_id,
+        )
 
-    async def list_snapshots(self, session_id: str):
+    async def list_snapshots(
+        self,
+        session_id: str,
+        limit: int | None = DEFAULT_SNAPSHOT_HISTORY_LIMIT,
+        include_graph_state: bool = False,
+    ) -> list[SessionSnapshot]:
         await self._require_session(session_id)
-        return await self._store.list_snapshots(session_id)
+        snapshots = await self._store.list_snapshots(
+            session_id,
+            limit=limit,
+            include_graph_state=include_graph_state,
+        )
+        if include_graph_state:
+            return snapshots
+        return [self._snapshot_metadata(snapshot) for snapshot in snapshots]
 
     async def list_approvals(self, session_id: str) -> list[ToolApprovalRequest]:
         await self._require_session(session_id)
@@ -307,7 +347,11 @@ class SessionService:
                 user_message_override=str(runtime_result.state.get("user_message", "")),
             )
 
-    async def replay_session(self, session_id: str) -> SessionReplayResponse:
+    async def replay_session(
+        self,
+        session_id: str,
+        limit: int | None = DEFAULT_REPLAY_EVENT_LIMIT,
+    ) -> SessionReplayResponse:
         session = await self._require_session(session_id)
         latest_snapshot = await self._store.get_latest_snapshot(session_id)
         control = self._ensure_control_metadata(session)
@@ -330,12 +374,12 @@ class SessionService:
                 },
             ),
         )
-        events = await self._store.list_events(session_id)
+        events = await self._store.list_events(session_id, limit=limit)
         detail = await self._to_detail(session)
         return SessionReplayResponse(
             session_id=session_id,
             control_state=detail.control_state,
-            latest_snapshot=latest_snapshot,
+            latest_snapshot=self._snapshot_for_detail(latest_snapshot),
             events=events,
             metadata={
                 "replay_count": session.metadata.get("replay_requests", 0),
@@ -951,12 +995,12 @@ class SessionService:
                 "busy_status": queue_entry.busy_status,
             },
         )
-        events = await self._store.list_events(session.id)
+        events = await self._store.list_events(session.id, limit=RECENT_CONVERSATION_EVENT_LIMIT)
         refreshed_session = await self._require_session(session.id)
         return ConversationResponse(
             session=await self._to_detail(refreshed_session),
             output=message,
-            events=events[-10:],
+            events=events,
         )
 
     def _get_pending_input_queue(self, session: SessionRecord) -> list[PendingInputQueueEntry]:
@@ -1225,6 +1269,8 @@ class SessionService:
                 },
             ),
         )
+        if session.status == SessionStatus.completed:
+            await self._cleanup_session_resources_if_terminal(session)
 
         latest_session = await self._require_session(session_id)
         if (
@@ -1232,11 +1278,11 @@ class SessionService:
             and latest_session.status not in {SessionStatus.running, SessionStatus.waiting_approval}
         ):
             self._maybe_schedule_pending_input_drain(session_id)
-        events = await self._store.list_events(session_id)
+        events = await self._store.list_events(session_id, limit=RECENT_CONVERSATION_EVENT_LIMIT)
         return ConversationResponse(
             session=await self._to_detail(latest_session),
             output=assistant_message,
-            events=events[-10:],
+            events=events,
         )
 
     async def _cleanup_session_resources_if_terminal(self, session: SessionRecord) -> None:
@@ -1425,9 +1471,11 @@ class SessionService:
         )
 
     async def _to_detail(self, session: SessionRecord) -> SessionDetail:
-        approvals = await self._store.list_approvals(session.id)
+        approvals, last_snapshot = await asyncio.gather(
+            self._store.list_approvals(session.id),
+            self._store.get_latest_snapshot(session.id),
+        )
         control = self._ensure_control_metadata(session)
-        last_snapshot = await self._store.get_latest_snapshot(session.id)
         derived_resumable = bool(control.get("is_resumable")) or (
             last_snapshot is not None and last_snapshot.stage in {"waiting_approval", "interrupted", "resumable"}
         )
@@ -1449,7 +1497,7 @@ class SessionService:
             pending_approvals=[
                 item for item in approvals if item.status == ToolApprovalStatus.pending
             ],
-            last_snapshot=last_snapshot,
+            last_snapshot=self._snapshot_for_detail(last_snapshot),
             control_state=str(control.get("control_state") or (last_snapshot.stage if last_snapshot else session.status.value)),
             is_resumable=derived_resumable,
             is_interrupted=derived_interrupted,
@@ -1468,6 +1516,49 @@ class SessionService:
             timestamp=datetime.utcnow(),
             payload=payload,
         )
+
+    def _snapshot_for_detail(self, snapshot: SessionSnapshot | None) -> SessionSnapshot | None:
+        if snapshot is None:
+            return None
+        graph_state = snapshot.graph_state if isinstance(snapshot.graph_state, dict) else {}
+        compact_graph_state = {
+            key: self._compact_snapshot_graph_value(key, graph_state[key])
+            for key in SNAPSHOT_DETAIL_GRAPH_KEYS
+            if key in graph_state
+        }
+        return snapshot.model_copy(update={"graph_state": compact_graph_state})
+
+    def _snapshot_metadata(self, snapshot: SessionSnapshot) -> SessionSnapshot:
+        return snapshot.model_copy(update={"graph_state": {}})
+
+    def _compact_snapshot_graph_value(self, key: str, value):
+        if key != "tool_results" or not isinstance(value, list):
+            return value
+        return [self._compact_tool_result(item) for item in value[-20:] if isinstance(item, dict)]
+
+    def _compact_tool_result(self, item: dict) -> dict:
+        output = item.get("output") if isinstance(item.get("output"), dict) else {}
+        artifacts = output.get("artifacts") if isinstance(output, dict) else []
+        metrics = output.get("metrics") if isinstance(output, dict) else {}
+        artifact_count = len(artifacts) if isinstance(artifacts, list) else 0
+        compact_metrics = {str(key): None for key in metrics.keys()} if isinstance(metrics, dict) else {}
+        return {
+            "call_id": str(item.get("call_id") or ""),
+            "job_id": item.get("job_id"),
+            "tool_key": str(item.get("tool_key") or ""),
+            "tool_name": str(item.get("tool_name") or item.get("tool_key") or ""),
+            "status": str(item.get("status") or ""),
+            "summary": truncate_text(str(item.get("summary") or ""), 240),
+            "trace_id": item.get("trace_id"),
+            "approval_id": item.get("approval_id"),
+            "started_at": item.get("started_at"),
+            "completed_at": item.get("completed_at"),
+            "input": {},
+            "output": {
+                "artifacts": [{} for _ in range(min(artifact_count, 50))],
+                "metrics": compact_metrics,
+            },
+        }
 
     def _build_stream_chunk_handler(
         self,

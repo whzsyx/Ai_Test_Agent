@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
+import { api } from "../../../services/api";
 import { t } from "../../../services/i18n";
 import { useSessionStore } from "../../../stores/session";
 import type { AgentDescriptor, ToolDescriptor } from "../../../types";
@@ -17,6 +18,7 @@ interface RegistryGroup<T> {
 
 const sessionStore = useSessionStore();
 const detailRecord = ref<RegistryDetailRecord | null>(null);
+const loadingToolDetailKey = ref("");
 
 const agents = computed(() => sessionStore.agents ?? []);
 const tools = computed(() => sessionStore.tools ?? []);
@@ -113,8 +115,21 @@ function openAgentDetail(agent: AgentDescriptor) {
   detailRecord.value = { kind: "agent", data: agent };
 }
 
-function openToolDetail(tool: ToolDescriptor) {
+async function openToolDetail(tool: ToolDescriptor) {
   detailRecord.value = { kind: "tool", data: tool };
+  loadingToolDetailKey.value = tool.key;
+  try {
+    const detail = await api.getTool(tool.key);
+    if (detailRecord.value?.kind === "tool" && detailRecord.value.data.key === tool.key) {
+      detailRecord.value = { kind: "tool", data: detail };
+    }
+  } catch {
+    // Summary data is enough for the visible registry modal.
+  } finally {
+    if (loadingToolDetailKey.value === tool.key) {
+      loadingToolDetailKey.value = "";
+    }
+  }
 }
 
 function closeDetail() {
@@ -285,6 +300,10 @@ const linkedAgents = computed(() => {
           <div class="detail-item">
             <span class="detail-label">{{ t("registry.summary") }}</span>
             <p>{{ detailRecord.data.description }}</p>
+          </div>
+          <div v-if="loadingToolDetailKey === detailRecord.data.key" class="detail-item">
+            <span class="detail-label">{{ t("common.loading") }}</span>
+            <strong>{{ t("common.loading") }}</strong>
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t("registry.streaming") }}</span>

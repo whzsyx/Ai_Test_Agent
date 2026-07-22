@@ -176,14 +176,21 @@ export const useAppStore = defineStore("app", {
       window.localStorage.setItem(THEME_STORAGE_KEY, this.theme);
       applyThemeToDocument(this.theme);
     },
-    async fetchSystemStatus() {
+    async fetchSystemStatus(options: { refreshCatalog?: boolean } = {}) {
+      const refreshCatalog = Boolean(options.refreshCatalog);
       this.loading = true;
       this.error = "";
 
-      const [healthResult, agentsResult, toolsResult] = await Promise.allSettled([
-        api.getHealth(),
-        api.listAgents(),
-        api.listTools(),
+      const shouldRetryMissingCatalog = options.refreshCatalog === undefined;
+      const catalogRequested =
+        refreshCatalog || (shouldRetryMissingCatalog && (this.agents === null || this.tools === null));
+      const healthRequest = Promise.allSettled([api.getHealth()]);
+      const catalogRequest = catalogRequested
+        ? Promise.allSettled([api.listAgents(), api.listTools()])
+        : Promise.resolve([null, null] as const);
+      const [[healthResult], [agentsResult, toolsResult]] = await Promise.all([
+        healthRequest,
+        catalogRequest,
       ]);
 
       if (healthResult.status === "fulfilled") {
@@ -192,20 +199,22 @@ export const useAppStore = defineStore("app", {
         this.health = null;
       }
 
-      if (agentsResult.status === "fulfilled") {
-        this.agents = agentsResult.value;
-      } else {
-        this.agents = null;
-      }
+      if (catalogRequested) {
+        if (agentsResult?.status === "fulfilled") {
+          this.agents = agentsResult.value;
+        } else if (this.agents === null) {
+          this.agents = null;
+        }
 
-      if (toolsResult.status === "fulfilled") {
-        this.tools = toolsResult.value;
-      } else {
-        this.tools = null;
+        if (toolsResult?.status === "fulfilled") {
+          this.tools = toolsResult.value;
+        } else if (this.tools === null) {
+          this.tools = null;
+        }
       }
 
       const failedMessages = [healthResult, agentsResult, toolsResult]
-        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .filter((result): result is PromiseRejectedResult => result !== null && result.status === "rejected")
         .map((result) => {
           const reason = result.reason;
           return reason instanceof Error ? reason.message : String(reason);

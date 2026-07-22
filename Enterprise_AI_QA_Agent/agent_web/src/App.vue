@@ -1,21 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { NConfigProvider, NDialogProvider, NMessageProvider, darkTheme } from "naive-ui";
 import type { GlobalThemeOverrides } from "naive-ui";
 
-import CodeReviewProgressPanel from "./components/chat/CodeReviewProgressPanel.vue";
-import EventConsolePanel from "./components/chat/EventConsolePanel.vue";
-import SnapshotTracePanel from "./components/chat/SnapshotTracePanel.vue";
-import SmokeTestingResultPanel from "./components/chat/SmokeTestingResultPanel.vue";
-import ToolActivityPanel from "./components/chat/ToolActivityPanel.vue";
-import ToolJobPanel from "./components/chat/ToolJobPanel.vue";
-import VerificationPanel from "./components/chat/VerificationPanel.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopBar from "./components/layout/AppTopBar.vue";
 import { getLocale, t } from "./services/i18n";
 import { useAppStore } from "./stores/app";
 import { useSessionStore } from "./stores/session";
+
+const CodeReviewProgressPanel = defineAsyncComponent(() => import("./components/chat/CodeReviewProgressPanel.vue"));
+const EventConsolePanel = defineAsyncComponent(() => import("./components/chat/EventConsolePanel.vue"));
+const SnapshotTracePanel = defineAsyncComponent(() => import("./components/chat/SnapshotTracePanel.vue"));
+const SmokeTestingResultPanel = defineAsyncComponent(() => import("./components/chat/SmokeTestingResultPanel.vue"));
+const ToolActivityPanel = defineAsyncComponent(() => import("./components/chat/ToolActivityPanel.vue"));
+const ToolJobPanel = defineAsyncComponent(() => import("./components/chat/ToolJobPanel.vue"));
+const VerificationPanel = defineAsyncComponent(() => import("./components/chat/VerificationPanel.vue"));
 
 const lightThemeOverrides: GlobalThemeOverrides = {
   common: {
@@ -165,7 +166,13 @@ watch(
 );
 
 onMounted(async () => {
-  await Promise.all([appStore.fetchSystemStatus(), sessionStore.bootstrap()]);
+  const [, catalog] = await Promise.all([
+    appStore.fetchSystemStatus({ refreshCatalog: false }),
+    sessionStore.bootstrap(),
+  ]);
+  appStore.agents = catalog.agents;
+  appStore.tools = catalog.tools;
+  appStore.lastCheckedAt = new Date().toISOString();
   sessionStore.startWatcher();
   healthPollTimer = window.setInterval(() => {
     void appStore.fetchSystemStatus();

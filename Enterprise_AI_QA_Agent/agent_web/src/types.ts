@@ -65,9 +65,17 @@ export interface ToolDescriptor {
   description: string;
   category: string;
   permission_level?: "safe" | "ask" | "restricted";
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
   supports_streaming?: boolean;
   enabled_by_default?: boolean;
   tags?: string[];
+}
+
+export interface ToolSearchResponse {
+  query: string;
+  total_tools: number;
+  matches: ToolDescriptor[];
 }
 
 export interface SkillDescriptor {

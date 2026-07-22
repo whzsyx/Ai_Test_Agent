@@ -77,8 +77,13 @@ class PostgresSessionStore:
         await asyncio.to_thread(self._append_event_sync, session_id, event)
         await self._queues[session_id].put(event)
 
-    async def list_events(self, session_id: str) -> list[ExecutionEvent]:
-        return await asyncio.to_thread(self._list_events_sync, session_id)
+    async def list_events(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        after_event_id: str | None = None,
+    ) -> list[ExecutionEvent]:
+        return await asyncio.to_thread(self._list_events_sync, session_id, limit, after_event_id)
 
     def get_queue(self, session_id: str) -> asyncio.Queue[ExecutionEvent]:
         return self._queues[session_id]
@@ -86,8 +91,18 @@ class PostgresSessionStore:
     async def save_snapshot(self, session_id: str, snapshot: SessionSnapshot) -> None:
         await asyncio.to_thread(self._save_snapshot_sync, session_id, snapshot)
 
-    async def list_snapshots(self, session_id: str) -> list[SessionSnapshot]:
-        return await asyncio.to_thread(self._list_snapshots_sync, session_id)
+    async def list_snapshots(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        include_graph_state: bool = True,
+    ) -> list[SessionSnapshot]:
+        return await asyncio.to_thread(
+            self._list_snapshots_sync,
+            session_id,
+            limit,
+            include_graph_state,
+        )
 
     async def get_latest_snapshot(self, session_id: str) -> SessionSnapshot | None:
         return await asyncio.to_thread(self._get_latest_snapshot_sync, session_id)
@@ -198,6 +213,10 @@ class PostgresSessionStore:
                 cur.execute(
                     f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_event_table}_session_timestamp "
                     f"ON {self._settings.postgres_event_table} (session_id, timestamp ASC)"
+                )
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_event_table}_session_timestamp_id "
+                    f"ON {self._settings.postgres_event_table} (session_id, timestamp ASC, id ASC)"
                 )
                 cur.execute(
                     f"CREATE INDEX IF NOT EXISTS idx_{self._settings.postgres_snapshot_table}_session_version "
@@ -483,17 +502,81 @@ class PostgresSessionStore:
                     (datetime.utcnow(), session_id),
                 )
 
-    def _list_events_sync(self, session_id: str) -> list[ExecutionEvent]:
+    def _list_events_sync(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        after_event_id: str | None = None,
+    ) -> list[ExecutionEvent]:
+        limit_value = _normalize_optional_limit(limit)
         with postgres_connect(self._settings) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT * FROM {self._settings.postgres_event_table}
-                    WHERE session_id = %s
-                    ORDER BY timestamp ASC
-                    """,
-                    (session_id,),
-                )
+                if after_event_id:
+                    cur.execute(
+                        f"""
+                        SELECT timestamp, id FROM {self._settings.postgres_event_table}
+                        WHERE session_id = %s AND id = %s
+                        LIMIT 1
+                        """,
+                        (session_id, after_event_id),
+                    )
+                    cursor = cur.fetchone()
+                    if not cursor:
+                        return []
+                    if limit_value is not None:
+                        cur.execute(
+                            f"""
+                            SELECT * FROM {self._settings.postgres_event_table}
+                            WHERE session_id = %s
+                              AND (timestamp > %s OR (timestamp = %s AND id > %s))
+                            ORDER BY timestamp ASC, id ASC
+                            LIMIT %s
+                            """,
+                            (
+                                session_id,
+                                cursor["timestamp"],
+                                cursor["timestamp"],
+                                cursor["id"],
+                                limit_value,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            SELECT * FROM {self._settings.postgres_event_table}
+                            WHERE session_id = %s
+                              AND (timestamp > %s OR (timestamp = %s AND id > %s))
+                            ORDER BY timestamp ASC, id ASC
+                            """,
+                            (
+                                session_id,
+                                cursor["timestamp"],
+                                cursor["timestamp"],
+                                cursor["id"],
+                            ),
+                        )
+                elif limit_value is not None:
+                    cur.execute(
+                        f"""
+                        SELECT * FROM (
+                            SELECT * FROM {self._settings.postgres_event_table}
+                            WHERE session_id = %s
+                            ORDER BY timestamp DESC, id DESC
+                            LIMIT %s
+                        ) recent_events
+                        ORDER BY timestamp ASC, id ASC
+                        """,
+                        (session_id, limit_value),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT * FROM {self._settings.postgres_event_table}
+                        WHERE session_id = %s
+                        ORDER BY timestamp ASC, id ASC
+                        """,
+                        (session_id,),
+                    )
                 rows = cur.fetchall() or []
         return [
             ExecutionEvent(
@@ -541,17 +624,38 @@ class PostgresSessionStore:
                     (snapshot.version, now, session_id),
                 )
 
-    def _list_snapshots_sync(self, session_id: str) -> list[SessionSnapshot]:
+    def _list_snapshots_sync(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        include_graph_state: bool = True,
+    ) -> list[SessionSnapshot]:
+        limit_value = _normalize_optional_limit(limit)
+        columns = "*" if include_graph_state else "id, session_id, version, stage, created_at, '{}'::jsonb AS graph_state"
         with postgres_connect(self._settings) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT * FROM {self._settings.postgres_snapshot_table}
-                    WHERE session_id = %s
-                    ORDER BY version ASC
-                    """,
-                    (session_id,),
-                )
+                if limit_value is not None:
+                    cur.execute(
+                        f"""
+                        SELECT * FROM (
+                            SELECT {columns} FROM {self._settings.postgres_snapshot_table}
+                            WHERE session_id = %s
+                            ORDER BY version DESC
+                            LIMIT %s
+                        ) recent_snapshots
+                        ORDER BY version ASC
+                        """,
+                        (session_id, limit_value),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT {columns} FROM {self._settings.postgres_snapshot_table}
+                        WHERE session_id = %s
+                        ORDER BY version ASC
+                        """,
+                        (session_id,),
+                    )
                 rows = cur.fetchall() or []
         return [_snapshot_from_row(item) for item in rows]
 
@@ -942,6 +1046,13 @@ def _snapshot_from_row(row: dict) -> SessionSnapshot:
         created_at=ensure_utc_datetime(row["created_at"]) or datetime.utcnow(),
         graph_state=dict(row.get("graph_state") or {}),
     )
+
+
+def _normalize_optional_limit(limit: int | None) -> int | None:
+    if limit is None:
+        return None
+    size = max(int(limit), 0)
+    return size if size > 0 else 0
 
 
 def _approval_from_row(row: dict) -> ToolApprovalRequest:

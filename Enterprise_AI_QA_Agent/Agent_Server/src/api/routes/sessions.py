@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from src.runtime.streaming import format_sse
@@ -66,9 +66,18 @@ async def update_session(session_id: str, payload: UpdateSessionRequest, request
 
 
 @router.get("/{session_id}/events/history")
-async def list_events(session_id: str, request: Request):
+async def list_events(
+    session_id: str,
+    request: Request,
+    limit: int = Query(500, ge=0, le=5000),
+    after_event_id: str | None = None,
+):
     try:
-        return await request.app.state.session_service.list_events(session_id)
+        return await request.app.state.session_service.list_events(
+            session_id,
+            limit=None if limit == 0 else limit,
+            after_event_id=after_event_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -84,9 +93,18 @@ async def send_message(session_id: str, payload: SendMessageRequest, request: Re
 
 
 @router.get("/{session_id}/snapshots")
-async def list_snapshots(session_id: str, request: Request):
+async def list_snapshots(
+    session_id: str,
+    request: Request,
+    limit: int = Query(10, ge=0, le=200),
+    include_graph_state: bool = False,
+):
     try:
-        return await request.app.state.session_service.list_snapshots(session_id)
+        return await request.app.state.session_service.list_snapshots(
+            session_id,
+            limit=None if limit == 0 else limit,
+            include_graph_state=include_graph_state,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -120,9 +138,16 @@ async def resume_session(
 
 
 @router.get("/{session_id}/replay")
-async def replay_session(session_id: str, request: Request):
+async def replay_session(
+    session_id: str,
+    request: Request,
+    limit: int = Query(500, ge=0, le=5000),
+):
     try:
-        return await request.app.state.session_service.replay_session(session_id)
+        return await request.app.state.session_service.replay_session(
+            session_id,
+            limit=None if limit == 0 else limit,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -213,14 +238,13 @@ async def stream_events(session_id: str, request: Request):
 
     async def event_generator():
         if last_event_id:
-            events = await request.app.state.session_service.list_events(session_id)
-            should_replay = False
+            events = await request.app.state.session_service.list_events(
+                session_id,
+                limit=1000,
+                after_event_id=last_event_id,
+            )
             for event in events:
-                if should_replay:
-                    yield format_sse(event)
-                    continue
-                if str(event.id) == last_event_id:
-                    should_replay = True
+                yield format_sse(event)
 
         while True:
             if await request.is_disconnected():

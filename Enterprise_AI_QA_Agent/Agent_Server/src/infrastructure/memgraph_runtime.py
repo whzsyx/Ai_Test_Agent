@@ -28,7 +28,12 @@ class MemgraphRuntimeProvider:
             auth = None
             if self._settings.memgraph_user:
                 auth = (self._settings.memgraph_user, self._settings.memgraph_password)
-            self._driver = GraphDatabase.driver(self.bolt_uri, auth=auth)
+            connection_timeout = float(getattr(self._settings, "memgraph_connect_timeout_seconds", 1.0) or 1.0)
+            self._driver = GraphDatabase.driver(
+                self.bolt_uri,
+                auth=auth,
+                connection_timeout=max(0.5, connection_timeout),
+            )
         return self._driver
 
     def close(self) -> None:

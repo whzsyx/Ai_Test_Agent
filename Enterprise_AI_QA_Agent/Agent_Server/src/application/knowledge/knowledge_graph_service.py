@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -19,43 +20,92 @@ from src.schemas.knowledge import (
 
 
 class KnowledgeGraphService:
+    _PROJECT_CACHE_TTL_SECONDS = 5.0
+    _FAILURE_CACHE_TTL_SECONDS = 3.0
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._provider = MemgraphRuntimeProvider(settings)
+        self._project_cache: tuple[float, list[KnowledgeProjectSummary]] | None = None
+        self._last_failure: tuple[float, str] | None = None
 
     async def list_projects(self) -> list[KnowledgeProjectSummary]:
-        return await asyncio.to_thread(self._list_projects_sync)
+        cached_error = self._cached_failure_message()
+        if cached_error is not None:
+            raise RuntimeError(cached_error)
+
+        cached_projects = self._cached_projects()
+        if cached_projects is not None:
+            return cached_projects
+
+        try:
+            projects = await asyncio.to_thread(self._list_projects_sync)
+        except Exception as exc:
+            self._last_failure = (time.monotonic(), str(exc))
+            raise
+
+        self._project_cache = (time.monotonic(), projects)
+        self._last_failure = None
+        return projects
 
     async def get_graph(self, project_scope: str) -> KnowledgeGraphResponse:
-        return await asyncio.to_thread(self._get_graph_sync, project_scope)
+        cached_error = self._cached_failure_message()
+        if cached_error is not None:
+            raise RuntimeError(cached_error)
+        try:
+            return await asyncio.to_thread(self._get_graph_sync, project_scope)
+        except Exception as exc:
+            self._last_failure = (time.monotonic(), str(exc))
+            raise
 
     async def delete_project(self, project_scope: str) -> KnowledgeProjectDeleteResponse:
-        return await asyncio.to_thread(self._delete_project_sync, project_scope)
+        cached_error = self._cached_failure_message()
+        if cached_error is not None:
+            raise RuntimeError(cached_error)
+        try:
+            deleted = await asyncio.to_thread(self._delete_project_sync, project_scope)
+        except Exception as exc:
+            self._last_failure = (time.monotonic(), str(exc))
+            raise
+        self._project_cache = None
+        self._last_failure = None
+        return deleted
 
     def _list_projects_sync(self) -> list[KnowledgeProjectSummary]:
         summary_map: dict[str, dict[str, Any]] = {}
-        self._provider.initialize()
-        for label, count_field in [("Page", "page_count"), ("Element", "element_count"), ("Entity", "entity_count")]:
-            rows = self._provider.execute(
-                f"""
-                MATCH (n:{label})
-                WHERE n.project_scope IS NOT NULL AND n.project_scope <> ""
-                RETURN n.project_scope AS project_scope,
-                       count(n) AS total,
-                       max(n.updated_at) AS latest_updated_at
-                """
-            )
-            self._merge_scope_counts(summary_map, rows, count_field)
-        edge_rows = self._provider.execute(
+        rows = self._provider.execute(
             """
+            MATCH (n:Page)
+            WHERE n.project_scope IS NOT NULL AND n.project_scope <> ""
+            RETURN n.project_scope AS project_scope,
+                   count(n) AS total,
+                   max(n.updated_at) AS latest_updated_at,
+                   'page_count' AS count_field
+            UNION ALL
+            MATCH (n:Element)
+            WHERE n.project_scope IS NOT NULL AND n.project_scope <> ""
+            RETURN n.project_scope AS project_scope,
+                   count(n) AS total,
+                   max(n.updated_at) AS latest_updated_at,
+                   'element_count' AS count_field
+            UNION ALL
+            MATCH (n:Entity)
+            WHERE n.project_scope IS NOT NULL AND n.project_scope <> ""
+            RETURN n.project_scope AS project_scope,
+                   count(n) AS total,
+                   max(n.updated_at) AS latest_updated_at,
+                   'entity_count' AS count_field
+            UNION ALL
             MATCH ()-[r]->()
             WHERE r.project_scope IS NOT NULL AND r.project_scope <> ""
             RETURN r.project_scope AS project_scope,
                    count(r) AS total,
-                   max(r.updated_at) AS latest_updated_at
+                   max(r.updated_at) AS latest_updated_at,
+                   'edge_count' AS count_field
             """
         )
-        self._merge_scope_counts(summary_map, edge_rows, "edge_count")
+        for row in rows:
+            self._merge_scope_counts(summary_map, [row], str(row.get("count_field") or "edge_count"))
         items = [
             KnowledgeProjectSummary(
                 project_scope=scope,
@@ -82,7 +132,6 @@ class KnowledgeGraphService:
         scope = str(project_scope or "").strip()
         if not scope:
             raise ValueError("project_scope is required")
-        self._provider.initialize()
         pages = self._provider.execute(
             "MATCH (n:Page {project_scope: $project_scope}) RETURN n ORDER BY n.updated_at DESC",
             {"project_scope": scope},
@@ -163,6 +212,22 @@ class KnowledgeGraphService:
             deleted_counts=deleted_counts,
             message=f"Deleted knowledge graph project '{scope}'",
         )
+
+    def _cached_projects(self) -> list[KnowledgeProjectSummary] | None:
+        if self._project_cache is None:
+            return None
+        cached_at, projects = self._project_cache
+        if time.monotonic() - cached_at > self._PROJECT_CACHE_TTL_SECONDS:
+            return None
+        return [project.model_copy() for project in projects]
+
+    def _cached_failure_message(self) -> str | None:
+        if self._last_failure is None:
+            return None
+        cached_at, message = self._last_failure
+        if time.monotonic() - cached_at > self._FAILURE_CACHE_TTL_SECONDS:
+            return None
+        return message
 
     def _merge_scope_counts(self, summary_map: dict[str, dict[str, Any]], rows: list[dict[str, Any]], count_field: str) -> None:
         for row in rows:
